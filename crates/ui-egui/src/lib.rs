@@ -444,6 +444,7 @@ pub struct PrintCraftApp {
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
     pub(crate) signature_preview: Option<(String, egui::TextureHandle)>,
+    pub(crate) saved_signature_previews: [Option<(String, egui::TextureHandle)>; 2],
     /// The Comment Properties dialog's state.
     pub comment_props: Option<comment_props::PropsDraft>,
     pub field_props: Option<prepare::FieldDraft>,
@@ -605,6 +606,7 @@ impl PrintCraftApp {
             initials: None,
             signature_draft: Default::default(),
             signature_preview: None,
+            saved_signature_previews: [None, None],
             comment_props: None,
             field_props: None,
             redact_prefs: RedactPrefs::default(),
