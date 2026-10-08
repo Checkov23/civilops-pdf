@@ -436,11 +436,10 @@ pub(crate) fn signature_pad(ui: &mut egui::Ui, t: &Tokens, d: &mut SigDraft, pre
     if !d.drawing {
         let l = ui.label(egui::RichText::new(format!("Type your {what}.")).color(t.text_muted));
         ui.add(
-            egui::TextEdit::singleline(&mut d.text).char_limit(printcraft_engine::MAX_SIGNATURE_CHARS).desired_width(460.0).hint_text(if d.initials {
-                "Initials"
-            } else {
-                "Your name"
-            }),
+            egui::TextEdit::singleline(&mut d.text)
+                .char_limit(printcraft_engine::MAX_SIGNATURE_CHARS)
+                .desired_width(460.0)
+                .hint_text(if d.initials { "Initials" } else { "Your name" }),
         )
         .labelled_by(l.id);
         let (rect, _) = ui.allocate_exact_size(vec2(460.0, 150.0), Sense::hover());

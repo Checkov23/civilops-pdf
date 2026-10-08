@@ -176,6 +176,7 @@ fn layouts_fit_height_labels_and_system_theme() {
     h.state_mut().set_option("theme", "system").unwrap();
     assert!(h.state().follow_system_theme);
     // Switching light/dark by hand leaves the system setting; otherwise it switches straight back.
+    h.run_steps(2);
     let before = h.state().theme;
     h.state_mut().execute("view.theme");
     h.run_steps(2);

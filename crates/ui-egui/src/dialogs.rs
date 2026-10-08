@@ -1334,10 +1334,7 @@ fn save_prompt(app: &mut PrintCraftApp, ctx: &egui::Context) {
         ui.set_width(420.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("save", 22.0, t.accent));
-            ui.add(
-                egui::Label::new(egui::RichText::new(format!("Save changes to “{name}” before closing?")).font(theme::semibold(16.0)))
-                    .wrap(),
-            );
+            ui.add(egui::Label::new(egui::RichText::new(format!("Save changes to “{name}” before closing?")).font(theme::semibold(16.0))).wrap());
         });
         ui.add_space(6.0);
         ui.label(egui::RichText::new("Your changes will be lost if you don't save them.").color(t.text_muted));

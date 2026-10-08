@@ -3,7 +3,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use printcraft_ui_egui::{LinkOrigin, PrintCraftApp, PendingLink};
+use printcraft_ui_egui::{LinkOrigin, PendingLink, PrintCraftApp};
 
 /// See `tests/view.rs`: WARP's shader JIT crashes when two devices compile at once on ARM64.
 static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());

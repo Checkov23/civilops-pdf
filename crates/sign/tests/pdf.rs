@@ -633,7 +633,8 @@ fn a_timestamp_token_may_sign_with_a_different_digest_than_its_imprint() {
     let q = printcraft_sign::timestamp::TimestampQuery::new(printcraft_sign::DigestAlg::Sha1, imprint.clone()).unwrap();
     let time = Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
     let resp =
-        printcraft_sign::timestamp::respond(&tsa.key, &tsa.certificate, &tsa.chain, printcraft_sign::DigestAlg::Sha256, &q, "1.2.3.4", time, 9).unwrap();
+        printcraft_sign::timestamp::respond(&tsa.key, &tsa.certificate, &tsa.chain, printcraft_sign::DigestAlg::Sha256, &q, "1.2.3.4", time, 9)
+            .unwrap();
     let token = printcraft_sign::timestamp::parse_response(&resp, &q).unwrap();
     assert_eq!((token.digest, token.imprint, token.gen_time), (printcraft_sign::DigestAlg::Sha1, imprint, time));
 }

@@ -1792,8 +1792,10 @@ fn run_button(app: &mut PrintCraftApp, index: usize, name: &str, action: printcr
                 .collect();
             if !changes.is_empty() {
                 let label = if hide { "Hide a field" } else { "Show a field" };
-                app.views[index].pending_edit =
-                    Some(printcraft_engine::Edit::Batch { label: label.into(), edits: vec![printcraft_engine::Edit::ApplyScriptChanges { changes }] });
+                app.views[index].pending_edit = Some(printcraft_engine::Edit::Batch {
+                    label: label.into(),
+                    edits: vec![printcraft_engine::Edit::ApplyScriptChanges { changes }],
+                });
             }
         }
         B::Alert(m) => app.notify(m),
