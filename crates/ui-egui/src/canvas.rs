@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
 use printcraft_engine::{DocId, Edit};
-use printcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile};
+use printcraft_render::{DocInfo, LinkTarget, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
 use crate::theme::{self, Tokens};
 use crate::{PrintCraftApp, QuickTool, RightPanel, comments, icons, widgets};
@@ -1139,8 +1139,9 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 if tiled && r.intersects(visible) {
                     // Device-pixel geometry of the scaled page, and the visible part of it
-                    // (found by mapping the visible screen corners back into the page).
-                    let (dw, dh) = ((pw_pt * scale).round() as u32, (ph_pt * scale).round() as u32);
+                    // (found by mapping the visible screen corners back into the page). Sides round
+                    // up as whole-page rasters do, so the last partial row and column get tiles.
+                    let (dw, dh) = (device_pixels(pw_pt, scale), device_pixels(ph_pt, scale));
                     let vis = r.intersect(visible);
                     let corners = [vis.left_top(), vis.right_top(), vis.right_bottom(), vis.left_bottom()].map(|c| xf.screen_to_norm(c));
                     let (u0, u1) = corners.iter().fold((1.0f32, 0.0f32), |(a, b), c| (a.min(c.0), b.max(c.0)));
