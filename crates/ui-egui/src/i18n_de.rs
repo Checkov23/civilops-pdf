@@ -1827,6 +1827,13 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("Fill & Sign: change initials", "Ausfüllen: Initialen ändern"),
     ("Fill & Sign: remove saved signature", "Ausfüllen: gespeicherte Unterschrift entfernen"),
     ("Fill & Sign: remove saved initials", "Ausfüllen: gespeicherte Initialen entfernen"),
+    // Create PDF from images: page size from the images' resolution.
+    ("Create PDF from images", "PDF aus Bildern erstellen"),
+    ("Use image resolution", "Auflösung der Bilder verwenden"),
+    ("Use each image's embedded DPI; use 72 DPI when it is absent.", "Jedes Bild mit seiner gespeicherten Auflösung (DPI), ohne Angabe mit 72 DPI."),
+    ("Use 72 DPI (one point per pixel)", "72 DPI verwenden (ein Punkt je Pixel)"),
+    ("Use custom DPI", "Eigene Auflösung (DPI)"),
+    ("DPI sets the printed page size without resampling the image.", "Die Auflösung bestimmt die Seitengröße beim Drucken, das Bild selbst wird nicht umgerechnet."),
     // Links from documents open only after a question.
     ("Open this web page?", "Diese Webseite öffnen?"),
     ("Write this email?", "Diese E-Mail schreiben?"),
@@ -2043,6 +2050,7 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
         "{} in diesem Dokument wollte eine Adresse öffnen, die CivilOps PDF nicht öffnet: {}. Aus Dokumenten öffnen sich nur Web-Links (http, https) und E-Mail-Links (mailto).",
     ),
     ("the address is {#} characters long", "die Adresse ist {} Zeichen lang"),
+    ("Selected image files: {#}", "Ausgewählte Bilddateien: {}"),
     ("it is a “{scheme}:” address", "es ist eine „{}:“-Adresse"),
 ];
 

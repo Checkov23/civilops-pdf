@@ -6811,11 +6811,11 @@ title = "Image compression options when converting"
 area = "J"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["create.images"]
+tools = ["doc_create"]
+evidence = ["crates/create/src/tests.rs::image_resolution_override_changes_size_without_resampling", "crates/automation/tests/automation.rs::creating_images_with_dpi_through_tools", "crates/ui-egui/tests/create.rs::image_import_dialog_chooses_dpi_and_cancels"]
+notes = "Page sizing: embedded resolution (72 dpi fallback), fixed 72 dpi, or custom 1–1200 dpi; pixels are not resampled. Compression options are still absent. Windows image context menu opens the same chooser; other OS context-menu integration not yet."
 
 [[feature]]
 id = "create.pdf-printer"

@@ -5,6 +5,41 @@ use std::sync::Arc;
 
 use crate::PrintCraftApp;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResolutionChoice {
+    #[default]
+    Image,
+    Default72,
+    Custom,
+}
+
+pub struct ImageImport {
+    pub images: Vec<(String, Vec<u8>)>,
+    pub choice: ResolutionChoice,
+    pub dpi: f64,
+}
+
+pub(crate) fn image_import_body(ui: &mut egui::Ui, app: &mut PrintCraftApp) -> (bool, bool) {
+    ui.heading("Create PDF from images");
+    let Some(draft) = app.image_import.as_mut() else { return (false, true) };
+    ui.label(format!("Selected image files: {}", draft.images.len()));
+    ui.add_space(8.0);
+    ui.radio_value(&mut draft.choice, ResolutionChoice::Image, "Use image resolution");
+    ui.label("Use each image's embedded DPI; use 72 DPI when it is absent.");
+    ui.radio_value(&mut draft.choice, ResolutionChoice::Default72, "Use 72 DPI (one point per pixel)");
+    ui.radio_value(&mut draft.choice, ResolutionChoice::Custom, "Use custom DPI");
+    ui.add_enabled(draft.choice == ResolutionChoice::Custom, egui::DragValue::new(&mut draft.dpi).range(1.0..=1200.0).suffix(" DPI"));
+    ui.label("DPI sets the printed page size without resampling the image.");
+    ui.add_space(12.0);
+    let mut go = false;
+    let mut cancel = false;
+    ui.horizontal(|ui| {
+        go = crate::widgets::pill_button(ui, "Create", true).clicked();
+        cancel = crate::widgets::pill_button(ui, "Cancel", false).clicked();
+    });
+    (go, cancel)
+}
+
 /// File types Open accepts besides PDF (converted on open).
 pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
 
@@ -148,7 +183,7 @@ impl PrintCraftApp {
                     }
                 }
             }
-            self.create_from_images(images);
+            self.begin_image_import(images);
         }
         #[cfg(target_arch = "wasm32")]
         self.notify("On the web, open or drop an image to convert it");
@@ -156,11 +191,52 @@ impl PrintCraftApp {
 
     /// One new document from images (tests and automation call this directly).
     pub fn create_from_images(&mut self, images: Vec<(String, Vec<u8>)>) {
+        self.create_from_images_with_resolution(images, printcraft_engine::ImageResolution::Embedded);
+    }
+
+    /// Stage selected images for the DPI chooser; no document is created until confirmed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn begin_image_import_paths(&mut self, paths: &[String]) -> Result<(), String> {
+        let images = paths
+            .iter()
+            .map(|p| {
+                let path = std::path::Path::new(p);
+                let bytes = std::fs::read(path).map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                Ok((name, bytes))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        self.begin_image_import(images);
+        Ok(())
+    }
+
+    /// Stage selected images for the DPI chooser; no document is created until confirmed.
+    pub fn begin_image_import(&mut self, images: Vec<(String, Vec<u8>)>) {
         if images.is_empty() {
             return;
         }
-        let name = if images.len() == 1 { format!("{}.pdf", stem(&images[0].0)) } else { "Images.pdf".to_string() };
-        let created = self.session.create_from_images(&images).map_err(|e| e.to_string());
+        self.image_import = Some(ImageImport { images, choice: ResolutionChoice::Image, dpi: 300.0 });
+        self.dialog = Some(crate::Dialog::CreateImages);
+    }
+
+    pub(crate) fn finish_image_import(&mut self) {
+        let Some(draft) = self.image_import.take() else { return };
+        let resolution = match draft.choice {
+            ResolutionChoice::Image => printcraft_engine::ImageResolution::Embedded,
+            ResolutionChoice::Default72 => printcraft_engine::ImageResolution::Dpi(72.0),
+            ResolutionChoice::Custom => printcraft_engine::ImageResolution::Dpi(draft.dpi),
+        };
+        self.create_from_images_with_resolution(draft.images, resolution);
+    }
+
+    /// Create directly at the requested resolution (also used by UI tests).
+    pub fn create_from_images_with_resolution(&mut self, images: Vec<(String, Vec<u8>)>, resolution: printcraft_engine::ImageResolution) {
+        if images.is_empty() {
+            return;
+        }
+        let name =
+            if let Some((name, _)) = images.first().filter(|_| images.len() == 1) { format!("{}.pdf", stem(name)) } else { "Images.pdf".to_string() };
+        let created = self.session.create_from_images_with_resolution(&images, resolution).map_err(|e| e.to_string());
         if let Err(e) = self.open_created_bytes(&name, created) {
             self.notify(format!("Couldn't create a PDF: {e}"));
         }

@@ -1,6 +1,7 @@
 //! PrintCraft desktop app.
 //!
 //! Usage: `printcraft [options] [files…]`
+//! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
 //!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout continuous|two-up|single  --panel comments|bookmarks|pages|fields|layers|attachments|none
@@ -49,6 +50,7 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut options: Vec<(String, String)> = Vec::new();
     let mut control_file: Option<String> = None;
+    let mut create_images = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -57,6 +59,7 @@ fn main() -> eframe::Result {
                 return Ok(());
             }
             "--control" => control_file = args.next(),
+            "--create-images" => create_images = true,
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
@@ -129,8 +132,14 @@ fn main() -> eframe::Result {
             if let Some(dir) = printcraft_ui_egui::RecoveryStore::default_dir() {
                 app.enable_recovery(printcraft_ui_egui::RecoveryStore::new(dir));
             }
-            for f in files {
-                app.open_path(&f);
+            if create_images {
+                if let Err(e) = app.begin_image_import_paths(&files) {
+                    app.notify(e);
+                }
+            } else {
+                for f in files {
+                    app.open_path(&f);
+                }
             }
             for (k, v) in options {
                 if let Err(e) = app.set_option(&k, &v) {
