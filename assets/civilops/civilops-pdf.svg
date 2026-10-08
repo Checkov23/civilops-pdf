@@ -1,16 +1,13 @@
-<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- CivilOps PDF: Navy-Kachel mit eckigem C, Sand-Plakette mit Blatt und Massline -->
-  <rect width="512" height="512" rx="112" ry="112" fill="#1b3a5e"/>
-  <g transform="translate(116, 116) scale(4.375)" fill="#ffffff">
-    <path d="M 0 10.36 L 10.36 0 L 64 0 L 64 18.29 L 18.29 18.29 L 18.29 45.71 L 64 45.71 L 64 64 L 0 64 Z"/>
-    <rect x="32.61" y="23.47" width="17.07" height="17.06"/>
-  </g>
-  <g>
-    <rect x="286" y="286" width="200" height="200" rx="44" fill="#c2a878"/>
-    <path d="M 336 312 L 408 312 L 436 340 L 436 460 L 336 460 Z" fill="none" stroke="#ffffff" stroke-width="12" stroke-linejoin="round"/>
-    <polyline points="408,312 408,340 436,340" fill="none" stroke="#ffffff" stroke-width="8" stroke-linejoin="round"/>
-    <polyline points="356,420 416,420" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
-    <polyline points="356,404 356,436" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
-    <polyline points="416,404 416,436" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- CivilOps PDF: App-Symbol (Variante A, 08.10.2026). Quelle: Documents/Claude/civilops-app-symbole (node erzeuge.mjs) -->
+  <defs><linearGradient id="grund" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a5384"/><stop offset="1" stop-color="#153050"/></linearGradient></defs><rect width="512" height="512" rx="112" ry="112" fill="url(#grund)"/><g>
+  <path d="M 158 104 H 300 L 362 166 V 400 Q 362 408 354 408 H 158 Q 150 408 150 400 V 112 Q 150 104 158 104 Z" fill="#f7f9fc"/>
+  <path d="M 300 104 V 152 Q 300 166 314 166 H 362 Z" fill="#c2a878"/>
+  <rect x="184" y="196" width="144" height="16" rx="8" fill="#1b3a5e"/>
+  <rect x="184" y="232" width="144" height="16" rx="8" fill="#1b3a5e"/>
+  <rect x="184" y="268" width="96" height="16" rx="8" fill="#1b3a5e"/>
+  <rect x="180" y="318" width="12" height="60" rx="3" fill="#1b3a5e"/>
+  <rect x="320" y="318" width="12" height="60" rx="3" fill="#1b3a5e"/>
+  <rect x="200" y="342" width="112" height="12" fill="#1b3a5e"/>
+  <path d="M 194 348 L 222 332 V 364 Z" fill="#1b3a5e"/>
+  <path d="M 318 348 L 290 332 V 364 Z" fill="#1b3a5e"/></g></svg>
