@@ -384,6 +384,62 @@ fn text_lines_are_found_and_replaced_in_place() {
     assert_eq!(lines[1].rect, second);
 }
 
+/// A page whose content is one stream in three pieces, split between tokens: a marked-content
+/// dictionary closes at the start of the middle piece, and the `TJ` array that ends it is shown
+/// by the operator that starts the last one.
+fn split_streams_page() -> Document {
+    let piece = |s: &str| format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents [4 0 R 5 0 R 6 0 R] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+        piece("/P << /MCID 0"),
+        piece(">> BDC BT /F1 12 Tf 72 700 Td (Target) Tj 0 -20 Td [(After) -20 (wards)]"),
+        piece("TJ ET EMC"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// The page's pieces joined back into one stream: every operator must still have its operands.
+fn assert_split_tokens_kept(doc: &Document, new_text: &str) {
+    let joined = streams(doc, 0).join("\n");
+    assert!(joined.contains(new_text) && !joined.contains("Target"), "{joined}");
+    assert!(joined.contains("[(After) -20 (wards)]"), "the text after the line is gone: {joined}");
+    for op in printcraft_content::parse(joined.as_bytes()).ops {
+        let want = match op.op.as_slice() {
+            b"BDC" => 2,
+            b"TJ" => 1,
+            _ => continue,
+        };
+        assert_eq!(op.operands.len(), want, "{} lost its operands: {joined}", String::from_utf8_lossy(&op.op));
+    }
+}
+
+#[test]
+fn editing_text_keeps_the_tokens_a_stream_shares_with_its_neighbours() {
+    let mut doc = split_streams_page();
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "Target");
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    assert_split_tokens_kept(&reopen(&doc), "Edited");
+    // A paragraph rewrite rebuilds the same piece.
+    let mut doc = split_streams_page();
+    text::replace_block(&mut doc, 0, 0, "Rewrapped").unwrap();
+    assert_split_tokens_kept(&reopen(&doc), "Rewrapped");
+}
+
 #[test]
 fn missing_glyphs_substitute_helvetica_and_impossible_text_is_refused() {
     let mut doc = text_page("BT /F2 10 Tf 72 600 Td (ab) Tj ET");
