@@ -130,10 +130,12 @@ fn text(args: &[String]) -> Result<(), String> {
         Some(p) => vec![p.parse::<usize>().map_err(|_| "bad --page")?.saturating_sub(1)],
         None => (0..r.page_count()).collect(),
     };
+    let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
         let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
         if let Some(e) = out.error {
             eprintln!("page {}: {e}", p + 1);
+            failed.push(p + 1);
             continue;
         }
         if n > 0 {
@@ -141,7 +143,11 @@ fn text(args: &[String]) -> Result<(), String> {
         }
         println!("{}", out.text.map(|t| t.plain_text()).unwrap_or_default());
     }
-    Ok(())
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("text: page(s) {} could not be read", failed.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")))
+    }
 }
 
 /// 1-based page list ("1,3,5") → 0-based indices.
