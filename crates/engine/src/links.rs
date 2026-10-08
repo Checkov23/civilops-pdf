@@ -4,7 +4,7 @@
 /// The app's name.
 pub const APP: &str = "civilops-pdf";
 /// CivilOps PDF's version (the crates keep their own numbering).
-pub const VERSION: &str = "0.1.5";
+pub const VERSION: &str = "0.1.6";
 
 pub const WEBSITE: &str = "https://civilops.de";
 pub const APP_PAGE: &str = "https://civilops.de";

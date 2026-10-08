@@ -3818,7 +3818,7 @@ dependencies = [
 
 [[package]]
 name = "printcraft"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "civilops-aktualisierung",
  "eframe",
