@@ -590,6 +590,40 @@ trailer << /Root 1 0 R >>
         assert_eq!(px(75, 25), vec![255, 255, 255, 255], "NoView annotation must not be drawn");
     }
 
+    /// Quartz writes `/AP /N` as an indirect dictionary of states, and the next object in
+    /// the file is often some other stream. That dictionary must not be read as that stream,
+    /// or the checkbox (whose real appearance is `/AS`) is skipped.
+    #[test]
+    fn indirect_appearance_state_dict_is_not_another_stream() {
+        let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /T (cb) /V /Yes /AS /Yes /Rect [10 10 30 30]
+   /AP 9 0 R >> endobj
+9 0 obj << /N 10 0 R >> endobj
+10 0 obj << /Yes 5 0 R /Off 6 0 R >> endobj
+11 0 obj << /Length 24 >> stream
+0 0 1 rg 0 0 20 20 re f
+endstream
+endobj
+5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 24 >> stream
+1 0 0 rg 0 0 20 20 re f
+endstream
+endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length 24 >> stream
+0 1 0 rg 0 0 20 20 re f
+endstream
+endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+        let mut r = PageRenderer::new(Arc::new(pdf.to_vec()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0 });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+        assert_eq!(px(20, 80), vec![255, 0, 0, 255], "checkbox must show the /Yes appearance, not the decoy stream");
+    }
+
     #[test]
     fn hiding_comments_keeps_fields() {
         let pdf = b"%PDF-1.7
