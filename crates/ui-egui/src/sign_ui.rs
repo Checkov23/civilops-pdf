@@ -1,0 +1,989 @@
+//! Use a certificate (execution plan M9.6): Digitally sign and Certify (drag a rectangle, or
+//! click an empty signature field), the Sign with a Digital ID / Configure New Digital ID /
+//! Sign as dialogs, the Signatures panel, and the signature message bar.
+
+use std::path::PathBuf;
+
+use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
+use printcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
+use printcraft_engine::{SignOptions, SignatureInfo, SignatureStatus};
+
+use crate::canvas::{DocView, PageXform};
+use crate::theme::{self, Tokens};
+use crate::{PrintCraftApp, icons, widgets};
+
+/// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;
+/// its password is asked for at each signing.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DigitalIdEntry {
+    pub path: String,
+    pub name: String,
+    pub issuer: String,
+    pub email: String,
+    pub expires: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignStep {
+    /// Sign with a Digital ID: pick one.
+    Choose,
+    /// Configure a Digital ID for signing: from a file or a new self-signed one.
+    Configure,
+    /// Sign as "Name": appearance, password, Sign.
+    SignAs,
+}
+
+/// The key algorithms of a new digital ID (Acrobat offers RSA; P-256 also works in browsers).
+pub const KEY_ALGORITHMS: [(&str, &str); 4] =
+    [("2048-bit RSA", "rsa2048"), ("3072-bit RSA", "rsa3072"), ("4096-bit RSA", "rsa4096"), ("256-bit ECDSA (P-256)", "p256")];
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewIdDraft {
+    /// `true`: create a self-signed ID; `false`: use an ID from a file.
+    pub create: bool,
+    pub name: String,
+    pub unit: String,
+    pub organization: String,
+    pub email: String,
+    pub country: String,
+    pub key: usize,
+    pub password: String,
+    pub confirm: String,
+    /// Use a Digital ID from a file: its path and password.
+    pub file: String,
+    pub file_password: String,
+}
+
+impl Default for NewIdDraft {
+    fn default() -> Self {
+        Self {
+            create: true,
+            name: String::new(),
+            unit: String::new(),
+            organization: String::new(),
+            email: String::new(),
+            country: String::new(),
+            key: 0,
+            password: String::new(),
+            confirm: String::new(),
+            file: String::new(),
+            file_password: String::new(),
+        }
+    }
+}
+
+/// The signing dialogs' state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SignDraft {
+    pub page: usize,
+    /// The signature rectangle (user space); `None`: invisible.
+    pub rect: Option<[f64; 4]>,
+    /// Sign this empty signature field instead.
+    pub field: Option<String>,
+    /// Certify (DocMDP) with these permissions: 1 none, 2 form fill and signing, 3 also comments.
+    pub certify: Option<u8>,
+    pub step: SignStep,
+    pub selected: Option<usize>,
+    pub password: String,
+    pub reason: String,
+    pub location: String,
+    pub appearance: Appearance,
+    pub new_id: NewIdDraft,
+    pub error: Option<String>,
+}
+
+impl SignDraft {
+    fn new(page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>, ids: usize) -> Self {
+        Self {
+            page,
+            rect,
+            field,
+            certify,
+            step: if ids == 0 { SignStep::Configure } else { SignStep::Choose },
+            selected: (ids > 0).then_some(0),
+            password: String::new(),
+            reason: String::new(),
+            location: String::new(),
+            appearance: Appearance::default(),
+            new_id: NewIdDraft::default(),
+            error: None,
+        }
+    }
+}
+
+/// What a page asks of the signing flow.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SignView {
+    /// A signature rectangle being dragged: (page, start on screen).
+    pub drag: Option<(usize, Pos2)>,
+    /// A rectangle was drawn: (page, user-space rect).
+    pub drawn: Option<(usize, [f64; 4])>,
+    /// An empty signature field was clicked (its name).
+    pub field: Option<String>,
+}
+
+/// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)).
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, page: usize, info: &printcraft_render::DocInfo, view: &mut DocView) {
+    let pointer = ui.input(|i| i.pointer.hover_pos());
+    let origin = ui.input(|i| i.pointer.press_origin());
+    if pointer.is_some_and(|p| xf.rect.contains(p)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    if resp.drag_started()
+        && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
+    {
+        view.sign.drag = Some((page, o));
+    }
+    if let Some((p, start)) = view.sign.drag
+        && p == page
+        && let Some(end) = pointer
+    {
+        let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
+        let r = Rect::from_two_pos(start, end);
+        ui.painter().rect_filled(r, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(0x14, 0x73, 0xE6, 28));
+        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
+        if resp.drag_stopped() {
+            view.sign.drag = None;
+            if r.width() >= 8.0 && r.height() >= 8.0 {
+                let user = |q: Pos2| {
+                    let (vx, vy) = xf.screen_to_view(q);
+                    info.pages[page].view_to_user(vx, vy)
+                };
+                let (a, b) = (user(r.left_top()), user(r.right_bottom()));
+                let rect = [a[0].min(b[0]) as f64, a[1].min(b[1]) as f64, a[0].max(b[0]) as f64, a[1].max(b[1]) as f64];
+                view.sign.drawn = Some((page, rect));
+            }
+        }
+    }
+}
+
+/// Where new digital IDs are saved: next to the recovery folder (`…/CivilOps PDF/Digital IDs`).
+fn id_dir() -> Option<PathBuf> {
+    crate::recovery::RecoveryStore::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
+}
+
+/// A Keychain identity by its `keychain:` reference.
+fn keychain_id(reference: &str) -> Result<DigitalId, String> {
+    #[cfg(target_os = "macos")]
+    return sign::keychain::find(reference).map_err(|e| e.to_string());
+    #[cfg(not(target_os = "macos"))]
+    Err(format!("{reference}: Keychain identities are only available on macOS"))
+}
+
+pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
+    DigitalIdEntry {
+        path: path.to_string(),
+        name: c.display_name(),
+        issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
+        email: c.subject.email().unwrap_or("").to_string(),
+        expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
+    }
+}
+
+impl PrintCraftApp {
+    /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
+    pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
+        self.refresh_keychain_ids();
+        self.sign_draft = Some(SignDraft::new(page, rect, field, certify, self.digital_ids.len()));
+        self.dialog = Some(crate::Dialog::Sign);
+    }
+
+    /// List the macOS Keychain's signing identities (after the file-based IDs).
+    fn refresh_keychain_ids(&mut self) {
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:"));
+        #[cfg(target_os = "macos")]
+        if self.keychain_ids {
+            match sign::keychain::identities(None) {
+                Ok(ids) => {
+                    for id in ids {
+                        self.digital_ids.push(entry_for(&sign::keychain::reference(&id.certificate), &id.certificate));
+                    }
+                }
+                Err(e) => self.notify(format!("The Keychain's digital IDs couldn't be listed: {e}")),
+            }
+        }
+    }
+
+    /// Add a digital ID file to the list (or select it if it's there).
+    pub fn add_digital_id(&mut self, path: &str, cert: &Certificate) -> usize {
+        if let Some(i) = self.digital_ids.iter().position(|e| e.path == path) {
+            self.digital_ids[i] = entry_for(path, cert);
+            return i;
+        }
+        self.digital_ids.push(entry_for(path, cert));
+        self.digital_ids.len() - 1
+    }
+
+    /// Configure New Digital ID ▸ Create: a self-signed ID saved as a .p12 next to the app data
+    /// (or in `export_dir_override`). Returns its list index.
+    fn create_digital_id(&mut self) -> Result<usize, String> {
+        let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to create".into()) };
+        if d.name.trim().is_empty() {
+            return Err("Enter a name.".into());
+        }
+        if d.password.chars().count() < 6 {
+            return Err("The password must have at least 6 characters.".into());
+        }
+        if d.password != d.confirm {
+            return Err("The passwords do not match.".into());
+        }
+        let key = match KEY_ALGORITHMS[d.key.min(KEY_ALGORITHMS.len() - 1)].1 {
+            "rsa3072" => PrivateKey::generate_rsa(3072),
+            "rsa4096" => PrivateKey::generate_rsa(4096),
+            "p256" => PrivateKey::generate_p256(),
+            _ => PrivateKey::generate_rsa(2048),
+        }
+        .map_err(|e| e.to_string())?;
+        let now = self.session.now_secs();
+        let dn = Name::build(&d.name, &d.unit, &d.organization, &d.email, &d.country);
+        let serial = sign::keys::DigestAlg::Sha256.digest(&[d.name.as_bytes(), &now.to_be_bytes()])[..8].to_vec();
+        let cert = Certificate::self_signed(&dn, &key, sign::Time::from_unix(now), 5, &serial).map_err(|e| e.to_string())?;
+        let id = DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some(d.name.trim().to_string()) };
+        let p12 = sign::pkcs12::write(&id, &d.password).map_err(|e| e.to_string())?;
+        let dir = match &self.export_dir_override {
+            Some(p) => Some(PathBuf::from(p)),
+            None => id_dir(),
+        }
+        .ok_or("There is no folder to save the digital ID in.")?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
+        let path = (1..=u64::MAX)
+            .map(|i| dir.join(if i == 1 { format!("{stem}.p12") } else { format!("{stem} {i}.p12") }))
+            .find(|p| !p.exists())
+            .ok_or("no free file name for the digital ID")?;
+        std::fs::write(&path, &p12).map_err(|e| e.to_string())?;
+        Ok(self.add_digital_id(&path.to_string_lossy(), &cert))
+    }
+
+    /// Configure New Digital ID ▸ Use a Digital ID from a file.
+    fn import_digital_id(&mut self) -> Result<usize, String> {
+        let Some(d) = self.sign_draft.as_ref().map(|d| d.new_id.clone()) else { return Err("nothing to import".into()) };
+        let bytes = std::fs::read(&d.file).map_err(|e| format!("{}: {e}", d.file))?;
+        let id = sign::pkcs12::open(&bytes, &d.file_password).map_err(|e| match e {
+            sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
+            e => e.to_string(),
+        })?;
+        Ok(self.add_digital_id(&d.file, &id.certificate))
+    }
+
+    /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
+    fn finish_signing(&mut self) -> Result<(), String> {
+        let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
+        let d = self.sign_draft.clone().ok_or("nothing to sign")?;
+        let entry = d.selected.and_then(|i| self.digital_ids.get(i)).cloned().ok_or("Choose a digital ID.")?;
+        let id = if entry.path.starts_with("keychain:") {
+            keychain_id(&entry.path)?
+        } else {
+            let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
+            sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
+                sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
+                e => e.to_string(),
+            })?
+        };
+        let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+        let opts = SignOptions {
+            field: d.field.clone(),
+            page: d.page,
+            rect: d.rect,
+            reason: some(&d.reason),
+            location: some(&d.location),
+            certify: d.certify,
+            appearance: d.appearance.clone(),
+            ..SignOptions::default()
+        };
+        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
+        // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing).
+        let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
+        let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
+        let path = match self.save_override.clone() {
+            Some(p) => Some(PathBuf::from(p)),
+            #[cfg(not(target_arch = "wasm32"))]
+            None => rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf")).save_file(),
+            #[cfg(target_arch = "wasm32")]
+            None => None,
+        };
+        let Some(path) = path else { return Err(String::new()) };
+        std::fs::write(&path, signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
+        self.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
+        if let Some((i, _)) = self.active_ids() {
+            self.views[i].invalidate_content();
+        }
+        self.right = Some(crate::RightPanel::Signatures);
+        self.notify(format!("Signed and saved to {}", path.display()));
+        Ok(())
+    }
+
+    /// Trust a certificate (Signatures panel ▸ Add to trusted certificates), revalidating.
+    pub fn trust_certificate(&mut self, cert: Certificate) {
+        let mut certs = self.session.trusted_certificates().to_vec();
+        if !certs.iter().any(|c| c.raw == cert.raw) {
+            certs.push(cert);
+        }
+        self.session.set_trusted_certificates(certs);
+    }
+
+    /// Open saved revision `n` (1 = the oldest) of the active document as a new document.
+    pub fn open_revision(&mut self, n: usize) {
+        let Some((_, id)) = self.active_ids() else { return };
+        match self.session.open_revision(id, n) {
+            Ok(new) => {
+                let Some(doc) = self.session.get(new) else { return };
+                self.views.push(DocView::new(new, &doc.info));
+                self.active = Some(self.views.len() - 1);
+            }
+            Err(e) => self.notify(format!("Couldn't open revision {n}: {e}")),
+        }
+    }
+
+    /// Open the signed version of a signature as a new document (View signed version).
+    pub fn view_signed_version(&mut self, len: usize) {
+        let Some((_, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let bytes = doc.bytes[..len.min(doc.bytes.len())].to_vec();
+        let name = format!("{} (signed version)", doc.name.trim_end_matches(".pdf"));
+        match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
+            Ok(new) => {
+                let Some(doc) = self.session.get(new) else { return };
+                self.views.push(DocView::new(new, &doc.info));
+                self.active = Some(self.views.len() - 1);
+            }
+            Err(e) => self.notify(format!("Couldn't open the signed version: {e}")),
+        }
+    }
+}
+
+/// Draw the signing dialogs; returns `true` when the dialog should close.
+pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+    let Some(step) = app.sign_draft.as_ref().map(|d| d.step) else { return true };
+    match step {
+        SignStep::Choose => choose(ui, app, t),
+        SignStep::Configure => configure(ui, app, t),
+        SignStep::SignAs => sign_as(ui, app, t),
+    }
+}
+
+fn title(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).font(theme::semibold(18.0)));
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(8.0);
+}
+
+fn error(ui: &mut egui::Ui, err: &Option<String>) {
+    if let Some(e) = err.as_ref().filter(|e| !e.is_empty()) {
+        ui.colored_label(Color32::from_rgb(0xD7, 0x37, 0x3F), e);
+        ui.add_space(4.0);
+    }
+}
+
+fn choose(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+    title(ui, "Sign with a Digital ID");
+    ui.label("Choose the digital ID that you want to use for signing:");
+    ui.add_space(6.0);
+    let ids = app.digital_ids.clone();
+    let Some(d) = app.sign_draft.as_mut() else { return true };
+    let mut close = false;
+    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+        for (i, e) in ids.iter().enumerate() {
+            let selected = d.selected == Some(i);
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, &e.name));
+            let fill = if selected {
+                t.accent_soft
+            } else if resp.hovered() {
+                t.hover
+            } else {
+                Color32::TRANSPARENT
+            };
+            ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+            icons::paint(ui, Rect::from_min_size(rect.min + vec2(10.0, 15.0), vec2(20.0, 20.0)), "badge-check", 18.0, t.accent);
+            ui.painter().text(rect.min + vec2(40.0, 9.0), egui::Align2::LEFT_TOP, &e.name, theme::semibold(13.0), t.text);
+            let sub = format!(
+                "{}{}Issued by: {}, Expires: {}",
+                if e.path.starts_with("keychain:") { "Keychain  ·  " } else { "" },
+                if e.email.is_empty() { String::new() } else { format!("{}  ·  ", e.email) },
+                e.issuer,
+                e.expires
+            );
+            ui.painter().text(rect.min + vec2(40.0, 28.0), egui::Align2::LEFT_TOP, sub, theme::regular(11.5), t.text_muted);
+            if resp.clicked() {
+                d.selected = Some(i);
+            }
+            if resp.double_clicked() {
+                d.step = SignStep::SignAs;
+            }
+        }
+        if ids.is_empty() {
+            ui.label(egui::RichText::new("No digital IDs yet.").color(t.text_muted));
+        }
+    });
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        if widgets::pill_button(ui, "Configure New Digital ID", false).clicked() {
+            d.step = SignStep::Configure;
+            d.error = None;
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui.add_enabled_ui(d.selected.is_some(), |ui| widgets::pill_button(ui, "Continue", true)).inner.clicked() {
+                d.step = SignStep::SignAs;
+                d.error = None;
+            }
+            if widgets::pill_button(ui, "Cancel", false).clicked() {
+                close = true;
+            }
+        });
+    });
+    close
+}
+
+fn configure(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+    title(ui, "Configure a Digital ID for Signing");
+    let Some(d) = app.sign_draft.as_mut() else { return true };
+    let mut close = false;
+    let mut go = false;
+    ui.radio_value(&mut d.new_id.create, false, "Use a Digital ID from a file");
+    ui.radio_value(&mut d.new_id.create, true, "Create a new Digital ID (self-signed, saved to a password-protected file)");
+    ui.add_space(8.0);
+    let n = &mut d.new_id;
+    if n.create {
+        egui::Grid::new("new-id").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            for (label, value) in [
+                ("Name", &mut n.name),
+                ("Organizational Unit", &mut n.unit),
+                ("Organization Name", &mut n.organization),
+                ("Email Address", &mut n.email),
+            ] {
+                let l = ui.label(label);
+                ui.add(egui::TextEdit::singleline(value).desired_width(260.0)).labelled_by(l.id);
+                ui.end_row();
+            }
+            let l = ui.label("Country/Region");
+            ui.add(egui::TextEdit::singleline(&mut n.country).hint_text("US").char_limit(2).desired_width(60.0)).labelled_by(l.id);
+            ui.end_row();
+            ui.label("Key Algorithm");
+            egui::ComboBox::from_id_salt("key-alg").selected_text(KEY_ALGORITHMS[n.key].0).show_ui(ui, |ui| {
+                for (i, (label, _)) in KEY_ALGORITHMS.iter().enumerate() {
+                    ui.selectable_value(&mut n.key, i, *label);
+                }
+            });
+            ui.end_row();
+            let l = ui.label("Password");
+            ui.add(egui::TextEdit::singleline(&mut n.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.end_row();
+            let l = ui.label("Confirm Password");
+            ui.add(egui::TextEdit::singleline(&mut n.confirm).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.end_row();
+        });
+        ui.label(
+            egui::RichText::new("Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.")
+                .small()
+                .color(t.text_muted),
+        );
+    } else {
+        egui::Grid::new("id-file").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            let l = ui.label("File (.p12, .pfx)");
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut n.file).desired_width(220.0)).labelled_by(l.id);
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button("Browse…").clicked()
+                    && let Some(p) = rfd::FileDialog::new().add_filter("Digital ID", &["p12", "pfx"]).pick_file()
+                {
+                    n.file = p.to_string_lossy().into_owned();
+                }
+            });
+            ui.end_row();
+            let l = ui.label("Password");
+            ui.add(egui::TextEdit::singleline(&mut n.file_password).password(true).desired_width(200.0)).labelled_by(l.id);
+            ui.end_row();
+        });
+    }
+    ui.add_space(6.0);
+    error(ui, &d.error);
+    ui.horizontal(|ui| {
+        if !app.digital_ids.is_empty() && widgets::pill_button(ui, "Back", false).clicked() {
+            d.step = SignStep::Choose;
+            d.error = None;
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, if d.new_id.create { "Save" } else { "Continue" }, true).clicked() {
+                go = true;
+            }
+            if widgets::pill_button(ui, "Cancel", false).clicked() {
+                close = true;
+            }
+        });
+    });
+    if go {
+        let create = app.sign_draft.as_ref().is_some_and(|d| d.new_id.create);
+        let result = if create { app.create_digital_id() } else { app.import_digital_id() };
+        let Some(d) = app.sign_draft.as_mut() else { return true };
+        match result {
+            Ok(i) => {
+                d.selected = Some(i);
+                d.step = SignStep::Choose;
+                d.error = None;
+                d.new_id = NewIdDraft::default();
+            }
+            Err(e) => d.error = Some(e),
+        }
+    }
+    close
+}
+
+/// The appearance preview: Acrobat's standard layout (name left, details right).
+fn preview(ui: &mut egui::Ui, t: &Tokens, name: &str, d: &SignDraft) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 96.0), egui::Sense::hover());
+    let bg = if t.dark() { Color32::from_gray(0xF4) } else { Color32::WHITE };
+    ui.painter().rect(rect, CornerRadius::same(4), bg, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let inner = rect.shrink(10.0);
+    let a = &d.appearance;
+    if a.name {
+        let half = Rect::from_min_size(inner.min, vec2(inner.width() * 0.5 - 6.0, inner.height()));
+        let galley = ui.painter().layout(name.to_string(), theme::regular(22.0), Color32::BLACK, half.width());
+        ui.painter().galley(half.left_center() - vec2(0.0, galley.size().y / 2.0), galley, Color32::BLACK);
+    }
+    let mut lines = Vec::new();
+    if a.name {
+        lines.push(if a.labels { format!("Digitally signed by {name}") } else { name.to_string() });
+    }
+    if a.reason && !d.reason.trim().is_empty() {
+        lines.push(format!("{}{}", if a.labels { "Reason: " } else { "" }, d.reason.trim()));
+    }
+    if a.location && !d.location.trim().is_empty() {
+        lines.push(format!("{}{}", if a.labels { "Location: " } else { "" }, d.location.trim()));
+    }
+    if a.date {
+        lines.push(format!("{}{}", if a.labels { "Date: " } else { "" }, "(the signing time)"));
+    }
+    let x = if a.name { inner.center().x + 6.0 } else { inner.left() };
+    let galley = ui.painter().layout(lines.join("\n"), theme::regular(11.0), Color32::from_gray(0x20), inner.right() - x);
+    ui.painter().galley(egui::pos2(x, inner.center().y - galley.size().y / 2.0), galley, Color32::BLACK);
+}
+
+fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
+    let ids = app.digital_ids.clone();
+    let Some(d) = app.sign_draft.as_mut() else { return true };
+    let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() else {
+        d.step = SignStep::Choose;
+        return false;
+    };
+    title(ui, &format!("{} as \"{}\"", if d.certify.is_some() { "Certify" } else { "Sign" }, entry.name));
+    let in_keychain = entry.path.starts_with("keychain:");
+    let mut close = false;
+    let mut go = false;
+    if d.rect.is_some() || d.field.is_some() {
+        ui.label(egui::RichText::new("Appearance").font(theme::semibold(12.5)));
+        preview(ui, t, &entry.name, d);
+        ui.horizontal_wrapped(|ui| {
+            let a = &mut d.appearance;
+            ui.checkbox(&mut a.name, "Name");
+            ui.checkbox(&mut a.date, "Date");
+            ui.checkbox(&mut a.reason, "Reason");
+            ui.checkbox(&mut a.location, "Location");
+            ui.checkbox(&mut a.distinguished_name, "Distinguished name");
+            ui.checkbox(&mut a.labels, "Labels");
+        });
+        ui.add_space(6.0);
+    } else {
+        ui.label(egui::RichText::new("The signature will be invisible.").color(t.text_muted));
+    }
+    egui::Grid::new("sign-as").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        if d.certify.is_some() {
+            ui.label("Permitted actions after certifying");
+            let mut p = d.certify.unwrap_or(2);
+            let label = |p: u8| match p {
+                1 => "No changes allowed",
+                3 => "Annotations, form fill-in, and digital signatures",
+                _ => "Form fill-in and digital signatures",
+            };
+            egui::ComboBox::from_id_salt("certify-p").selected_text(label(p)).width(300.0).show_ui(ui, |ui| {
+                for v in [1u8, 2, 3] {
+                    ui.selectable_value(&mut p, v, label(v));
+                }
+            });
+            d.certify = Some(p);
+            ui.end_row();
+        }
+        let l = ui.label("Reason");
+        ui.add(egui::TextEdit::singleline(&mut d.reason).hint_text("Optional").desired_width(260.0)).labelled_by(l.id);
+        ui.end_row();
+        let l = ui.label("Location");
+        ui.add(egui::TextEdit::singleline(&mut d.location).hint_text("Optional").desired_width(260.0)).labelled_by(l.id);
+        ui.end_row();
+        if in_keychain {
+            ui.label("");
+            ui.label(
+                egui::RichText::new("The key is in the macOS Keychain, which may ask to allow CivilOps PDF to use it.").small().color(t.text_muted),
+            );
+        } else {
+            let l = ui.label("Digital ID password");
+            let r = ui.add(egui::TextEdit::singleline(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
+        }
+        ui.end_row();
+    });
+    ui.add_space(6.0);
+    error(ui, &d.error);
+    ui.horizontal(|ui| {
+        if widgets::pill_button(ui, "Back", false).clicked() {
+            d.step = SignStep::Choose;
+            d.error = None;
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, "Sign", true).clicked() {
+                go = true;
+            }
+            if widgets::pill_button(ui, "Cancel", false).clicked() {
+                close = true;
+            }
+        });
+    });
+    if go {
+        match app.finish_signing() {
+            Ok(()) => {
+                app.sign_draft = None;
+                return true;
+            }
+            Err(e) => {
+                if let Some(d) = app.sign_draft.as_mut() {
+                    d.error = Some(e);
+                }
+            }
+        }
+    }
+    close
+}
+
+/// The message bar for signed documents: (icon, colour, text, certified).
+pub(crate) fn banner(sigs: &[SignatureInfo]) -> Option<(&'static str, Color32, String)> {
+    let signed: Vec<&SignatureInfo> = sigs.iter().filter(|s| s.signed).collect();
+    if signed.is_empty() {
+        return None;
+    }
+    if let Some(c) = signed.iter().find(|s| s.certify.is_some())
+        && c.status == SignatureStatus::Valid
+    {
+        let by = c.certificate.as_ref().map(|x| {
+            let org = x.subject.organization().map(|o| format!(", {o}")).unwrap_or_default();
+            format!("{}{org}, certificate issued by {}.", x.display_name(), x.issuer.common_name().unwrap_or("an unknown issuer"))
+        });
+        return Some(("badge-check", Color32::from_rgb(0x14, 0x73, 0xE6), format!("Certified by {}", by.unwrap_or_default())));
+    }
+    Some(if signed.iter().any(|s| s.status == SignatureStatus::Invalid) {
+        ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F), "At least one signature is invalid.".into())
+    } else if signed.iter().all(|s| s.status == SignatureStatus::Valid) {
+        ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78), "Signed and all signatures are valid.".into())
+    } else {
+        ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19), "At least one signature has problems.".into())
+    })
+}
+
+fn status_icon(s: &SignatureInfo) -> (&'static str, Color32) {
+    if !s.signed {
+        return ("pen-line", Color32::from_gray(0x80));
+    }
+    match (s.status, &s.modification) {
+        (SignatureStatus::Valid, Modification::None) => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
+        (SignatureStatus::Valid, _) => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
+        (SignatureStatus::Unknown, _) => ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)),
+        (SignatureStatus::Invalid, _) => ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)),
+    }
+}
+
+/// What the Signatures panel asks the app to do.
+#[derive(Clone, Debug)]
+pub enum PanelAction {
+    Validate,
+    GoTo(usize),
+    Trust(Box<Certificate>),
+    ViewSigned(usize),
+    Sign(String),
+    ExportCertificate(Box<Certificate>),
+    /// Certificate Viewer for the signer's chain (signer first).
+    ViewCertificate(Vec<Certificate>),
+}
+
+/// The Signatures panel body.
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expanded: &mut Vec<String>) -> Option<PanelAction> {
+    let mut action = None;
+    ui.horizontal(|ui| {
+        if widgets::pill_button(ui, "Validate all", false).clicked() {
+            action = Some(PanelAction::Validate);
+        }
+    });
+    ui.add_space(6.0);
+    if sigs.is_empty() {
+        ui.add_space(24.0);
+        ui.vertical_centered(|ui| {
+            ui.add(icons::image("signature", 32.0, t.text_faint));
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("This document has no signatures.").color(t.text_muted));
+        });
+        return action;
+    }
+    let mut ordered: Vec<&SignatureInfo> = sigs.iter().collect();
+    ordered.sort_by_key(|s| (!s.signed, s.revision));
+    for s in ordered {
+        let open = expanded.contains(&s.field);
+        let (icon, color) = status_icon(s);
+        let head = if s.signed {
+            format!(
+                "Rev. {}: {} by {}",
+                s.revision,
+                if s.certify.is_some() { "Certified" } else { "Signed" },
+                s.signer.as_deref().unwrap_or("an unknown signer")
+            )
+        } else {
+            format!("Unsigned signature field: {}", s.field)
+        };
+        let resp = ui
+            .horizontal(|ui| {
+                let chevron = if open { "chevron-down" } else { "chevron-right" };
+                let toggle = icons::button(ui, chevron, 20.0, false, if open { "Collapse" } else { "Expand" }).clicked();
+                ui.add(icons::image(icon, 16.0, color));
+                let l = ui.add(egui::Label::new(egui::RichText::new(&head).font(theme::semibold(12.5)).color(t.text)).sense(egui::Sense::click()));
+                toggle || l.clicked()
+            })
+            .inner;
+        if resp {
+            if open {
+                expanded.retain(|f| f != &s.field);
+            } else {
+                expanded.push(s.field.clone());
+            }
+        }
+        if !open {
+            continue;
+        }
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 4, top: 2, bottom: 8 }).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            if !s.signed {
+                if widgets::pill_button(ui, "Sign this field…", true).clicked() {
+                    action = Some(PanelAction::Sign(s.field.clone()));
+                }
+                return;
+            }
+            ui.label(
+                egui::RichText::new(match s.status {
+                    SignatureStatus::Valid => "Signature is valid:",
+                    SignatureStatus::Unknown => "Signature validity is UNKNOWN:",
+                    SignatureStatus::Invalid => "Signature is INVALID:",
+                })
+                .font(theme::semibold(12.0)),
+            );
+            for line in &s.details {
+                ui.add(egui::Label::new(egui::RichText::new(format!("• {line}")).font(theme::regular(11.5)).color(t.text_muted)).wrap());
+            }
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Signature Details").font(theme::semibold(12.0)));
+            let row = |ui: &mut egui::Ui, k: &str, v: &str| {
+                ui.add(egui::Label::new(egui::RichText::new(format!("{k}: {v}")).font(theme::regular(11.5))).wrap());
+            };
+            if let Some(r) = &s.reason {
+                row(ui, "Reason", r);
+            }
+            if let Some(l) = &s.location {
+                row(ui, "Location", l);
+            }
+            if let Some(d) = &s.date {
+                row(ui, "Signing time", &sign::pdf::display_date(d));
+            }
+            if let Some(a) = &s.algorithm {
+                row(ui, "Algorithm", a);
+            }
+            if let Some(c) = &s.certificate {
+                row(ui, "Signer", &c.subject.display());
+                row(ui, "Issued by", &c.issuer.display());
+                row(ui, "Valid", &format!("{} to {}", c.not_before, c.not_after));
+            }
+            match s.page {
+                Some(p) => {
+                    let link = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("Field: {} on page {}", s.field, p + 1))
+                                .font(theme::regular(11.5))
+                                .color(t.accent_text)
+                                .underline(),
+                        )
+                        .sense(egui::Sense::click()),
+                    );
+                    if link.clicked() {
+                        action = Some(PanelAction::GoTo(p));
+                    }
+                }
+                None => row(ui, "Field", &s.field),
+            }
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                if let Some(c) = s.chain.last().or(s.certificate.as_ref())
+                    && s.status == SignatureStatus::Unknown
+                    && ui.button("Add to trusted certificates").clicked()
+                {
+                    action = Some(PanelAction::Trust(Box::new(c.clone())));
+                }
+                if ui.button("View signed version").clicked() {
+                    action = Some(PanelAction::ViewSigned(s.signed_len));
+                }
+                if let Some(c) = &s.certificate
+                    && ui.button("Show certificate…").clicked()
+                {
+                    let mut chain = vec![c.clone()];
+                    chain.extend(s.chain.iter().filter(|x| x.raw != c.raw).cloned());
+                    action = Some(PanelAction::ViewCertificate(chain));
+                }
+                if let Some(c) = &s.certificate
+                    && ui.button("Export certificate…").clicked()
+                {
+                    action = Some(PanelAction::ExportCertificate(Box::new(c.clone())));
+                }
+            });
+        });
+    }
+    action
+}
+
+/// Certificate Viewer: a chain (the end certificate first) and the tab shown.
+#[derive(Clone, Debug)]
+pub struct CertViewer {
+    pub chain: Vec<Certificate>,
+    pub selected: usize,
+    pub tab: CertTab,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CertTab {
+    Summary,
+    Details,
+    Trust,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+}
+
+fn key_usage(bits: u16) -> String {
+    const NAMES: [&str; 9] = [
+        "Digital Signature",
+        "Non-Repudiation",
+        "Key Encipherment",
+        "Data Encipherment",
+        "Key Agreement",
+        "Certificate Signing",
+        "CRL Signing",
+        "Encipher Only",
+        "Decipher Only",
+    ];
+    let used: Vec<&str> = NAMES.iter().enumerate().filter(|(i, _)| bits & (1 << i) != 0).map(|(_, n)| *n).collect();
+    if used.is_empty() { "None".into() } else { used.join(", ") }
+}
+
+/// What the viewer asks for.
+pub(crate) enum CertAction {
+    Trust(Box<Certificate>),
+    Export(Box<Certificate>),
+}
+
+/// The Certificate Viewer dialog: the chain on the left, the selected certificate's tabs.
+pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Certificate], t: &Tokens) -> (bool, Option<CertAction>) {
+    title(ui, "Certificate Viewer");
+    ui.label(egui::RichText::new("This dialog shows the details of a certificate and its chain.").color(t.text_muted));
+    ui.add_space(8.0);
+    let mut action = None;
+    v.selected = v.selected.min(v.chain.len().saturating_sub(1));
+    ui.horizontal_top(|ui| {
+        // The chain, root at the top (as Acrobat shows it).
+        ui.vertical(|ui| {
+            ui.set_width(200.0);
+            for (depth, i) in (0..v.chain.len()).rev().enumerate() {
+                let c = &v.chain[i];
+                ui.horizontal(|ui| {
+                    ui.add_space(depth as f32 * 12.0);
+                    if ui.selectable_label(v.selected == i, c.display_name()).clicked() {
+                        v.selected = i;
+                    }
+                });
+            }
+        });
+        ui.add_space(16.0);
+        ui.vertical(|ui| {
+            ui.set_width(440.0);
+            let Some(c) = v.chain.get(v.selected).cloned() else { return };
+            ui.horizontal(|ui| {
+                for (tab, label) in [(CertTab::Summary, "Summary"), (CertTab::Details, "Details"), (CertTab::Trust, "Trust")] {
+                    if widgets::pill_button(ui, label, v.tab == tab).clicked() {
+                        v.tab = tab;
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            let grid = |ui: &mut egui::Ui, rows: Vec<(&str, String)>| {
+                egui::Grid::new(("cert-rows", v.tab as u8)).num_columns(2).spacing([12.0, 5.0]).show(ui, |ui| {
+                    for (k, val) in rows {
+                        ui.label(egui::RichText::new(k).color(t.text_muted));
+                        ui.add(egui::Label::new(val).wrap());
+                        ui.end_row();
+                    }
+                });
+            };
+            match v.tab {
+                CertTab::Summary => grid(
+                    ui,
+                    vec![
+                        ("Issued to", c.subject.display()),
+                        ("Issued by", c.issuer.display()),
+                        ("Valid from", c.not_before.to_string()),
+                        ("Valid to", c.not_after.to_string()),
+                        ("Intended usage", c.key_usage.map(key_usage).unwrap_or_else(|| "Any".into())),
+                    ],
+                ),
+                CertTab::Details => grid(
+                    ui,
+                    vec![
+                        ("Version", "3".into()),
+                        ("Serial number", c.serial_hex()),
+                        ("Issuer", c.issuer.display()),
+                        ("Subject", c.subject.display()),
+                        ("Validity starts", c.not_before.to_string()),
+                        ("Validity ends", c.not_after.to_string()),
+                        ("Public key", c.public_key.describe()),
+                        ("Basic constraints", if c.is_ca { "Certificate authority".into() } else { "End entity".into() }),
+                        ("Key usage", c.key_usage.map(key_usage).unwrap_or_else(|| "Not present".into())),
+                        ("Self-signed", if c.is_self_signed() { "Yes".into() } else { "No".into() }),
+                        ("SHA-1 digest", hex(&sign::keys::DigestAlg::Sha1.digest(&[&c.raw]))),
+                        ("SHA-256 digest", hex(&sign::keys::DigestAlg::Sha256.digest(&[&c.raw]))),
+                    ],
+                ),
+                CertTab::Trust => {
+                    let is_trusted = trusted.iter().any(|x| x.raw == c.raw);
+                    let anchored = v.chain.iter().any(|x| trusted.iter().any(|y| y.raw == x.raw));
+                    ui.label(if is_trusted {
+                        "This certificate is in your list of trusted certificates."
+                    } else if anchored {
+                        "This certificate is trusted through a certificate above it in the chain."
+                    } else {
+                        "This certificate is not trusted. Signatures made with it show an unknown identity."
+                    });
+                    ui.add_space(8.0);
+                    if !is_trusted && widgets::pill_button(ui, "Add to Trusted Certificates", false).clicked() {
+                        action = Some(CertAction::Trust(Box::new(c.clone())));
+                    }
+                }
+            }
+            ui.add_space(8.0);
+            if widgets::pill_button(ui, "Export…", false).clicked() {
+                action = Some(CertAction::Export(Box::new(c.clone())));
+            }
+        });
+    });
+    ui.add_space(10.0);
+    let mut close = false;
+    ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| close = widgets::pill_button(ui, "OK", true).clicked()));
+    (close, action)
+}
+
+/// The text of an exported certificate (`.cer`, PEM).
+pub fn certificate_pem(c: &Certificate) -> String {
+    sign::x509::to_pem(c)
+}

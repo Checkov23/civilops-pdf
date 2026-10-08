@@ -1,0 +1,31 @@
+[package]
+name = "printcraft"
+description = "CivilOps PDF desktop app"
+version = "0.1.5"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "civilops-pdf"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+printcraft-ui-egui = { workspace = true }
+# CivilOps PDF: installer and self-update (Velopack), like CivilOps CAD.
+civilops-aktualisierung = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence", "links"] }
+egui = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Finder double-click / Open With / Dock drops arrive as Apple events (#73); this small audited
+# crate registers the handler (Objective-C interop needs unsafe, which our workspace forbids)
+# behind a safe API. Same version as PhotoCraft. Pinned exactly: review the diff before bumping.
+fmv-macos-events = "=0.1.0"
+
+[build-dependencies]
+# Icon + VERSIONINFO for printcraft.exe; build.rs only uses it when targeting Windows.
+winresource = "0.1"

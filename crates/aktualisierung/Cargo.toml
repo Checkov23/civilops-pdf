@@ -1,0 +1,15 @@
+[package]
+name = "civilops-aktualisierung"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "CivilOps PDF: Installation und Updates über Velopack (Update-Quelle, Kanal, Version), wie bei CivilOps CAD"
+license = "LicenseRef-CivilOps-proprietary"
+publish = false
+
+[dependencies]
+# Gleiche Fassung wie das Packwerkzeug vpk 1.2.158 (civilops-cad-werkzeuge) und CivilOps CAD.
+velopack = "=1.2.158"
+
+[lints]
+workspace = true

@@ -1,0 +1,531 @@
+//! What each registered command does in this frontend (`printcraft_engine::commands` says
+//! what it is called, where it appears, which key runs it and when it is enabled).
+//!
+//! Menus, keyboard shortcuts, the palette, the tool panels and automation (`set_option`, and
+//! the control channel later) all call `PrintCraftApp::execute`.
+
+use printcraft_engine::Edit;
+use printcraft_engine::commands::{self, COMMANDS, CommandSpec};
+
+use crate::{Dialog, Mode, PrintCraftApp, PropsTab, RightPanel, SaveTarget, theme::ThemeKind, widgets};
+
+impl PrintCraftApp {
+    pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+    }
+
+    /// Run a registered command by id. Returns `false` when the id is unknown or the command
+    /// is disabled right now (the user is told why).
+    ///
+    /// Last-resort guard (AGENTS.md §4): a command that panics is reported and the app, with its
+    /// open documents, keeps running. Edits are applied to a copy, so the document is unchanged.
+    pub fn execute(&mut self, id: &str) -> bool {
+        match printcraft_engine::guard(|| self.execute_unguarded(id)) {
+            Ok(done) => done,
+            Err(m) => {
+                self.notify(format!("That didn't work: an internal error stopped it ({m}). Your documents are unchanged."));
+                true
+            }
+        }
+    }
+
+    fn execute_unguarded(&mut self, id: &str) -> bool {
+        let Some(spec) = commands::command(id) else { return false };
+        if !self.command_enabled(spec) {
+            let why = match spec.needs {
+                commands::Needs::Undo => "Nothing to undo".to_string(),
+                commands::Needs::Redo => "Nothing to redo".to_string(),
+                commands::Needs::FillForms if self.active.is_some() => "This document has no form fields you can fill in".to_string(),
+                commands::Needs::HasComments if self.active.is_some() => "This document has no comments to flatten".to_string(),
+                commands::Needs::HasFields if self.active.is_some() => "This document has no form fields to flatten".to_string(),
+                commands::Needs::HasRedactions if self.active.is_some() => {
+                    "There are no redaction marks (mark text, areas or pages first)".to_string()
+                }
+                commands::Needs::Marks(k) if self.active.is_some() => format!(
+                    "This document has no {} to change",
+                    match k {
+                        printcraft_engine::MarkKind::HeaderFooter => "header or footer",
+                        printcraft_engine::MarkKind::Watermark => "watermark",
+                        printcraft_engine::MarkKind::Background => "background",
+                    }
+                ),
+                commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
+                    if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_security_change()) {
+                        "This document isn't password-protected".to_string()
+                    } else {
+                        "Only the document's owner can change its security (open it with the permissions password)".to_string()
+                    }
+                }
+                commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
+                    "The document's security settings don't allow this change".to_string()
+                }
+                _ => "Open a document first".to_string(),
+            };
+            self.notify(why);
+            return false;
+        }
+        let active = self.active;
+        let targets = active.map(|i| self.views[i].target_pages()).unwrap_or_default();
+        match id {
+            "file.open" => self.open_dialog(),
+            "page.combine" => self.combine_dialog(),
+            "file.save" => {
+                self.save_active(SaveTarget::InPlace);
+            }
+            "file.save_as" => {
+                self.save_active(SaveTarget::As);
+            }
+            "file.close" => {
+                if let Some(i) = active {
+                    self.request_close_tab(i);
+                }
+            }
+            "file.close_all" => self.close_all(),
+            "file.revert" => self.dialog = Some(Dialog::Revert),
+            "file.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Description)),
+            "protect.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Security)),
+            "protect.password" => {
+                self.protect_draft = Default::default();
+                self.dialog = Some(Dialog::Protect);
+            }
+            "protect.remove" => {
+                if self.apply_edit(Edit::RemoveProtection) {
+                    self.notify("Security will be removed when you save");
+                }
+            }
+            "page.number" => {
+                if let Some(i) = active {
+                    let v = &self.views[i];
+                    let pages: Vec<usize> = if v.selected.is_empty() { vec![v.current] } else { v.selected.iter().copied().collect() };
+                    let (lo, hi) = (pages.iter().min().copied().unwrap_or(0), pages.iter().max().copied().unwrap_or(0));
+                    self.number_draft = crate::NumberDraft { from: lo + 1, to: hi + 1, ..self.number_draft.clone() };
+                }
+                self.dialog = Some(Dialog::NumberPages);
+            }
+            link if printcraft_engine::links::for_command(link).is_some() => {
+                if let Some(l) = printcraft_engine::links::for_command(link) {
+                    self.open_url(l.url);
+                }
+            }
+            "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
+            "edit.undo" => self.undo(),
+            "edit.redo" => self.redo(),
+            "edit.find" => {
+                if let Some(i) = active {
+                    self.views[i].open_find();
+                }
+            }
+            "view.palette" => self.palette_open = !self.palette_open,
+            "view.full_screen" => {
+                let on = !self.full_screen;
+                match self.ctx.clone() {
+                    Some(ctx) => self.set_full_screen(&ctx, on),
+                    None => self.full_screen = on,
+                }
+            }
+            "view.read_mode" => self.mode = if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read },
+            "view.theme" => {
+                let next = if self.theme == ThemeKind::Light { ThemeKind::Dark } else { ThemeKind::Light };
+                match self.ctx.clone() {
+                    Some(ctx) => self.set_theme(&ctx, next),
+                    None => self.theme = next,
+                }
+            }
+            "comment.list" => self.right = Some(RightPanel::Comments),
+            tool if crate::comments::CommentTool::from_command(tool).is_some() => {
+                let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return false };
+                self.comment_prefs.group_tool[tool.group()] = tool;
+                self.quick_tool = crate::QuickTool::Comment(tool);
+                // Acrobat opens the Comments panel with the commenting tools.
+                if self.right.is_none() {
+                    self.right = Some(RightPanel::Comments);
+                }
+                // A text selection made before picking a markup tool is marked right away.
+                if let (Some(kind), Some(i)) = (tool.markup(), active)
+                    && let Some(doc) = self.session.get(self.views[i].id)
+                {
+                    let info = &doc.info;
+                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
+                        self.views[i].clear_selection();
+                        let style = self.comment_prefs.style(tool);
+                        let author = self.comment_prefs.author.clone();
+                        let shape = printcraft_engine::Shape::TextMarkup { kind, quads };
+                        self.apply_edit(Edit::AddAnnotation(printcraft_engine::NewAnnotation {
+                            page,
+                            shape,
+                            style,
+                            contents: String::new(),
+                            author,
+                        }));
+                    }
+                }
+            }
+            "form.fields" => self.right = Some(RightPanel::Fields),
+            "comment.flatten" => {
+                self.apply_edit(Edit::Flatten { comments: true, fields: false });
+            }
+            "form.flatten" => {
+                if let Some(i) = active {
+                    self.views[i].forms.focus = None;
+                }
+                self.apply_edit(Edit::Flatten { comments: false, fields: true });
+            }
+            "form.clear" => {
+                if let Some(i) = active {
+                    self.views[i].forms.focus = None;
+                }
+                self.apply_edit(Edit::ResetForm { names: None });
+            }
+            "page.organize" => {
+                if let Some(i) = active {
+                    self.views[i].organize = !self.views[i].organize;
+                }
+            }
+            "page.rotate" => {
+                self.apply_edit(Edit::RotatePages { pages: targets, degrees: 90 });
+            }
+            "page.rotate_ccw" => {
+                self.apply_edit(Edit::RotatePages { pages: targets, degrees: -90 });
+            }
+            "page.delete" => {
+                self.apply_edit(Edit::DeletePages { pages: targets });
+            }
+            "page.insert_blank" => {
+                if let (Some(i), Some(&last)) = (active, targets.last())
+                    && let Some(p) = self.session.get(self.views[i].id).and_then(|d| d.info.pages.get(last))
+                {
+                    let (w, h) = ((p.crop[2] - p.crop[0]).abs().max(1.0) as f64, (p.crop[3] - p.crop[1]).abs().max(1.0) as f64);
+                    self.apply_edit(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
+                }
+            }
+            "page.insert" => self.insert_from_file_dialog(),
+            "page.replace" => self.replace_pages_dialog(),
+            "edit.header_footer"
+            | "edit.watermark"
+            | "edit.background"
+            | "edit.header_footer.update"
+            | "edit.watermark.update"
+            | "edit.background.update" => {
+                use printcraft_engine::MarkKind as K;
+                let kind = if id.starts_with("edit.header_footer") {
+                    K::HeaderFooter
+                } else if id.starts_with("edit.watermark") {
+                    K::Watermark
+                } else {
+                    K::Background
+                };
+                self.marks_draft.replace = id.ends_with(".update");
+                self.dialog = Some(Dialog::Marks(kind));
+            }
+            "edit.bates" => {
+                // Bates numbering ▸ Add: the header & footer dialog with a Bates number in the
+                // bottom-right box (6 digits from 1), ready to edit.
+                self.marks_draft.replace = false;
+                if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
+                    self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
+                }
+                self.marks_draft.focused_box = 5;
+                self.dialog = Some(Dialog::Marks(printcraft_engine::MarkKind::HeaderFooter));
+            }
+            "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" => {
+                use printcraft_engine::MarkKind as K;
+                let kind = match id {
+                    "edit.header_footer.remove" => K::HeaderFooter,
+                    "edit.watermark.remove" => K::Watermark,
+                    _ => K::Background,
+                };
+                self.apply_edit(Edit::RemoveMarks { kind });
+            }
+            "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
+            "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
+            "a11y.check" => self.start_accessibility_check(),
+            "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
+            "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
+            "tools.document_js" => {
+                self.doc_js = Default::default();
+                self.dialog = Some(Dialog::DocumentJs);
+            }
+            "app.preferences" => self.dialog = Some(Dialog::Preferences),
+            "ocr.recognize_batch" => self.ocr_files_dialog(),
+            "edit.edit_text" => {
+                self.quick_tool = crate::QuickTool::EditText;
+                // CivilOps PDF: the palette is the tool's place; the plan keeps the window.
+                if !self.civilops_layout {
+                    self.left = crate::LeftPanel::Tool("edit");
+                    self.left_open = true;
+                }
+                self.notify("Click text or an image to edit it");
+            }
+            "edit.objects" => {
+                self.quick_tool = crate::QuickTool::Objects;
+                self.notify(
+                    "Click an object to select it, double-click for a whole line or hatch, drag a box for several; Ctrl+A selects everything",
+                );
+            }
+            "edit.advanced_search" => {
+                if let Some(i) = self.active {
+                    let f = self.views[i].find.get_or_insert_with(Default::default);
+                    f.in_panel = true;
+                    f.focus = true;
+                    self.right = Some(crate::RightPanel::Search);
+                }
+            }
+            "a11y.report" => self.show_accessibility_report(),
+            "a11y.alt_text" => self.start_alt_text(),
+            "a11y.reading_options" => self.dialog = Some(Dialog::Properties(crate::PropsTab::Advanced)),
+            "export.all_images" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::AllImages)),
+            "edit.text" => {
+                self.quick_tool = crate::QuickTool::AddText;
+                self.left = crate::LeftPanel::Tool("edit");
+                self.left_open = true;
+            }
+            "edit.image" => self.add_image_dialog(),
+            "edit.link" => {
+                self.quick_tool = crate::QuickTool::Link;
+                self.notify("Drag a rectangle to create a link; double-click a link to edit it");
+            }
+            "edit.links_from_urls" => self.links_from_urls(),
+            "edit.remove_links" => {
+                self.apply_edit(Edit::RemoveLinks { pages: None });
+            }
+            "redact.mark" => {
+                self.quick_tool = crate::QuickTool::Redact;
+                self.left = crate::LeftPanel::Tool("redact");
+                self.left_open = true;
+                // A text selection made first is marked right away.
+                if let Some(i) = active
+                    && let Some(doc) = self.session.get(self.views[i].id)
+                {
+                    let info = &doc.info;
+                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
+                        self.views[i].clear_selection();
+                        let author = self.comment_prefs.author.clone();
+                        self.apply_edit(self.redact_prefs.mark(page, quads, &author));
+                    }
+                }
+            }
+            "redact.pages" => {
+                if let Some(i) = active {
+                    let n = self.session.get(self.views[i].id).map_or(1, |d| d.info.pages.len());
+                    self.redact_pages_draft = crate::RedactPagesDraft { current: true, from: self.views[i].current + 1, to: n };
+                }
+                self.dialog = Some(Dialog::RedactPages);
+            }
+            "redact.search" => {
+                self.redact_search.found = None;
+                self.dialog = Some(Dialog::RedactSearch);
+            }
+            "redact.properties" => self.dialog = Some(Dialog::RedactProps),
+            "redact.apply" => {
+                let marks = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.redaction_marks());
+                if marks == 0 {
+                    self.notify("There are no redaction marks to apply");
+                } else {
+                    self.dialog = Some(Dialog::RedactApply);
+                }
+            }
+            "protect.remove_hidden" => self.open_remove_hidden(),
+            "print.dialog" => self.open_print(),
+            "redact.sanitize" => self.dialog = Some(Dialog::Sanitize),
+            "redact.clear" => {
+                self.apply_edit(Edit::ClearRedactions);
+            }
+            "form.tab_order.row" | "form.tab_order.column" | "form.tab_order.structure" => {
+                let order = match id {
+                    "form.tab_order.row" => printcraft_engine::TabOrder::Row,
+                    "form.tab_order.column" => printcraft_engine::TabOrder::Column,
+                    _ => printcraft_engine::TabOrder::Structure,
+                };
+                let n = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.info.pages.len());
+                self.apply_edit(Edit::SetTabOrder { pages: (0..n).collect(), order });
+            }
+            "comment.import" | "form.import_data" => self.import_data_dialog(),
+            "comment.stamp" => {
+                self.left = crate::LeftPanel::Tool("stamp");
+                self.left_open = true;
+            }
+            "comment.export" => self.export_data_dialog(true, false),
+            "comment.summarize" => self.dialog = Some(Dialog::SummarizeComments),
+            "sign.digital" | "sign.certify" => {
+                let certify = id == "sign.certify";
+                self.quick_tool = crate::QuickTool::SignArea { certify };
+                self.notify("Drag to draw the area where the signature should appear.");
+            }
+            "sign.certify_invisible" => {
+                let page = active.map_or(0, |i| self.views[i].current);
+                self.start_signing(page, None, None, Some(2));
+            }
+            "sign.validate" => {
+                let certs = self.session.trusted_certificates().to_vec();
+                self.session.set_trusted_certificates(certs);
+                self.right = Some(RightPanel::Signatures);
+            }
+            "sign.panel" => self.right = Some(RightPanel::Signatures),
+            "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
+            "view.fit_visible" => {
+                if let Some(i) = self.active
+                    && let Err(e) = self.fit_visible(i)
+                {
+                    self.notify(format!("Couldn't fit the visible content: {e}"));
+                }
+            }
+            "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "edit.snapshot" => {
+                self.quick_tool = crate::QuickTool::Snapshot;
+                self.notify("Drag a rectangle around the area to copy");
+            }
+            "page.copy" => self.copy_pages(false),
+            "page.cut" => self.copy_pages(true),
+            "page.paste" => self.paste_pages(),
+            "measure.scale" => {
+                // CivilOps PDF: Measure ▸ Set scale, for the current page.
+                if let Some(i) = active {
+                    let page = self.views[i].current;
+                    let current = self.session.get(self.views[i].id).and_then(|d| d.page_scale(page));
+                    self.scale_draft = crate::measure_ui::ScaleDraft::for_page(page, current.as_ref());
+                    self.dialog = Some(Dialog::Scale);
+                }
+            }
+            "comment.hide_all" => {
+                if let Some(i) = active {
+                    let id = self.views[i].id;
+                    let hide = !self.session.get(id).is_some_and(|d| d.comments_hidden());
+                    if self.session.set_hide_comments(id, hide) {
+                        self.views[i].invalidate_content();
+                    }
+                }
+            }
+            "form.export_data" => self.export_data_dialog(false, true),
+            "form.merge_data" => self.merge_data_dialog(),
+            "export.docx" => self.export_office_dialog(printcraft_engine::compare::OfficeFormat::Docx),
+            "export.html" => self.export_office_dialog(printcraft_engine::compare::OfficeFormat::Html),
+            "export.rtf" => self.export_office_dialog(printcraft_engine::compare::OfficeFormat::Rtf),
+            "form.prepare" => {
+                self.left = crate::LeftPanel::Tool("form");
+                self.left_open = true;
+                self.right = Some(RightPanel::Fields);
+                // Like Acrobat, a document without fields gets them detected on the way in.
+                if let Some((_, id)) = self.active_ids()
+                    && self.session.get(id).is_some_and(|d| d.form.is_empty() && d.editable())
+                {
+                    self.detect_fields();
+                }
+            }
+            "form.detect" => self.detect_fields(),
+            "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
+            "standards.pdfa" => {
+                self.pdfa.issues = None;
+                self.dialog = Some(Dialog::PdfA);
+            }
+            "actions.wizard" | "actions.distribution" | "actions.optimize_scans" => {
+                self.wizard.editing = None;
+                match id {
+                    "actions.distribution" => self.wizard.selected = Some("Prepare for Distribution".into()),
+                    "actions.optimize_scans" => self.wizard.selected = Some("Optimize Scanned Documents".into()),
+                    _ => {}
+                }
+                self.dialog = Some(Dialog::ActionWizard);
+            }
+            "form.field.properties" => {
+                if let Some((name, w)) = active.and_then(|i| self.views[i].prepare.selected.clone()) {
+                    self.open_field_props(&name, w);
+                }
+            }
+            field if crate::prepare::FieldTool::from_command(field).is_some() => {
+                let Some(tool) = crate::prepare::FieldTool::from_command(field) else { return false };
+                self.quick_tool = crate::QuickTool::Field(tool);
+                self.left = crate::LeftPanel::Tool("form");
+                self.left_open = true;
+                if let Some(i) = active {
+                    self.views[i].forms.focus = None;
+                }
+                self.notify(format!("Click on the page to add a {}, or drag to set its size", tool.label().to_lowercase()));
+            }
+            fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
+                let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return false };
+                self.quick_tool = crate::QuickTool::Fill(tool);
+                let initials = tool == crate::fill_sign::FillTool::Initials;
+                if (tool == crate::fill_sign::FillTool::Signature && self.signature.is_none()) || (initials && self.initials.is_none()) {
+                    self.signature_draft = crate::fill_sign::SigDraft::new(initials, &self.comment_prefs.author);
+                    self.dialog = Some(Dialog::Signature);
+                }
+            }
+            "create.blank" => self.create_blank(),
+            "create.file" => self.open_dialog(),
+            "create.images" => self.create_from_images_dialog(),
+            "create.clipboard" => self.create_from_clipboard(),
+            "optimize.reduce" => self.reduce_file_size(),
+            "page.duplicate" => {
+                self.apply_edit(Edit::DuplicatePages { pages: targets });
+            }
+            "page.crop" => {
+                self.quick_tool = crate::QuickTool::Crop;
+                self.notify("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
+            }
+            "page.boxes" => {
+                self.boxes_draft.seeded = None;
+                self.dialog = Some(Dialog::PageBoxes);
+            }
+            "page.extract" => self.dialog = Some(Dialog::Extract),
+            "page.rotate_dialog" => {
+                if let Some(i) = active {
+                    let n = self.session.get(self.views[i].id).map_or(1, |d| d.info.pages.len());
+                    self.rotate_draft.to = n;
+                    self.rotate_draft.which = if self.views[i].selected.is_empty() { 0 } else { 1 };
+                }
+                self.dialog = Some(Dialog::RotatePages);
+            }
+            "page.split" => self.dialog = Some(Dialog::Split),
+            "help.shortcuts" => self.dialog = Some(Dialog::Shortcuts),
+            "help.about" => self.dialog = Some(Dialog::About),
+            "help.check_updates" => self.check_for_updates(),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Run the registered keyboard shortcuts (more specific combinations first).
+    pub(crate) fn registry_shortcuts(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let typing = ctx.egui_wants_keyboard_input();
+        let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
+        specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
+        for spec in specs {
+            let Some(s) = spec.shortcut else { continue };
+            if typing && !spec.in_text {
+                continue;
+            }
+            let Some(key) = Key::from_name(s.key) else { continue };
+            let mut m = Modifiers::NONE;
+            if s.command {
+                m |= Modifiers::COMMAND;
+            }
+            if s.shift {
+                m |= Modifiers::SHIFT;
+            }
+            if s.mac_ctrl {
+                m |= Modifiers::CTRL;
+            }
+            if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, key))) {
+                self.execute(spec.id);
+            }
+        }
+    }
+}
+
+/// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
+pub(crate) fn registry_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui, menu: &str) {
+    let mac = cfg!(target_os = "macos") || cfg!(target_arch = "wasm32");
+    for spec in commands::menu(menu) {
+        let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
+        let label = app.language.tr(&label);
+        let shortcut = spec.shortcut.map(|s| s.label(mac)).unwrap_or_default();
+        let enabled = app.command_enabled(spec);
+        let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
+        if resp.clicked() {
+            app.execute(spec.id);
+            ui.close();
+        }
+    }
+    let _ = widgets::menu_item;
+}

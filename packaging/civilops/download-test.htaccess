@@ -1,0 +1,9 @@
+# Test-Kanal von CivilOps PDF (~/civilops-download/pdf-test): nur mit Anmeldung.
+# Eigene Passwortdatei, getrennt von CivilOps CAD: ein Zugangswechsel dort trifft die PDF-Updates nicht.
+# Keine Dateiliste, Pakettypen und Zwischenspeicher regelt ~/civilops-download/.htaccess (CAD-Repo
+# packaging/download.htaccess) für die ganze Subdomain.
+AuthType Basic
+AuthName "CivilOps PDF Test"
+# <WEBSPACE>: absoluter Pfad des Webspace (steht als `webspace` in ../civilops-pdf-releases/server.txt).
+AuthUserFile <WEBSPACE>/.htpasswd-civilops-pdf
+Require valid-user

@@ -1,0 +1,83 @@
+CivilOps PDF
+============
+
+Das PDF-Programm von CivilOps für Pläne und Dokumente.
+
+Einrichten
+----------
+CivilOps-PDF-<Version>-Setup.exe doppelklicken: Das Programm wird für den angemeldeten
+Benutzer eingerichtet (ohne Adminrechte, nach %LOCALAPPDATA%\CivilOpsPDF), mit Verknüpfung
+auf dem Desktop und im Startmenü. Windows fragt beim ersten Mal eventuell nach, weil das
+Programm noch nicht signiert ist: „Weitere Informationen“ > „Trotzdem ausführen“.
+Ohne Installation: CivilOps-PDF-<Version>-Portable.zip entpacken und „CivilOps PDF.exe“
+starten. Auch diese Fassung aktualisiert sich selbst.
+Eine PDF öffnen: über „Öffnen“ oder einfach ins Fenster ziehen.
+
+Werkzeuge
+---------
+Die Werkzeugleiste oben: Auswählen, Hand | Text, Objekte | Länge, Fläche, Maßstab |
+Notiz, Hervorheben, Wolke, Mehr | Drucken, Speichern. Ganz rechts „Alle Werkzeuge“ (Seiten,
+Formulare, Schützen, Exportieren und mehr) und „Suchen“ (Strg+K). Die Menüs Datei,
+Bearbeiten, Seiten, Ansicht und Hilfe stehen ganz oben links.
+
+Updates
+-------
+Beim Start schaut das Programm im Hintergrund nach einer neueren Fassung und lädt sie. Dann
+erscheint ein Fenster mit der neuen Version und was neu ist:
+- „Jetzt neu starten“ spielt sie sofort ein (nur, wenn alle Änderungen gespeichert sind),
+- „Später“ spielt sie beim nächsten Start ein.
+Von Hand: Hilfe > Nach Updates suchen. Dokumente und Einstellungen fasst ein Update nie an.
+Deinstallieren: Windows-Einstellungen > Apps > Installierte Apps > CivilOps PDF.
+
+Messen
+------
+- „Länge“: Punkte anklicken, mit Doppelklick oder Eingabe beenden.
+- „Fläche“: Eckpunkte anklicken, auf den ersten Punkt klicken oder Eingabe drücken.
+- „Maßstab“ (der Knopf zeigt den Maßstab der Seite, zum Beispiel 1:250): 1:n eingeben (Schnellwahl 1:100 bis 1:2000) oder „Im Plan kalibrieren“: zwei
+  Punkte mit bekanntem Abstand anklicken und die echte Länge eingeben.
+Der Punkt rastet auf Linienenden des Plans ein (blaues Quadrat); Alt gedrückt halten schaltet
+das aus. Ohne Maßstab fragt das Programm nach der ersten Messung danach.
+
+Objekte und Texte ändern
+------------------------
+- „Objekte“ wählt alles, was eine Seite zeichnet: Linien, Flächen, Schraffuren, Bilder,
+  Farbverläufe, Texte und Blöcke (Symbole). Klick wählt ein Objekt, Umschalt fügt hinzu.
+  Liegt eine Linie unter oder über einer Fläche, gewinnt in Klicknähe die Linie.
+  Doppelklick wählt den ganzen Linienzug (zum Beispiel ein Flurstück, auch wenn der Plan
+  jede Kante einzeln gezeichnet hat) oder bei einem losen Stück die ganze Schraffur bzw.
+  die in Streifen gezeichnete Fläche. Ziehen über den Plan wählt per Rahmen: nach rechts
+  alles darin, nach links (grün) alles, was er berührt. Strg+A wählt alles auf der Seite.
+- Ziehen an der Auswahl verschiebt sie, Pfeiltasten schieben fein (Umschalt: weiter), Entf
+  löscht. Die Eckgriffe ändern die Größe (mit gleichem Seitenverhältnis, mit Umschalt frei),
+  die Seitengriffe nur Breite oder Höhe, der runde Griff darüber dreht (Umschalt: in
+  15°-Schritten). Linien behalten dabei ihre Stärke.
+- Die Leiste über der Auswahl: „Linie“ (Farbe, Linienstärke in mm, Linienart: durchgezogen,
+  gestrichelt, Strichpunkt, gepunktet), „Füllung“ (Farbe), „Deckkraft“ (100 bis 25 %),
+  „Drehen“ (90° rechts oder links, 180°, waagerecht oder senkrecht spiegeln), „Auflösen“
+  (nur bei Blöcken: zerlegt den Block in seine Teile) und „Löschen“. Unter „Eigene Farbe“
+  lässt sich jede Farbe mischen. „Gleiche wählen“ nimmt alle gleich gezeichneten Objekte
+  der Seite, bei Blöcken alle Vorkommen desselben Blocks.
+- Zugeschnittene Schraffuren und Verläufe bewegen sich mit ihrem Umriss.
+- „Text“: Beschriftung im Plan anklicken und tippen; Enter übernimmt eine einzeilige
+  Beschriftung, bei längeren Absätzen Strg+Enter oder ein Klick daneben. Solange ein Text
+  bearbeitet wird, steht oben rechts „Text formatieren“: Schrift, Größe, fett, kursiv,
+  Ausrichtung, Farbe, Unterstreichen und Abstände.
+Alles lässt sich mit Strg+Z rückgängig machen. Gespeichert wird erst mit Strg+S.
+
+Texterkennung (OCR)
+-------------------
+Bearbeiten > Text erkennen… macht eingescannte Seiten durchsuchbar: Der erkannte Text liegt
+unsichtbar über dem Bild, das Bild selbst bleibt unverändert. Die Erkennung nutzt die
+Texterkennung von Windows und liest Deutsch mit Umlauten und ß (Sprache im Fenster wählbar,
+alle in Windows installierten Sprachen). Seiten, die schon Text haben, werden übersprungen.
+Fehlt eine Sprache: Windows-Einstellungen > Zeit und Sprache > Sprache, Sprachpaket mit
+Texterkennung hinzufügen.
+
+Drucken
+-------
+Datei > Drucken (Strg+P): Drucker, Exemplare, beidseitig und Graustufen wählen.
+
+Lizenzen
+--------
+CivilOps PDF enthält Open-Source-Software. Lizenzen und Urheberrechtsvermerke stehen in
+Drittanbieter-Lizenzen.txt im Programmordner.

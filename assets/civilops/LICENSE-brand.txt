@@ -1,0 +1,17 @@
+CivilOps-Marken: Nutzungsbedingungen
+
+Der Name CivilOps, das CivilOps-Zeichen und die Programmsymbole von CivilOps (die
+„CivilOps-Marken“), darunter jede Datei in diesem Ordner (assets/civilops/) und das Startbild
+des Installers packaging/civilops/splash.png, in jeder Farbe, Größe und jedem Format, sind Marken
+von CivilOps (https://civilops.de). Sie sind KEIN Open Source. Die Lizenz dieses Repositorys
+(MIT) gilt für sie nicht; weder diese Lizenz noch NOTICE
+noch eine andere Datei des Repositorys räumt Rechte an ihnen ein.
+
+Erlaubt ist nur die Verwendung in CivilOps PDF selbst, seiner Dokumentation und seinen offiziellen
+Builds, um das Programm als Produkt von CivilOps zu kennzeichnen. Jede andere Verwendung, auch in
+abgeleiteten Fassungen, braucht vorher die schriftliche Erlaubnis von CivilOps. Alle Rechte
+vorbehalten.
+
+English summary: the CivilOps name, mark and app icons in assets/civilops/ and the installer splash
+in packaging/civilops/ are trademarks of CivilOps. They are not open source and not covered by this
+repository's MIT licence. All rights reserved.
