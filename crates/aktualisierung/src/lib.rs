@@ -39,13 +39,56 @@ static SITZUNG: OnceLock<File> = OnceLock::new();
 pub fn beim_start() {
     let sperre = sperrdatei();
     let andere_sitzung = sperre.as_ref().is_some_and(andere_sitzung_laeuft);
-    VelopackApp::build().set_auto_apply_on_startup(!andere_sitzung).run();
+    let app = VelopackApp::build().set_auto_apply_on_startup(!andere_sitzung);
+    // Nach einem Update (der Installer ruft das neue Programm mit `--veloapp-updated`) sollen
+    // Desktop, Startmenü und Taskleiste das neue Symbol zeigen.
+    #[cfg(windows)]
+    let app = app.on_after_update_fast_callback(|neu| symbole_auffrischen(&neu.to_string()));
+    let mut app = app;
+    app.run();
     if let Some(datei) = sperre {
         // Ab jetzt sehen andere Starts: hier läuft eine Sitzung. Klappt das nicht, fehlt nur der
         // Schutz für die andere Sitzung; das Programm selbst läuft weiter.
         let _ = datei.try_lock_shared();
         let _ = SITZUNG.set(datei);
     }
+}
+
+/// Verknüpfungen zeigen auf `current\civilops-pdf.exe` und bekommen mit dem Update dessen neues
+/// Symbol, Windows zeigt aber bis zum Erneuern seines Zwischenspeichers das alte.
+/// `ie4uinit.exe -show` erneuert ihn (Windows 10 und 11) und meldet es der Oberfläche. Ohne
+/// Fenster; gewartet wird höchstens fünf Sekunden, der Hook darf nicht lange laufen (Velopack
+/// beendet ihn nach 15 Sekunden). Fehlt das Programm, bleibt es beim alten Bild bis zur nächsten
+/// Anmeldung.
+#[cfg(windows)]
+fn symbole_auffrischen(version: &str) {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let system = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let programm = system.join("System32").join("ie4uinit.exe");
+    let start = Command::new(&programm)
+        .arg("-show")
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let ergebnis = match start {
+        Ok(mut kind) => {
+            let ende = Instant::now() + Duration::from_secs(5);
+            loop {
+                match kind.try_wait() {
+                    Ok(Some(_)) => break "Symbole aufgefrischt",
+                    Ok(None) if Instant::now() < ende => std::thread::sleep(Duration::from_millis(50)),
+                    Ok(None) | Err(_) => break "Symbole werden aufgefrischt",
+                }
+            }
+        }
+        Err(_) => "ie4uinit.exe nicht gefunden, Symbole erst nach der nächsten Anmeldung neu",
+    };
+    protokoll(&format!("Update {version} eingespielt: {ergebnis}"));
 }
 
 /// Ob eine andere Sitzung die Sperrdatei hält. Ein Fehler beim Sperren zählt als „keine“.
