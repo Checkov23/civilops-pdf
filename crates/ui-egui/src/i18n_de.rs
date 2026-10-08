@@ -1869,6 +1869,7 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
     ("{#} pages selected", "{} Seiten ausgewählt"),
     ("{#} page{s} selected.", "{0} {0|Seite|Seiten} ausgewählt."),
     ("{#} page{s}", "{0} {0|Seite|Seiten}"),
+    ("{#} page{s}  ·  {size}", "{0} {0|Seite|Seiten}  ·  {2}"),
     ("{#} pages", "{} Seiten"),
     ("Page {#}", "Seite {}"),
     ("Page {#} of {#}", "Seite {} von {}"),
@@ -2078,6 +2079,9 @@ mod tests {
             )
         );
         assert_eq!(translate("Save changes to “Plan.pdf” before closing?").as_deref(), Some("Änderungen an „Plan.pdf“ vor dem Schließen speichern?"));
+        // Recent files: page count and size.
+        assert_eq!(translate("1 page  ·  32.1 KB").as_deref(), Some("1 Seite  ·  32.1 KB"));
+        assert_eq!(translate("12 pages  ·  1.2 MB").as_deref(), Some("12 Seiten  ·  1.2 MB"));
         // Unknown text, numbers and document content stay as they are.
         assert_eq!(translate("Lageplan Kobern"), None);
         assert_eq!(translate("12,34 m"), None);

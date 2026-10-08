@@ -120,7 +120,7 @@ pub fn show(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 ui.painter().text(
                     rect.right_center() - vec2(12.0, 0.0),
                     Align2::RIGHT_CENTER,
-                    format!("{} pages  ·  {}", r.pages, human_size(r.size)),
+                    format!("{} page{}  ·  {}", r.pages, if r.pages == 1 { "" } else { "s" }, human_size(r.size)),
                     theme::regular(12.0),
                     t.text_muted,
                 );

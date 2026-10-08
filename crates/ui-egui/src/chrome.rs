@@ -60,6 +60,8 @@ pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     };
                     if icons::button(ui, icon, 28.0, false, tip).clicked() {
                         let ctx = ui.ctx().clone();
+                        // A chosen theme replaces "Use system setting", which would switch it back.
+                        app.follow_system_theme = false;
                         app.set_theme(&ctx, next);
                     }
                     if icons::button(ui, "circle-help", 28.0, false, "Keyboard shortcuts").clicked() {

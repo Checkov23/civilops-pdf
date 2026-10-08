@@ -125,6 +125,8 @@ impl PrintCraftApp {
             }
             "view.read_mode" => self.mode = if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read },
             "view.theme" => {
+                // A chosen theme replaces "Use system setting", which would switch it back.
+                self.follow_system_theme = false;
                 let next = if self.theme == ThemeKind::Light { ThemeKind::Dark } else { ThemeKind::Light };
                 match self.ctx.clone() {
                     Some(ctx) => self.set_theme(&ctx, next),
