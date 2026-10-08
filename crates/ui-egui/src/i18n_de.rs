@@ -1719,8 +1719,8 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("Output appears here.", "Die Ausgabe erscheint hier."),
     ("JavaScript is turned off (Preferences ▸ JavaScript).", "JavaScript ist ausgeschaltet (Einstellungen ▸ JavaScript)."),
     (
-        "Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.",
-        "Skripte laufen abgeschottet ohne Datei- oder Netzzugriff. Ohne JavaScript funktionieren die Standardfunktionen für Format, Prüfung und Berechnung trotzdem.",
+        "Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.",
+        "Skripte laufen abgeschottet ohne Datei- oder Netzzugriff. Will ein Skript eine Webseite öffnen, fragt das Programm vorher. Ohne JavaScript funktionieren die Standardfunktionen für Format, Prüfung und Berechnung trotzdem.",
     ),
     ("New Action", "Neue Aktion"),
     ("New Action…", "Neue Aktion…"),
@@ -1808,6 +1808,23 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("Review", "Prüfen"),
     ("Steps", "Schritte"),
     ("Mo", "Mo"),
+    // Links from documents open only after a question.
+    ("Open this web page?", "Diese Webseite öffnen?"),
+    ("Write this email?", "Diese E-Mail schreiben?"),
+    ("Open link", "Link öffnen"),
+    ("Open email app", "E-Mail-Programm öffnen"),
+    ("A link", "Ein Link"),
+    ("A button", "Eine Schaltfläche"),
+    ("A script", "Ein Skript"),
+    ("this address in your browser", "diese Adresse im Browser"),
+    ("your email app with this address", "Ihr E-Mail-Programm mit dieser Adresse"),
+    (
+        "Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.",
+        "Fahren Sie nur fort, wenn Sie diesem Dokument vertrauen. Eine Adresse kann Angaben aus dem Dokument enthalten, zum Beispiel, was Sie ins Formular eingetragen haben.",
+    ),
+    ("the address is empty", "die Adresse ist leer"),
+    ("the address contains hidden or invisible characters", "die Adresse enthält versteckte oder unsichtbare Zeichen"),
+    ("the address isn't a complete web or email address", "die Adresse ist keine vollständige Web- oder E-Mail-Adresse"),
 ];
 
 /// Labels with variable parts.
@@ -2001,6 +2018,13 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
     ("{} has no action", "{} hat keine Aktion"),
     ("This page couldn't be displayed.\n{err}", "Diese Seite konnte nicht angezeigt werden.\n{}"),
     ("{} — click to show it on the page", "{}: klicken, um es auf der Seite zu zeigen"),
+    ("{} in this document wants to open {what}:", "{} in diesem Dokument möchte {} öffnen:"),
+    (
+        "{} in this document tried to open an address CivilOps PDF won't open: {e}. Only web (http, https) and email (mailto) links open from documents.",
+        "{} in diesem Dokument wollte eine Adresse öffnen, die CivilOps PDF nicht öffnet: {}. Aus Dokumenten öffnen sich nur Web-Links (http, https) und E-Mail-Links (mailto).",
+    ),
+    ("the address is {#} characters long", "die Adresse ist {} Zeichen lang"),
+    ("it is a “{scheme}:” address", "es ist eine „{}:“-Adresse"),
 ];
 
 #[cfg(test)]
