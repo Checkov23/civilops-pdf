@@ -82,6 +82,17 @@ fn tool_table_is_well_formed() {
     }
 }
 
+/// Each of these writes to its required `path` and replaces an existing file there, so the MCP
+/// annotations must not tell clients the call is read-only or harmless (#130).
+#[test]
+fn file_writing_tools_are_not_read_only() {
+    for name in ["doc_export_data", "accessibility_report", "image_save"] {
+        let t = tools().into_iter().find(|t| t.name == name).unwrap();
+        assert!(!t.read_only, "{name} writes a file but advertises read-only");
+        assert!(t.destructive, "{name} overwrites its path but advertises non-destructive");
+    }
+}
+
 #[test]
 fn open_inspect_render_and_find() {
     let dir = workdir("inspect");
