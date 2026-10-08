@@ -32,8 +32,8 @@ pub use printcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
 pub use printcraft_forms::{
-    BorderStyle, CheckStyle, Field as FormField, FieldAction, FieldFont, FieldKind as FormFieldKind, FieldProps, FieldValue, Look as FieldLook,
-    NewField, TabOrder, Trigger as FieldTrigger, Widget as FormWidget, af as form_scripts, flags as field_flags,
+    BorderStyle, CheckStyle, Field as FormField, FieldAction, FieldChange, FieldFont, FieldKind as FormFieldKind, FieldProps, FieldValue,
+    Look as FieldLook, NewField, TabOrder, Trigger as FieldTrigger, Widget as FormWidget, af as form_scripts, flags as field_flags,
 };
 
 pub use printcraft_a11y as a11y;
