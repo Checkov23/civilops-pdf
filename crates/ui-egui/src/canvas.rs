@@ -551,8 +551,14 @@ impl DocView {
         true
     }
 
-    /// Edit ▸ Select all: every word on the current page.
+    /// Select all: every page in Organize, or every word on the current page.
     pub fn select_all(&mut self) -> bool {
+        if self.organize {
+            self.selected = (0..self.page_count).collect();
+            // Keep the current page as the anchor for the next Shift-click.
+            self.select_anchor = (self.page_count > 0).then_some(self.current);
+            return !self.selected.is_empty();
+        }
         let page = self.current;
         let Some(t) = self.texts.get(&page) else { return false };
         if t.glyphs.is_empty() {
@@ -859,9 +865,6 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context) {
     }
     if pressed(cmd(Key::G)) {
         view.find_step(true);
-    }
-    if pressed(cmd(Key::A)) {
-        view.select_all();
     }
     if pressed(cmd(Key::OpenBracket)) {
         view.view_history(false);
@@ -2232,11 +2235,10 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
     });
     // Keys act on the selection unless a text field has focus.
     if editable && !ui.ctx().egui_wants_keyboard_input() {
-        use egui::{Key, KeyboardShortcut, Modifiers};
-        let (del, all, esc) = ui.input_mut(|i| {
+        use egui::{Key, Modifiers};
+        let (del, esc) = ui.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace),
-                i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::A)),
                 i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
@@ -2253,9 +2255,6 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, ui: &mut
         }
         if del && targets.len() < n {
             view.pending_edit = Some(Edit::DeletePages { pages: targets });
-        }
-        if all {
-            view.selected = (0..n).collect();
         }
         if esc {
             view.selected.clear();

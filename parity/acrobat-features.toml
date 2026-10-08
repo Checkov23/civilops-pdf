@@ -2554,8 +2554,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.organize"]
 tools = []
-evidence = ["crates/ui-egui/tests/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/editing.rs::shift_click_selects_a_range_and_moves_it"]
-notes = ""
+evidence = ["crates/ui-egui/tests/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/editing.rs::shift_click_selects_a_range_and_moves_it", "crates/ui-egui/tests/editing.rs::organize_select_all_shortcut_preserves_current_page_and_sets_range_anchor", "crates/ui-egui/tests/control.rs::select_all_key_selects_every_page_in_organize"]
+notes = "Ctrl+A / ⌘A selects every page in the Organize grid, preserving the current page; text inputs and dialogs keep their own keyboard input."
 
 [[feature]]
 id = "organize.rotate-pages"

@@ -133,6 +133,17 @@ fn commands_keys_and_typing() {
 }
 
 #[test]
+fn select_all_key_selects_every_page_in_organize() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "organize", "value": "on" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "3" }));
+    ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
+    assert_eq!(h.state().views[0].target_pages(), [0, 1, 2, 3, 4]);
+    assert_eq!(h.state().views[0].current, 2);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["dirty"], false);
+}
+
+#[test]
 fn drawing_a_comment_by_drag_and_its_context_menu() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.command", json!({ "id": "comment.square" }));

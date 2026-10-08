@@ -1201,14 +1201,25 @@ impl PrintCraftApp {
             self.set_full_screen(ctx, false);
         }
         if let Some(i) = self.active {
-            // CivilOps PDF: Ctrl+A in the Objects tool selects the page's objects, not its text.
+            // CivilOps PDF: Ctrl+A in the Objects tool selects the page's objects, not its text
+            // (in the page grid it selects the pages, below).
             if self.quick_tool == QuickTool::Objects
+                && self.views.get(i).is_some_and(|v| !v.organize)
                 && !ctx.egui_wants_keyboard_input()
                 && ctx.input_mut(|inp| inp.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
                 && let Some(view) = self.views.get_mut(i)
                 && let Some(doc) = self.session.get(view.id)
             {
                 view.objects.select_page(doc, view.current);
+            }
+            // Select all belongs to the document or page grid, unless a text field or
+            // overlay owns the keyboard. Other canvas shortcuts keep their own handling.
+            if self.dialog.is_none()
+                && !self.palette_open
+                && !ctx.egui_wants_keyboard_input()
+                && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
+            {
+                self.views[i].select_all();
             }
             canvas::shortcuts(&mut self.views[i], ctx);
         }
