@@ -32,7 +32,7 @@ crash); this file holds the day-to-day working instructions. If the two disagree
 - **Quality gates** before every commit: `cargo fmt --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
   `cargo xtask layers`, `cargo xtask wasm`, `cargo xtask assets`, `cargo xtask parity`.
-- **Commits:** author `Oliver Schiemann <228913879+Checkov23@users.noreply.github.com>`, German
+- **Commits:** author `Checkov23 <228913879+Checkov23@users.noreply.github.com>`, German
   messages, no attribution lines for tools or agents. Commit only green states.
 - **Line endings:** the repository stores bytes as they are (`* -text`). Write LF; on Windows,
   Python's `write_text` writes CRLF, so write bytes.
