@@ -4,12 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "CivilOps PDF: Installation und Updates über Velopack (Update-Quelle, Kanal, Version), wie bei CivilOps CAD"
-license = "LicenseRef-CivilOps-proprietary"
+license = "MIT"
 publish = false
 
 [dependencies]
 # Gleiche Fassung wie das Packwerkzeug vpk 1.2.158 (civilops-cad-werkzeuge) und CivilOps CAD.
-velopack = "=1.2.158"
+# `public-utils` macht die Typen der Update-Quellen nutzbar (eigene Quelle `OhneKennung`).
+velopack = { version = "=1.2.158", features = ["public-utils"] }
 
 [lints]
 workspace = true

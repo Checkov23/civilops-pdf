@@ -1,0 +1,59 @@
+# CivilOps PDF: die öffentliche Windows-Fassung (Kanal stabil), gebaut aus diesem Repository.
+#
+# Läuft nur von Hand (Actions > Windows-Release > Run workflow). Ergebnis als Artefakt: Installer,
+# tragbare Fassung, Update-Pakete und Feed von `vpk pack`, ohne Zugangsdaten (packaging/civilops/
+# release.py, Kanal stabil). Hochgeladen wird von Hand. Die Signatur über SignPath kommt hinzu,
+# sobald das Projekt aufgenommen ist (README, Code signing policy). Testfassungen mit dem Zugang
+# des geschützten Kanals entstehen nie hier.
+name: Windows-Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      notizen:
+        description: "Versionshinweise (Markdown, optional)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust 1.97.1
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+
+      - name: Velopack (vpk 1.2.158)
+        run: dotnet tool install --global vpk --version 1.2.158
+
+      - name: Bauen
+        env:
+          PRINTCRAFT_REQUIRE_WINRES: "1"
+        run: cargo build --release --locked -p printcraft
+
+      - name: Verpacken (Kanal stabil, ohne Hochladen)
+        shell: pwsh
+        env:
+          NOTIZEN: ${{ inputs.notizen }}
+        run: |
+          $vpk = Get-ChildItem "$env:USERPROFILE\.dotnet\tools\.store\vpk" -Recurse -Filter vpk.dll | Select-Object -First 1
+          if (-not $vpk) { throw "vpk.dll nicht gefunden" }
+          $env:VPK_DLL = $vpk.FullName
+          $version = (Select-String -Path apps/printcraft/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $ausgabe = Join-Path $env:RUNNER_TEMP "stabil"
+          python packaging/civilops/release.py --version $version --kanal stabil --ohne-build --notizen "$env:NOTIZEN" --ausgabe $ausgabe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash (Join-Path $ausgabe "*") -Algorithm SHA256 | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: civilops-pdf-windows
+          path: ${{ runner.temp }}/stabil
+          if-no-files-found: error

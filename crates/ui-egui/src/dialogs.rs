@@ -20,6 +20,7 @@ fn dialogs(app: &mut PrintCraftApp, ctx: &egui::Context) {
     save_prompt(app, ctx);
     link_prompt(app, ctx);
     remote_link_prompt(app, ctx);
+    crate::updates::consent(app, ctx);
     crate::updates::dialog(app, ctx);
     let Some(dialog) = app.dialog else {
         app.props_draft = None;

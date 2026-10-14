@@ -13,6 +13,10 @@
 //! ein Ordner oder eine https-Adresse mit den Dateien von `vpk pack`. Für geschützte Ordner steht
 //! dort zusätzlich `zugang = benutzer:passwort` (Basic-Anmeldung, nur über https), oder in
 //! `CIVILOPS_PDF_UPDATE_ZUGANG`. Der Kanal (zum Beispiel `test`) steckt im installierten Paket.
+//!
+//! Eine Anfrage nennt nur Programmversion und Programmkennung: Velopacks dauerhafte, zufällige
+//! Kennung der Installation (`stagingId`, nur für gestaffelte Verteilungen) bleibt leer
+//! ([`OhneKennung`]). Ob das Programm beim Start fragt, entscheidet der Nutzer (Oberfläche).
 
 use std::fs::{File, TryLockError};
 use std::path::PathBuf;
@@ -165,7 +169,7 @@ fn pruefen_und_laden_aus(quelle: &str) -> Result<Option<Update>, String> {
         if let Some(z) = zugang() {
             optionen.Headers.push(velopack::HttpHeader { Name: "Authorization".to_string(), Value: format!("Basic {}", base64(z.as_bytes())) });
         }
-        UpdateManager::new(sources::HttpSource::new_with_options(quelle, optionen), None, None)
+        UpdateManager::new(OhneKennung(sources::HttpSource::new_with_options(quelle, optionen)), None, None)
     } else {
         UpdateManager::new(sources::FileSource::new(quelle), None, None)
     }
@@ -182,6 +186,31 @@ fn pruefen_und_laden_aus(quelle: &str) -> Result<Option<Update>, String> {
             Ok(Some(Update { version: ziel.Version.clone(), notizen: ziel.NotesMarkdown.clone() }))
         }
         UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty => Ok(None),
+    }
+}
+
+/// Eine Update-Quelle ohne die Kennung der Installation: Velopack hängt sonst an jede Anfrage eine
+/// dauerhafte, zufällige Kennung (`stagingId`) an, die nur gestaffelten Verteilungen dient (nutzen
+/// wir nicht). So nennt eine Anfrage nur Programmversion und Programmkennung.
+struct OhneKennung<Q>(Q);
+
+impl<Q: sources::UpdateSource> sources::UpdateSource for OhneKennung<Q> {
+    fn get_release_feed(
+        &self,
+        kanal: &str,
+        app: &velopack::bundle::Manifest,
+        _kennung: &str,
+    ) -> Result<velopack::VelopackAssetFeed, velopack::Error> {
+        self.0.get_release_feed(kanal, app, "")
+    }
+
+    fn download_release_entry(
+        &self,
+        paket: &velopack::VelopackAsset,
+        datei: &std::path::Path,
+        fortschritt: Option<std::sync::mpsc::Sender<i16>>,
+    ) -> Result<(), velopack::Error> {
+        self.0.download_release_entry(paket, datei, fortschritt)
     }
 }
 
@@ -248,6 +277,41 @@ fn wert(text: &str, schluessel: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Eine Quelle, die sich die übergebene Kennung merkt.
+    struct Merkt(std::sync::Mutex<Option<String>>);
+
+    impl sources::UpdateSource for Merkt {
+        fn get_release_feed(
+            &self,
+            _kanal: &str,
+            _app: &velopack::bundle::Manifest,
+            kennung: &str,
+        ) -> Result<velopack::VelopackAssetFeed, velopack::Error> {
+            if let Ok(mut k) = self.0.lock() {
+                *k = Some(kennung.to_string());
+            }
+            Ok(velopack::VelopackAssetFeed { Assets: Vec::new() })
+        }
+
+        fn download_release_entry(
+            &self,
+            _paket: &velopack::VelopackAsset,
+            _datei: &std::path::Path,
+            _fortschritt: Option<std::sync::mpsc::Sender<i16>>,
+        ) -> Result<(), velopack::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn eine_anfrage_traegt_keine_kennung_der_installation() {
+        use sources::UpdateSource as _;
+        let quelle = OhneKennung(Merkt(std::sync::Mutex::new(None)));
+        let app = velopack::bundle::Manifest::default();
+        quelle.get_release_feed("stabil", &app, "5c1d7e0a-kennung").unwrap();
+        assert_eq!(quelle.0.0.lock().unwrap().as_deref(), Some(""));
+    }
 
     #[test]
     fn quelle_aus_textdatei() {

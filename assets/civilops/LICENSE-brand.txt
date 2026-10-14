@@ -1,17 +1,16 @@
-CivilOps-Marken: Nutzungsbedingungen
+CivilOps-Marken: Hinweis
 
-Der Name CivilOps, das CivilOps-Zeichen und die Programmsymbole von CivilOps (die
-„CivilOps-Marken“), darunter jede Datei in diesem Ordner (assets/civilops/) und das Startbild
-des Installers packaging/civilops/splash.png, in jeder Farbe, Größe und jedem Format, sind Marken
-von CivilOps (https://civilops.de). Sie sind KEIN Open Source. Die Lizenz dieses Repositorys
-(MIT) gilt für sie nicht; weder diese Lizenz noch NOTICE
-noch eine andere Datei des Repositorys räumt Rechte an ihnen ein.
+Die Dateien in diesem Ordner (assets/civilops/, Programmsymbole) und das Startbild des Installers
+packaging/civilops/splash.png stehen wie der Code von CivilOps PDF unter der MIT-Lizenz
+(LICENSE-MIT).
 
-Erlaubt ist nur die Verwendung in CivilOps PDF selbst, seiner Dokumentation und seinen offiziellen
-Builds, um das Programm als Produkt von CivilOps zu kennzeichnen. Jede andere Verwendung, auch in
-abgeleiteten Fassungen, braucht vorher die schriftliche Erlaubnis von CivilOps. Alle Rechte
-vorbehalten.
+Der Name CivilOps und das CivilOps-Zeichen, das diese Bilder zeigen, sind Marken von CivilOps
+(https://civilops.de). Die MIT-Lizenz räumt keine Rechte an Marken ein. Veränderte Fassungen von
+CivilOps PDF dürfen deshalb nicht unter dem Namen CivilOps oder mit dem CivilOps-Zeichen
+weitergegeben werden; dafür braucht es vorher die schriftliche Erlaubnis von CivilOps. Erlaubt ist,
+wahrheitsgemäß zu sagen, dass eine Fassung auf CivilOps PDF beruht.
 
-English summary: the CivilOps name, mark and app icons in assets/civilops/ and the installer splash
-in packaging/civilops/ are trademarks of CivilOps. They are not open source and not covered by this
-repository's MIT licence. All rights reserved.
+English summary: the files in assets/civilops/ and the installer splash packaging/civilops/splash.png
+are licensed under MIT like the code. The CivilOps name and mark they show are trademarks of CivilOps;
+the MIT licence grants no trademark rights, so modified versions must not be distributed under the
+CivilOps name or with its mark. Saying truthfully that a version is based on CivilOps PDF is fine.

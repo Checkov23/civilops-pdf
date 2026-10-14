@@ -2142,6 +2142,17 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("Enter permissions password…", "Berechtigungskennwort eingeben…"),
     ("Permissions password", "Berechtigungskennwort"),
     ("Unlocked: the combined file won't be password-protected", "Entsperrt: Die kombinierte Datei wird nicht kennwortgeschützt sein"),
+    // Updates: the first start asks before the check at launch (privacy, CivilOps PDF 0.2.1).
+    (
+        "CivilOps PDF can look for a newer version when it starts. It then asks download.civilops.de, which sees your IP address and the program version, nothing else. Documents and personal data never leave your computer.",
+        "CivilOps PDF kann beim Start nach einer neueren Fassung suchen. Dazu fragt es download.civilops.de; der Server sieht dabei Ihre IP-Adresse und die Programmversion, sonst nichts. Dokumente und persönliche Daten verlassen Ihren Rechner nie.",
+    ),
+    ("Look for updates automatically at start", "Beim Start automatisch nach Updates suchen"),
+    (
+        "You can change this in Preferences, and look for updates yourself under Help > Check for updates.",
+        "Sie können das jederzeit unter Einstellungen ändern und unter Hilfe > Nach Updates suchen selbst suchen.",
+    ),
+    ("Privacy policy", "Datenschutzerklärung"),
     // Print: the option is called Originalgröße here.
     (
         "Drawing scale changes. Use Actual size for full-scale plans.",

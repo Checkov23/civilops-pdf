@@ -41,15 +41,6 @@ pub const ALLOWED_LICENCES: &[&str] = &[
 /// (AGENTS.md §1.2).
 pub const BRAND_LICENCE: &str = "LicenseRef-Storyteller-Trademark";
 
-/// CivilOps's own brand marks in this fork (CivilOps PDF): the app icon and its sizes in
-/// `assets/civilops/` and the installer splash in `packaging/civilops/`. Not open source either
-/// (terms in `assets/civilops/LICENSE-brand.txt`); allowed only for `kind = "logo"` entries in
-/// those folders (AGENTS.md §1.2).
-pub const CIVILOPS_BRAND_LICENCE: &str = "LicenseRef-CivilOps-Trademark";
-
-/// The only folders whose files may carry [`CIVILOPS_BRAND_LICENCE`].
-pub const CIVILOPS_BRAND_DIRS: &[&str] = &["assets/civilops/", "packaging/civilops/"];
-
 pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.brotli"), ("hayro-interpret", "src/font/generated/metrics.rs")];
 
 /// First-party files on that same closed list: generated tables of Adobe-authored non-visual
@@ -251,11 +242,7 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
             problems.push(format!("{}: listed twice", a.path));
         }
         let brand = a.licence == BRAND_LICENCE && a.kind == "logo" && a.path.starts_with("docs/brand/");
-        let civilops = a.licence == CIVILOPS_BRAND_LICENCE
-            && a.kind == "logo"
-            && !a.path.contains("..")
-            && CIVILOPS_BRAND_DIRS.iter().any(|d| a.path.starts_with(d));
-        if !brand && !civilops {
+        if !brand {
             licence_ok(&a.path, &a.licence, &mut problems);
         }
         if !root.join(&a.licence_file).is_file() {
@@ -572,25 +559,6 @@ mod tests {
         ] {
             let mut a = asset(path, "Storyteller", kind, BRAND_LICENCE);
             a.licence_file = "docs/brand/LICENSE-brand.txt".into();
-            let m = Manifest { asset: vec![a], ..Default::default() };
-            let p = check(&root, &m, &[], &BTreeSet::new());
-            assert_eq!(p.iter().all(|p| !p.contains("allowlist")), pass, "{path} {kind}: {p:?}");
-        }
-    }
-
-    #[test]
-    fn civilops_brand_licence_only_for_civilops_logos() {
-        let root = super::root();
-        for (path, kind, pass) in [
-            ("assets/civilops/civilops-pdf.svg", "logo", true),
-            ("packaging/civilops/splash.png", "logo", true),
-            ("assets/civilops/civilops-pdf.svg", "icon", false),
-            ("assets/icons/mark.svg", "logo", false),
-            ("docs/brand/artcraft-mark.svg", "logo", false),
-            ("assets/civilops/../icons/x.svg", "logo", false),
-        ] {
-            let mut a = asset(path, "CivilOps", kind, CIVILOPS_BRAND_LICENCE);
-            a.licence_file = "assets/civilops/LICENSE-brand.txt".into();
             let m = Manifest { asset: vec![a], ..Default::default() };
             let p = check(&root, &m, &[], &BTreeSet::new());
             assert_eq!(p.iter().all(|p| !p.contains("allowlist")), pass, "{path} {kind}: {p:?}");

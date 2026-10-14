@@ -9,7 +9,8 @@
 //! [`PrintCraftApp::update_apply`] installs it after the app closes and starts the new one ("Restart
 //! now", only with nothing unsaved; otherwise it installs at the next start). With
 //! [`PrintCraftApp::update_check_on_launch`] the source is asked once at launch, quietly: the dialog
-//! opens only when an update is ready.
+//! opens only when an update is ready, and only once the user has allowed it: the first start
+//! shows what a check sends and asks ([`consent`]); Preferences can change it later.
 
 use std::sync::Arc;
 
@@ -84,7 +85,12 @@ pub(crate) struct Updates {
     pub(crate) launched: bool,
     /// Why installing the downloaded update failed ("Restart now").
     pub(crate) apply_error: Option<String>,
+    /// The first-start question: the user turned the switch off (it starts on).
+    pub(crate) consent_off: bool,
 }
+
+/// Where the privacy policy explains the update check (CivilOps PDF).
+pub const PRIVACY_PAGE: &str = "https://civilops.de/datenschutz.html#pdf";
 
 impl PrintCraftApp {
     /// Help ▸ Check for updates: ask for the latest release and show the outcome.
@@ -124,7 +130,7 @@ impl PrintCraftApp {
     pub(crate) fn poll_updates(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.update_check_on_launch && !self.updates.launched {
+            if self.update_check_on_launch && self.update_auto == Some(true) && !self.updates.launched {
                 self.updates.launched = true;
                 self.updates.quiet = !self.updates.open;
                 self.start_update_check();
@@ -142,6 +148,46 @@ impl PrintCraftApp {
                 self.updates.check = Check::Done(result);
             }
         }
+    }
+}
+
+/// CivilOps PDF, first start: what the check at launch sends, and a switch for it (on). Nothing is
+/// asked before the answer.
+pub(crate) fn consent(app: &mut PrintCraftApp, ctx: &egui::Context) {
+    if !app.update_check_on_launch || app.update_auto.is_some() {
+        return;
+    }
+    let t = theme::Tokens::get(ctx);
+    let mut done = false;
+    let mut privacy = false;
+    egui::Modal::new(egui::Id::new("update-consent")).show(ctx, |ui| {
+        ui.set_width(460.0);
+        ui.horizontal(|ui| {
+            ui.add(crate::icons::image("cloud", 22.0, t.accent));
+            ui.label(egui::RichText::new("Updates").font(theme::semibold(16.0)));
+        });
+        ui.add_space(8.0);
+        ui.label("CivilOps PDF can look for a newer version when it starts. It then asks download.civilops.de, which sees your IP address and the program version, nothing else. Documents and personal data never leave your computer.");
+        ui.add_space(8.0);
+        let mut on = !app.updates.consent_off;
+        ui.add(widgets::checkbox(&mut on, "Look for updates automatically at start"));
+        app.updates.consent_off = !on;
+        ui.label(
+            egui::RichText::new("You can change this in Preferences, and look for updates yourself under Help > Check for updates.")
+                .small()
+                .color(t.text_muted),
+        );
+        ui.add_space(12.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            done = widgets::pill_button(ui, "OK", true).clicked();
+            privacy = widgets::pill_button(ui, "Privacy policy", false).clicked();
+        });
+    });
+    if privacy {
+        app.open_url(PRIVACY_PAGE);
+    }
+    if done {
+        app.update_auto = Some(!app.updates.consent_off);
     }
 }
 

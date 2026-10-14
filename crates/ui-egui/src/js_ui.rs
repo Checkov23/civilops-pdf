@@ -381,6 +381,13 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &T
     // The web build has no files on disk to watch.
     #[cfg(not(target_arch = "wasm32"))]
     ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
+    // CivilOps PDF: the check at launch, once the app can update itself (asked at first start).
+    if app.update_check_on_launch {
+        let mut on = app.update_auto == Some(true);
+        if ui.add(widgets::checkbox(&mut on, "Look for updates automatically at start")).changed() {
+            app.update_auto = Some(on);
+        }
+    }
     ui.horizontal(|ui| {
         ui.label(tl!("Mouse wheel scroll speed"));
         for speed in crate::scroll_speed::ScrollSpeed::ALL {

@@ -33,9 +33,10 @@ zusammenstellen, unterschreiben und drucken. Läuft lokal unter Windows, ohne Ko
   laufende Programm. Auf der Startseite lassen sich Ordner anheften (zum Beispiel der des
   Scanners), die ihre neuesten PDFs zeigen.
 - **Spenden**: Hilfe ▸ Spenden, im Fenster „Über“ und auf der Startseite (PayPal).
-- **Installer und Updates** (Velopack): Installation pro Benutzer ohne Adminrechte, beim Start
-  lädt das Programm eine neuere Fassung im Hintergrund und meldet sie; eingespielt wird beim
-  nächsten Start oder mit „Jetzt neu starten“ (nur, wenn alles gespeichert ist).
+- **Installer und Updates** (Velopack): Installation pro Benutzer ohne Adminrechte. Beim ersten
+  Start fragt das Programm, ob es beim Start nach Updates suchen darf (abschaltbar unter
+  Einstellungen); eine neuere Fassung lädt es im Hintergrund und meldet sie, eingespielt wird
+  beim nächsten Start oder mit „Jetzt neu starten“ (nur, wenn alles gespeichert ist).
 
 ## Bauen
 
@@ -101,9 +102,29 @@ bleiben die von CivilOps PDF. Zuletzt übernommen: PDFCraft 0.7.1 (Stand `7437bd
 Der Code steht unter der MIT-Lizenz (`LICENSE-MIT`, mit allen nötigen Urheberrechtsvermerken).
 Fremde Bestandteile wie Schriften, Symbole und Bibliotheken stehen mit ihren Lizenzen in `NOTICE`
 und `ATTRIBUTION.md`; jedes Release legt alle Lizenztexte als `Drittanbieter-Lizenzen.txt` in den
-Programmordner. Ausgenommen von der MIT-Lizenz sind:
+Programmordner. Auch Programmsymbole und Installer-Startbild stehen unter der MIT-Lizenz. Name und
+Zeichen „CivilOps“ sind Marken: Veränderte Fassungen dürfen nicht unter diesem Namen oder mit
+diesem Zeichen weitergegeben werden (`assets/civilops/LICENSE-brand.txt`).
 
-- die CivilOps-Marken (Name, Zeichen, Programmsymbole, Installer-Startbild): kein Open Source,
-  Bedingungen in `assets/civilops/LICENSE-brand.txt`;
-- das Update-Modul `crates/aktualisierung`: alle Rechte bei CivilOps
-  (`LicenseRef-CivilOps-proprietary`).
+## Datenschutz
+
+CivilOps PDF arbeitet lokal: keine Telemetrie, kein Konto, keine Verarbeitung in der Cloud.
+Einzige Verbindung, die das Programm von sich aus aufbaut, ist die Update-Prüfung beim Start:
+Sie fragt `download.civilops.de` nach einer neueren Fassung und nennt dabei nur Programmversion
+und Programmkennung (der Server sieht wie jeder Webserver die IP-Adresse). Beim ersten Start
+fragt das Programm, ob es das darf; abschaltbar unter Einstellungen, von Hand jederzeit unter
+Hilfe ▸ Nach Updates suchen. Links (Website, Spenden, Links in Dokumenten) öffnen sich nur auf
+Klick. Datenschutzerklärung: https://civilops.de/datenschutz.html#pdf
+
+## Code signing policy
+
+Die öffentlichen Windows-Fassungen sollen kostenlos über [SignPath.io](https://signpath.io)
+signiert werden, mit einem Zertifikat der [SignPath Foundation](https://signpath.org)
+(Antrag in Vorbereitung; bis dahin sind sie unsigniert). Signiert wird nur, was GitHub Actions in diesem
+Repository aus dem veröffentlichten Quelltext baut (`.github/workflows/windows-release.yml`).
+
+- Autor und Prüfer (Committer, Reviewer): [Checkov23](https://github.com/Checkov23)
+- Freigabe jeder Signatur (Approver): [Checkov23](https://github.com/Checkov23)
+
+Fremde Beiträge (Pull Requests) werden vor der Übernahme geprüft. Die Testfassungen des
+geschützten Kanals werden lokal gebaut und nicht signiert.

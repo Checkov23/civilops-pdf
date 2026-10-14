@@ -2,10 +2,10 @@ CivilOps PDF
 Copyright (c) 2026 CivilOps. Licensed under the MIT License (LICENSE-MIT), which also carries the
 copyright notices of the code this program builds on.
 
-The CivilOps name, mark and app icons (assets/civilops/, packaging/civilops/splash.png) are
-trademarks of CivilOps. They are not open source and are not covered by the licence above; their
-terms are in assets/civilops/LICENSE-brand.txt. The update module (crates/aktualisierung) is not
-open source either: all rights reserved by CivilOps.
+The app icons (assets/civilops/) and the installer splash (packaging/civilops/splash.png) are under
+the MIT License as well. The CivilOps name and mark they show are trademarks of CivilOps, which the
+licence does not grant: modified versions must not be distributed under that name or with that
+mark (assets/civilops/LICENSE-brand.txt).
 
 The program folder of every release carries all licences and notices in Drittanbieter-Lizenzen.txt
 (packaging/civilops/drittanbieter.py).

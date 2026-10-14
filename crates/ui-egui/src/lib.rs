@@ -562,6 +562,9 @@ pub struct PrintCraftApp {
     /// CivilOps PDF: ask the source once at launch, quietly; the dialog opens only when an update
     /// is ready. Not saved with the settings: the desktop app decides.
     pub update_check_on_launch: bool,
+    /// CivilOps PDF: whether the user lets the check at launch run (`None`: not asked yet; the
+    /// first start asks, see `updates::consent`). Saved with the settings.
+    pub update_auto: Option<bool>,
     pub(crate) updates: updates::Updates,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
@@ -926,6 +929,7 @@ impl PrintCraftApp {
             update_source: None,
             update_apply: None,
             update_check_on_launch: false,
+            update_auto: None,
             updates: updates::Updates::default(),
             printer_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -2122,7 +2126,7 @@ impl PrintCraftApp {
     /// Serialize the user's persistent state (recent files, theme). Local only.
     pub fn persist(&self) -> String {
         let trusted: Vec<String> = self.session.trusted_certificates().iter().map(printcraft_engine::sign::x509::to_pem).collect();
-        serde_json::json!({
+        let mut state = serde_json::json!({
             "docking": self.docking,
             "docking_left_open": self.left_open,
             "docking_right": self.right,
@@ -2181,8 +2185,13 @@ impl PrintCraftApp {
             "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
-        })
-        .to_string()
+        });
+        // CivilOps PDF: added outside the macro, which is at its recursion limit. Null until the first
+        // start has asked.
+        if let Some(map) = state.as_object_mut() {
+            map.insert("update_auto".into(), serde_json::json!(self.update_auto));
+        }
+        state.to_string()
     }
 
     /// Restore state written by `persist`. Unknown or malformed data is ignored.
@@ -2216,6 +2225,9 @@ impl PrintCraftApp {
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
         if let Some(on) = v["system_title_bar"].as_bool() {
             self.system_title_bar = on;
+        }
+        if let Some(on) = v["update_auto"].as_bool() {
+            self.update_auto = Some(on);
         }
         if let Some(on) = v["reload_changed_files"].as_bool() {
             self.reload_changed_files = on;

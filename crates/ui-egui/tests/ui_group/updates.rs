@@ -226,6 +226,8 @@ fn the_check_at_launch_speaks_up_only_when_an_update_is_ready() {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
             let mut app = PrintCraftApp::new();
             app.update_check_on_launch = true;
+            // Allowed at an earlier start (the first one asks, see below).
+            app.update_auto = Some(true);
             app.update_source = Some(Arc::new(move || {
                 counted.fetch_add(1, Ordering::SeqCst);
                 answer.map(|v| Release { version: v.into(), ..Default::default() }).map_err(str::to_string)
@@ -243,4 +245,58 @@ fn the_check_at_launch_speaks_up_only_when_an_update_is_ready() {
         assert!(h.query_by_label_contains("is up to date").is_none(), "quiet when there is nothing to install: {answer:?}");
         assert!(h.query_by_label_contains("Couldn't check").is_none(), "quiet when offline: {answer:?}");
     }
+}
+
+/// CivilOps PDF: an app that can update itself and has not asked yet; `asked` counts the checks.
+fn first_start(asked: Arc<AtomicUsize>) -> Harness<'static, PrintCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.update_check_on_launch = true;
+        app.update_source = Some(Arc::new(move || {
+            asked.fetch_add(1, Ordering::SeqCst);
+            Ok(Release { version: current_version().into(), ..Default::default() })
+        }));
+        app.update_apply = Some(Arc::new(|| Ok(())));
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+#[test]
+fn the_first_start_asks_before_looking_for_updates() {
+    let asked = Arc::new(AtomicUsize::new(0));
+    let mut h = first_start(asked.clone());
+    h.get_by_label_contains("which sees your IP address and the program version");
+    h.get_by_label("Look for updates automatically at start");
+    h.run_steps(4);
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "nothing is asked before the answer");
+    h.get_by_label("OK").click();
+    let seen = asked.clone();
+    until(&mut h, move |_| seen.load(Ordering::SeqCst) > 0);
+    assert_eq!(h.state().update_auto, Some(true), "on unless switched off");
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "then the check at launch runs");
+    assert!(h.query_by_label("Look for updates automatically at start").is_none(), "asked once");
+}
+
+#[test]
+fn switched_off_the_start_stays_quiet_and_help_still_checks() {
+    let asked = Arc::new(AtomicUsize::new(0));
+    let mut h = first_start(asked.clone());
+    h.get_by_label("Look for updates automatically at start").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(10);
+    assert_eq!(h.state().update_auto, Some(false));
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "no check at launch");
+    // Kept with the settings, so the next start asks neither the user nor the server.
+    let mut again = PrintCraftApp::new();
+    again.restore(&h.state().persist());
+    assert_eq!(again.update_auto, Some(false));
+    // Asking by hand still works.
+    h.state_mut().execute("help.check_updates");
+    let seen = asked.clone();
+    until(&mut h, move |_| seen.load(Ordering::SeqCst) > 0);
+    assert_eq!(asked.load(Ordering::SeqCst), 1);
 }

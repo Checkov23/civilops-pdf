@@ -25,8 +25,12 @@ Bearbeiten, Seiten, Ansicht und Hilfe stehen ganz oben links.
 
 Updates
 -------
-Beim Start schaut das Programm im Hintergrund nach einer neueren Fassung und lädt sie. Dann
-erscheint ein Fenster mit der neuen Version und was neu ist:
+Beim ersten Start fragt das Programm, ob es beim Start automatisch nach Updates suchen darf.
+Dazu fragt es download.civilops.de und nennt nur Programmversion und Programmkennung (die
+IP-Adresse sieht der Server wie bei jeder Webseite). Abschaltbar unter Einstellungen;
+Datenschutzerklärung: https://civilops.de/datenschutz.html#pdf
+Ist es eingeschaltet, schaut das Programm beim Start im Hintergrund nach einer neueren Fassung
+und lädt sie. Dann erscheint ein Fenster mit der neuen Version und was neu ist:
 - „Jetzt neu starten“ spielt sie sofort ein (nur, wenn alle Änderungen gespeichert sind),
 - „Später“ spielt sie beim nächsten Start ein.
 Von Hand: Hilfe > Nach Updates suchen. Dokumente und Einstellungen fasst ein Update nie an.
