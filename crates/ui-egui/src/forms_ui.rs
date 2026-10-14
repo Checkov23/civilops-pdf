@@ -4,14 +4,19 @@
 //! cancels, Tab moves to the next field). Check boxes and radio buttons toggle on click. Combo
 //! and list boxes open a list of their options. Every change is one undoable engine edit.
 
+use std::collections::HashSet;
+
 use egui::{Color32, CornerRadius, Rect, Stroke, vec2};
-use printcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, field_flags};
+use printcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags};
 use printcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
+use crate::widgets;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+/// Background of the in-place text field editor, the same in every theme.
+const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,10 +39,28 @@ pub struct Focus {
 #[derive(Clone, Debug, Default)]
 pub struct FormView {
     pub focus: Option<Focus>,
+    /// The draft whose edit is queued (`DocView::pending_edit`): if the field refuses the value,
+    /// the editor reopens with it rather than losing the typing.
+    pub(crate) committed: Option<Focus>,
+    /// Fields modified by the user whose appearance stream has not been rasterized by the render worker yet.
+    /// Tracked as (field_name, page_index) so committed edits stay immediately visible without flicker.
+    pub unbaked: HashSet<(String, usize)>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
-    pub notice: Option<String>,
+    pub notice: Option<FormNotice>,
     /// A push button was clicked: (its field name, what it does).
     pub button: Option<(String, printcraft_engine::form_scripts::ButtonAction)>,
+}
+
+/// A form message for the app to show, with document data kept separate so the visible
+/// text follows the UI language.
+#[derive(Clone, Debug)]
+pub enum FormNotice {
+    /// Filling is blocked by the document's security settings.
+    Security,
+    /// A read-only field was clicked (its name).
+    ReadOnly(String),
+    /// A push button with no action was clicked (its name).
+    NoAction(String),
 }
 
 fn widget_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
@@ -96,14 +119,14 @@ pub(crate) fn page_input(
         return resp.is_pointer_button_down_on();
     }
     if !allowed {
-        view.forms.notice = Some("The document's security settings don't allow filling in form fields".into());
+        view.forms.notice = Some(FormNotice::Security);
         return true;
     }
     match f.kind {
-        _ if f.read_only() => view.forms.notice = Some(format!("{} is read-only", f.name)),
+        _ if f.read_only() => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
             Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
-            None => view.forms.notice = Some(format!("{} has no action", f.name)),
+            None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox => {
@@ -129,16 +152,25 @@ pub(crate) fn page_input(
     true
 }
 
-/// The edit for the focused field, if its draft differs from the field's value.
-fn commit(view: &mut DocView, form: &[FormField]) {
-    let Some(focus) = view.forms.focus.take() else { return };
-    let Some(f) = form.iter().find(|f| f.name == focus.name) else { return };
+/// The edit the focused field's draft makes, if it differs from the field's value.
+pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
+    let f = form.iter().find(|f| f.name == focus.name)?;
     let value = match f.kind {
-        FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text),
-        FormFieldKind::List if f.has(field_flags::MULTI_SELECT) && focus.picked != f.value => FieldValue::Choice(focus.picked),
-        _ => return,
+        FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
+        FormFieldKind::List if f.has(field_flags::MULTI_SELECT) && focus.picked != f.value => FieldValue::Choice(focus.picked.clone()),
+        _ => return None,
     };
-    view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value });
+    Some(Edit::SetFieldValue { name: f.name.clone(), value })
+}
+
+/// Close the focused field's editor, queueing the edit for its draft if it differs from the
+/// field's value.
+pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
+    let Some(focus) = view.forms.focus.take() else { return };
+    if let Some(edit) = draft_edit(&focus, form) {
+        view.pending_edit = Some(edit);
+        view.forms.committed = Some(focus);
+    }
 }
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -160,11 +192,17 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.small_button("‹").on_hover_text("Previous month").clicked() {
+                    if ui.small_button("‹").on_hover_text(tl!("Previous month")).clicked() {
                         (y, m) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
                     }
-                    ui.label(egui::RichText::new(format!("{} {y}", MONTHS[(m.clamp(1, 12) - 1) as usize])).strong());
-                    if ui.small_button("›").on_hover_text("Next month").clicked() {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::fmt(
+                            tl!("{month} {y}"),
+                            &[("month", tl!(MONTHS[(m.clamp(1, 12) - 1) as usize])), ("y", &y.to_string())],
+                        ))
+                        .strong(),
+                    );
+                    if ui.small_button("›").on_hover_text(tl!("Next month")).clicked() {
                         (y, m) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
                     }
                 });
@@ -180,7 +218,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
                 let len = (days_from_civil(if m == 12 { y + 1 } else { y }, if m == 12 { 1 } else { m + 1 }, 1) - days_from_civil(y, m, 1)) as usize;
                 egui::Grid::new(("date-grid", view.id.0)).spacing([4.0, 2.0]).show(ui, |ui| {
                     for d in ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] {
-                        ui.label(egui::RichText::new(d).small());
+                        ui.label(egui::RichText::new(tl_ctx!("calendar weekday", d)).small());
                     }
                     ui.end_row();
                     for cell in 0..(first + len).div_ceil(7) * 7 {
@@ -192,7 +230,18 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
                             if is_today {
                                 text = text.strong();
                             }
-                            if ui.selectable_label(selected, text).on_hover_text(format!("{} {day}, {y}", MONTHS[(m - 1) as usize])).clicked() {
+                            if ui
+                                .selectable_label(selected, text)
+                                .on_hover_text(crate::i18n::fmt(
+                                    tl!("{month} {day}, {y}"),
+                                    &[
+                                        ("month", tl_ctx!("calendar date", MONTHS[(m - 1) as usize])),
+                                        ("day", &day.to_string()),
+                                        ("y", &y.to_string()),
+                                    ],
+                                ))
+                                .clicked()
+                            {
                                 picked = Some(format_date(DateTime { y, m, d: day, hh: 0, mm: 0, ss: 0 }, fmt));
                             }
                         } else {
@@ -221,10 +270,64 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
             if focused {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
-            } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
-                painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+            } else {
+                if view.forms.unbaked.contains(&(f.name.clone(), page)) {
+                    paint_unbaked_widget(painter, xf, f, w, r);
+                }
+                if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
+                    painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
+                }
             }
         }
+    }
+}
+
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
+    match f.kind {
+        FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List => {
+            let text = f.value.first().map(String::as_str).unwrap_or("");
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            if !text.is_empty() {
+                let unrotated_w = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
+                let zoom = xf.rect.width() / unrotated_w.max(1.0);
+                let da = f.da.split_whitespace().collect::<Vec<_>>();
+                let size = da
+                    .iter()
+                    .position(|x| *x == "Tf")
+                    .and_then(|i| da.get(i.wrapping_sub(1)))
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|s| *s > 0.0);
+                let font_size = (size.unwrap_or(((w.rect[3] - w.rect[1]) as f32 * 0.6).clamp(6.0, 12.0)) * zoom).clamp(6.0, 64.0);
+                let display_text = if f.has(field_flags::PASSWORD) { "•".repeat(text.chars().count()) } else { text.to_string() };
+                let p = painter.with_clip_rect(r);
+                let (align, pos) = match f.quadding {
+                    1 => (egui::Align2::CENTER_TOP, egui::pos2(r.center().x, r.min.y + 1.0)),
+                    2 => (egui::Align2::RIGHT_TOP, egui::pos2(r.max.x - 3.0, r.min.y + 1.0)),
+                    _ => (egui::Align2::LEFT_TOP, egui::pos2(r.min.x + 3.0, r.min.y + 1.0)),
+                };
+                p.text(pos, align, display_text, egui::FontId::proportional(font_size), Color32::BLACK);
+            }
+        }
+        FormFieldKind::CheckBox => {
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            let checked = f.value.first().is_some_and(|v| v != "Off" && !v.is_empty());
+            if checked {
+                let sz = (r.height() * 0.75).clamp(8.0, 32.0);
+                painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), Color32::BLACK);
+            }
+        }
+        FormFieldKind::Radio => {
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            let selected = f.value.first().map(String::as_str) == w.on_state.as_deref();
+            if selected {
+                let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
+                painter.circle_filled(r.center(), radius, Color32::BLACK);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -254,11 +357,13 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
             egui::Area::new(egui::Id::new(("form-editor", view.id.0))).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
                 ui.set_min_size(rect.size());
                 let Some(fx) = view.forms.focus.as_mut() else { return };
+                // The field is pale yellow in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+                ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
                 let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                 te = te
                     .desired_width(rect.width() - 6.0)
                     .font(egui::FontId::proportional(font))
-                    .background_color(Color32::from_rgb(0xFF, 0xFF, 0xF4))
+                    .background_color(FIELD_FILL)
                     .text_color(Color32::BLACK)
                     .margin(egui::Margin::symmetric(3, 1))
                     .password(f.has(field_flags::PASSWORD))
@@ -321,7 +426,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                                 let on = if multi { fx.picked.contains(export) } else { f.value.first() == Some(export) };
                                 if multi {
                                     let mut c = on;
-                                    if ui.checkbox(&mut c, display).changed() {
+                                    if ui.add(widgets::checkbox(&mut c, display)).changed() {
                                         if c {
                                             fx.picked.push(export.clone());
                                         } else {
@@ -334,7 +439,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                                 }
                             }
                         });
-                        if multi && ui.button("Done").clicked() {
+                        if multi && ui.button(tl!("Done")).clicked() {
                             commit(view, form);
                         }
                     });

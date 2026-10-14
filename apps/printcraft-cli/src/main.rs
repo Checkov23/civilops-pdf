@@ -1,22 +1,6 @@
 //! printcraft-cli — headless PrintCraft.
 //!
-//! ```text
-//! printcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
-//! printcraft-cli render <file.pdf> --page N [--dpi 96] --out x.pam
-//! printcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
-//! printcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
-//!                       [--insert-blank 1] [--title T] [--author A] [--full]
-//! printcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
-//! printcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
-//! printcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
-//! printcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
-//! printcraft-cli tools                                       automation tools and their JSON Schemas
-//! printcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
-//! printcraft-cli run    --script steps.json [--root DIR]      [{"tool": "doc_open", "args": {…}}, …]
-//! printcraft-cli mcp    [--root DIR]                          MCP server on stdin/stdout (opt-in)
-//! printcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
-//!                                                            drive a running app started with --control FILE
-//! ```
+//! Usage: `printcraft-cli --help`, which prints `USAGE` below.
 //!
 //! `run` and `mcp` drive the same tool table (`printcraft-automation`). In `run`, values parse as
 //! JSON when they can (`pages=[1,3]`, `degrees=90`) and are strings otherwise. A script runs its
@@ -33,36 +17,93 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod batch;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use printcraft_engine::export::ImageFormat;
 use printcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
+
+/// The `mcp` lines of [`USAGE`]: only a build with the `mcp` feature has the command.
+#[cfg(feature = "mcp")]
+macro_rules! mcp_usage {
+    () => {
+        "\
+printcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+                                                           --compact lists a core set of tools plus tool_search and tool_call
+"
+    };
+}
+#[cfg(not(feature = "mcp"))]
+macro_rules! mcp_usage {
+    () => {
+        ""
+    };
+}
+
+/// The full usage, printed by `--help` (also after a command, e.g. `render --help`).
+const USAGE: &str = concat!(
+    "\
+printcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
+printcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
+printcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+printcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
+                      [--insert-blank 1] [--title T] [--author A] [--full]
+                      (options run in order; page numbers refer to the document after the earlier options)
+printcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
+printcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
+printcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
+printcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
+printcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
+printcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir DIR
+                      [--recursive] [--root DIR] [--stop-on-error]
+                      [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
+printcraft-cli tools                                       automation tools and their JSON Schemas
+printcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
+printcraft-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
+",
+    mcp_usage!(),
+    "\
+printcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
+                                                           drive a running app started with --control FILE
+CivilOps PDF: https://civilops.de"
+);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let result =
-        match args.first().map(String::as_str) {
-            Some("info") => info(&args[1..]),
-            Some("render") => render(&args[1..]),
-            Some("text") => text(&args[1..]),
-            Some("edit") => edit(&args[1..]),
-            Some("combine") => combine(&args[1..]),
-            Some("extract") => extract(&args[1..]),
-            Some("split") => split(&args[1..]),
-            Some("check") => check(&args[1..]),
-            Some("check-one") => check_one(&args[1..]),
-            Some("tools") => tools(),
-            Some("run") => run(&args[1..]),
-            Some("ui") => ui(&args[1..]),
-            #[cfg(feature = "mcp")]
-            Some("mcp") => mcp(&args[1..]),
-            Some("--version") => version(),
-            _ => Err("usage: printcraft-cli <info|render|text|edit|combine|extract|split|check|tools|run|mcp|ui> …  (see source header for options)\nCivilOps PDF: https://civilops.de"
-                .into()),
-        };
+    // `<command> --help` too; only right after the command, so a later `-h` (a value) still reaches it.
+    let command = match args.get(1).map(String::as_str) {
+        Some("--help" | "-h") => Some("--help"),
+        _ => args.first().map(String::as_str),
+    };
+    let result = match command {
+        Some("--help" | "-h" | "help") => stdout_line(format_args!("{USAGE}")),
+        None => Err(format!("usage:\n{USAGE}").into()),
+        Some("info") => info(&args[1..]),
+        Some("render") => render(&args[1..]),
+        Some("text") => text(&args[1..]),
+        Some("edit") => edit(&args[1..]),
+        Some("combine") => combine(&args[1..]),
+        Some("extract") => extract(&args[1..]),
+        Some("split") => split(&args[1..]),
+        Some("check") => check(&args[1..]),
+        Some("check-one") => check_one(&args[1..]),
+        Some("audit") => audit(&args[1..]),
+        Some("tools") => tools(),
+        Some("run") => run(&args[1..]),
+        Some("batch") => batch::run(&args[1..]),
+        Some("ui") => ui(&args[1..]),
+        #[cfg(feature = "mcp")]
+        Some("mcp") => mcp(&args[1..]),
+        #[cfg(not(feature = "mcp"))]
+        Some("mcp") => Err("mcp: this build leaves out the MCP server (built without the `mcp` feature)".into()),
+        Some("--version") => version(),
+        Some(other) => Err(format!("unknown command '{other}'; see printcraft-cli --help").into()),
+    };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(CliError::Stdout(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
@@ -107,15 +148,114 @@ fn stdout_line(line: std::fmt::Arguments<'_>) -> Result<(), CliError> {
 }
 
 fn version() -> Result<(), CliError> {
-    stdout_line(format_args!("CivilOps PDF (Kommandozeile) {}", env!("CARGO_PKG_VERSION")))?;
+    // CivilOps PDF's version (the workspace crates carry upstream's).
+    stdout_line(format_args!("CivilOps PDF (Kommandozeile) {}", printcraft_engine::links::VERSION))?;
     stdout_line(format_args!("Web:     {}", printcraft_engine::links::APP_PAGE))?;
     stdout_line(format_args!("Source:  {}", printcraft_engine::links::GITHUB))?;
     Ok(())
 }
 
+/// Audit a document for faux redactions. Prints the findings as JSON; fails when any are
+/// found so scripts and CI can gate on it, and when the audit itself cannot run.
+fn audit(args: &[String]) -> Result<(), CliError> {
+    validate_options("audit", args, AUDIT_OPTIONS)?;
+    let path = *positional(args).first().ok_or("audit: missing file")?;
+    let bytes = read(path)?;
+    let doc = printcraft_cos::Document::open_with_password(bytes, flag(args, "--password")).map_err(|e| format!("{path}: {e}"))?;
+    let findings = printcraft_audit::audit_redactions(&doc).map_err(|e| format!("{path}: {e}"))?;
+    let items: Vec<serde_json::Value> = findings
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "page": f.page + 1,
+                "kind": f.kind.id(),
+                "rect": f.rect,
+                "covered_text": f.covered_text,
+            })
+        })
+        .collect();
+    println!("{}", serde_json::json!({ "file": path, "findings": items, "count": items.len() }));
+    if items.is_empty() { Ok(()) } else { Err(format!("audit: {} faux redaction(s) found", items.len()).into()) }
+}
+
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
+
+#[derive(Clone, Copy)]
+struct OptionSpec {
+    name: &'static str,
+    takes_value: bool,
+}
+
+/// Refuse unknown options and malformed confinement flags before any file is read.
+fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Result<(), CliError> {
+    if specs.iter().any(|spec| spec.name == "--root") {
+        // `flag` searches every token, including another option's value. Match that lookup so
+        // a malformed confinement flag cannot be hidden there and fall back to no root.
+        let mut root_seen = false;
+        for (i, _) in args.iter().enumerate().filter(|(_, arg)| arg.as_str() == "--root") {
+            if root_seen {
+                return Err(format!("{command}: --root may only be supplied once").into());
+            }
+            root_seen = true;
+            if args.get(i + 1).is_none_or(|value| value.is_empty() || value.starts_with("--")) {
+                return Err(format!("{command}: --root needs a directory value").into());
+            }
+        }
+    }
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if let Some(name) = arg.strip_prefix("--") {
+            let Some(spec) = specs.iter().find(|spec| spec.name == arg) else {
+                return Err(format!("{command}: unknown option --{name}").into());
+            };
+            // Other missing or malformed values are left to the command, which reports them in its own
+            // terms (`text` and `extract` explain what a page value must be).
+            i += if spec.takes_value { 2 } else { 1 };
+        } else {
+            i += 1;
+        }
+    }
+    Ok(())
+}
+
+const INFO_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", takes_value: true }];
+const AUDIT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", takes_value: true }];
+const TEXT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--page", takes_value: true }, OptionSpec { name: "--password", takes_value: true }];
+const COMBINE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--out", takes_value: true }];
+const EXTRACT_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--pages", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+];
+const SPLIT_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--every", takes_value: true },
+    OptionSpec { name: "--before", takes_value: true },
+    OptionSpec { name: "--out-dir", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+];
+const RENDER_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--page", takes_value: true },
+    OptionSpec { name: "--dpi", takes_value: true },
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+];
+const CHECK_ONE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--dpi", takes_value: true }, OptionSpec { name: "--edit", takes_value: false }];
+const CHECK_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--timeout", takes_value: true },
+    OptionSpec { name: "--dpi", takes_value: true },
+    OptionSpec { name: "--json", takes_value: true },
+];
+const RUN_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--root", takes_value: true },
+    OptionSpec { name: "--script", takes_value: true },
+    OptionSpec { name: "--out", takes_value: true },
+];
+const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
+
+#[cfg(feature = "mcp")]
+const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--root", takes_value: true }, OptionSpec { name: "--compact", takes_value: false }];
 
 fn positional(args: &[String]) -> Vec<&str> {
     let mut out = Vec::new();
@@ -139,8 +279,20 @@ fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
 }
 
 fn info(args: &[String]) -> Result<(), CliError> {
+    validate_options("info", args, INFO_OPTIONS)?;
     let path = *positional(args).first().ok_or("info: missing file")?;
-    let info = inspect(read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let bytes = read(path)?;
+    let password = flag(args, "--password");
+    let info = inspect(bytes.clone(), password).map_err(|e| e.to_string())?;
+    // Dynamic XFA forms: say what laying the template out gives (what the app shows).
+    let xfa_layout = (info.xfa == Some(printcraft_render::Xfa::Dynamic))
+        .then(|| {
+            let mut s = printcraft_engine::Session::new();
+            let id = s.open("info.pdf", None, bytes.clone(), password).ok()?;
+            let d = s.get(id)?;
+            d.xfa.as_ref().map(|x| serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings }))
+        })
+        .flatten();
     let json = serde_json::json!({
         "file": path,
         "pdf_version": info.pdf_version,
@@ -150,6 +302,7 @@ fn info(args: &[String]) -> Result<(), CliError> {
         "title": info.title, "author": info.author, "producer": info.producer, "creator": info.creator,
         "encrypted": info.encrypted, "tagged": info.tagged, "javascript": info.has_javascript,
         "xfa": info.xfa.map(|x| match x { printcraft_render::Xfa::Static => "static", printcraft_render::Xfa::Dynamic => "dynamic" }),
+        "xfa_layout": xfa_layout,
         "bookmarks": info.outline.len(), "annotations": info.annotations.len(), "fields": info.fields.len(),
         "links": info.links.len(), "layers": info.layers.len(), "attachments": info.attachments.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),
@@ -160,17 +313,54 @@ fn info(args: &[String]) -> Result<(), CliError> {
 }
 
 fn text(args: &[String]) -> Result<(), CliError> {
+    validate_options("text", args, TEXT_OPTIONS)?;
     let path = *positional(args).first().ok_or("text: missing file")?;
-    let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
-    let pages: Vec<usize> = match flag(args, "--page") {
-        Some(p) => vec![p.parse::<usize>().map_err(|_| "bad --page")?.saturating_sub(1)],
+    let mut selected_page = None;
+    // Validate every supplied value before reading, retaining the first valid selection.
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        if option == "--page" {
+            let page = options
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|page| *page > 0)
+                .ok_or("bad --page: expected a positive page number")?;
+            selected_page.get_or_insert(page - 1);
+        } else if option.starts_with("--") {
+            // Match positional(): an option's operand is not itself another option.
+            options.next();
+        }
+    }
+    let password = flag(args, "--password");
+    let bytes = read(path)?;
+    let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: password.map(Arc::from), ..Default::default() });
+    // A document the renderer could not open (wrong or missing password, unparseable file) has
+    // no pages, and "extract every page" of nothing would print nothing and exit 0 (#132). Ask
+    // `inspect` why instead, so a protected file fails the same way `info` does.
+    if r.page_count() == 0 {
+        let info = inspect(bytes.clone(), password).map_err(|e| format!("text: {e}"))?;
+        if !info.pages.is_empty() {
+            return Err("text: the document could not be parsed".into());
+        }
+    }
+    // Printing the text is copying it, so ask what `text_extract` asks (#1645): without the
+    // permissions password, a document that doesn't allow copying gives no text.
+    let mut session = printcraft_engine::Session::new();
+    if let Some(doc) = session.open(path, None, bytes, password).ok().and_then(|id| session.get(id)) {
+        // The engine's hint is about editing in the app; on the command line the way in is
+        // `--password`.
+        doc.check_copying()
+            .map_err(|_| "text: the document's permissions don't allow copying its text; pass the owner password with --password to extract it")?;
+    }
+    let pages: Vec<usize> = match selected_page {
+        Some(page) => vec![page],
         None => (0..r.page_count()).collect(),
     };
     let mut failed: Vec<usize> = Vec::new();
     for (n, p) in pages.iter().enumerate() {
-        let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        let out = r.render(RenderRequest { page: *p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         if let Some(e) = out.error {
-            eprintln!("page {}: {e}", p + 1);
+            let _ = writeln!(std::io::stderr().lock(), "page {}: {e}", p + 1);
             failed.push(p + 1);
             continue;
         }
@@ -191,18 +381,44 @@ fn page_list(s: &str) -> Result<Vec<usize>, String> {
     s.split(',').map(|p| p.trim().parse::<usize>().ok().filter(|n| *n > 0).map(|n| n - 1).ok_or(format!("bad page number {p:?}"))).collect()
 }
 
+/// The options `edit` understands, for its "unknown option" message.
+const EDIT_OPTIONS: &str = "--out, --password, --full, --rotate, --delete, --move, --insert-blank, --title, --author";
+
 /// Apply page and metadata edits through the engine and save (incrementally unless `--full`).
+///
+/// Every argument is parsed before the file is opened: an option this command does not know
+/// (a typo like `--rotat`) is an error, not something to skip — skipping it would write an
+/// unchanged copy and exit 0, which looks like a successful edit (#133).
 fn edit(args: &[String]) -> Result<(), CliError> {
     use printcraft_engine::{Edit, Session};
-    let path = *positional(args).first().ok_or("edit: missing file")?;
-    let out = flag(args, "--out").ok_or("edit: missing --out")?;
-    let mut session = Session::new();
-    let id = session.open(path, Some(path.to_string()), read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
+    let mut path: Option<&str> = None;
+    let mut out: Option<&str> = None;
+    let mut password: Option<&str> = None;
+    let mut full = false;
     let mut edits = Vec::new();
     let mut i = 0;
-    while i < args.len() {
-        let value = args.get(i + 1).map(String::as_str).unwrap_or("");
-        match args[i].as_str() {
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        // Options that take no value, and the input file.
+        match arg {
+            "--full" => {
+                full = true;
+                i += 1;
+                continue;
+            }
+            a if a.starts_with("--") => {}
+            a => {
+                if path.is_some() {
+                    return Err(format!("edit: unexpected argument {a:?} (one input file, then options)").into());
+                }
+                path = Some(a);
+                i += 1;
+                continue;
+            }
+        }
+        let value = args.get(i + 1).map(String::as_str).ok_or_else(|| format!("edit: {arg} needs a value"))?;
+        match arg {
+            "--out" => out = Some(value),
+            "--password" => password = Some(value),
             "--rotate" => {
                 let (pages, deg) = value.split_once(':').ok_or("--rotate PAGES:DEGREES")?;
                 edits.push(Edit::RotatePages { pages: page_list(pages)?, degrees: deg.parse().map_err(|_| "bad degrees")? });
@@ -211,22 +427,48 @@ fn edit(args: &[String]) -> Result<(), CliError> {
             "--move" => {
                 let (pages, to) = value.split_once(':').ok_or("--move PAGES:TO")?;
                 let to: usize = to.parse().map_err(|_| "bad target")?;
-                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.saturating_sub(1) });
+                edits.push(Edit::MovePages { pages: page_list(pages)?, to: to.checked_sub(1).ok_or("--move target must be at least 1")? });
             }
             "--insert-blank" => {
                 let at: usize = value.parse().map_err(|_| "bad position")?;
-                edits.push(Edit::InsertBlankPage { at: at.saturating_sub(1), width: 612.0, height: 792.0 });
+                edits.push(Edit::InsertBlankPage { at: at.checked_sub(1).ok_or("--insert-blank must be at least 1")?, width: 612.0, height: 792.0 });
             }
             "--title" => edits.push(Edit::SetInfo { key: "Title".into(), value: value.into() }),
             "--author" => edits.push(Edit::SetInfo { key: "Author".into(), value: value.into() }),
-            _ => {}
+            other => return Err(format!("edit: unknown option {other:?} (expected one of: {EDIT_OPTIONS})").into()),
         }
-        i += 1;
+        i += 2;
     }
+    let path = path.ok_or("edit: missing file")?;
+    let out = out.ok_or("edit: missing --out")?;
+    let mut session = Session::new();
+    let id = session.open(path, Some(path.to_string()), read(path)?, password).map_err(|e| e.to_string())?;
     for e in edits {
+        // A destination past the end must fail like `page_move` / `page_insert_blank` do, not
+        // silently become an append (#1330). Checked per edit: earlier edits change the count.
+        let n = session.get(id).map_or(0, |d| d.info.pages.len());
+        let destination = match &e {
+            Edit::MovePages { to, .. } => Some(("--move target", *to)),
+            Edit::InsertBlankPage { at, .. } => Some(("--insert-blank", *at)),
+            _ => None,
+        };
+        if let Some((option, at)) = destination.filter(|(_, at)| *at > n) {
+            return Err(format!("{option} {} is past the end: it must be between 1 and {} (the document has {n} pages)", at + 1, n + 1).into());
+        }
+        // Pages count from the document as the earlier options left it, so a page past the end is
+        // reported with its own option and the current page count (#1550).
+        let listed = match &e {
+            Edit::RotatePages { pages, .. } => Some(("--rotate", pages)),
+            Edit::DeletePages { pages } => Some(("--delete", pages)),
+            Edit::MovePages { pages, .. } => Some(("--move", pages)),
+            _ => None,
+        };
+        if let Some((option, bad)) = listed.and_then(|(option, pages)| pages.iter().find(|p| **p >= n).map(|p| (option, *p))) {
+            return Err(format!("{option}: page {} does not exist; after the earlier options the document has {n} pages", bad + 1).into());
+        }
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
-    let bytes = if args.iter().any(|a| a == "--full") { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
+    let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
     std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
 }
 
@@ -235,6 +477,7 @@ fn file_stem(path: &str) -> String {
 }
 
 fn combine(args: &[String]) -> Result<(), CliError> {
+    validate_options("combine", args, COMBINE_OPTIONS)?;
     let out = flag(args, "--out").ok_or("combine: missing --out")?;
     let inputs = positional(args);
     if inputs.len() < 2 {
@@ -246,6 +489,7 @@ fn combine(args: &[String]) -> Result<(), CliError> {
 }
 
 fn extract(args: &[String]) -> Result<(), CliError> {
+    validate_options("extract", args, EXTRACT_OPTIONS)?;
     let path = *positional(args).first().ok_or("extract: missing file")?;
     let out = flag(args, "--out").ok_or("extract: missing --out")?;
     let pages = page_list(flag(args, "--pages").ok_or("extract: missing --pages")?)?;
@@ -256,6 +500,7 @@ fn extract(args: &[String]) -> Result<(), CliError> {
 }
 
 fn split(args: &[String]) -> Result<(), CliError> {
+    validate_options("split", args, SPLIT_OPTIONS)?;
     use printcraft_engine::SplitBy;
     let path = *positional(args).first().ok_or("split: missing file")?;
     let by = match (flag(args, "--every"), flag(args, "--before")) {
@@ -267,7 +512,11 @@ fn split(args: &[String]) -> Result<(), CliError> {
     let mut session = printcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let stem = file_stem(path);
-    for (a, b, bytes) in session.split(id, &by).map_err(|e| e.to_string())? {
+    let parts = session.split(id, &by).map_err(|e| e.to_string())?;
+    // An output folder that does not exist yet is created (#249); one that can't be is reported
+    // as the folder's problem, not as the first part's.
+    std::fs::create_dir_all(&dir).map_err(|e| format!("split: --out-dir {}: {e}", dir.display()))?;
+    for (a, b, bytes) in parts {
         let name = dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") });
         std::fs::write(&name, bytes.as_slice()).map_err(|e| format!("{}: {e}", name.display()))?;
         stdout_line(format_args!("{}", name.display()))?;
@@ -276,25 +525,52 @@ fn split(args: &[String]) -> Result<(), CliError> {
 }
 
 fn render(args: &[String]) -> Result<(), CliError> {
+    validate_options("render", args, RENDER_OPTIONS)?;
     let path = *positional(args).first().ok_or("render: missing file")?;
     let page: usize = flag(args, "--page").unwrap_or("1").parse().map_err(|_| "bad --page")?;
+    let page_index = page.checked_sub(1).ok_or("--page must be at least 1")?;
     let dpi: f32 = flag(args, "--dpi").unwrap_or("96").parse().map_err(|_| "bad --dpi")?;
-    let out = flag(args, "--out").ok_or("render: missing --out (.pam)")?;
-    let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
-    let p = r.render(RenderRequest { page: page.saturating_sub(1), kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    let out = flag(args, "--out").ok_or("render: missing --out (.png, .jpg, .tif or .pam)")?;
+    // The file is what its name says (#248): a `.png` used to get a netpbm PAM stream.
+    let format = match Path::new(out).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("png") => Some(ImageFormat::Png),
+        Some("jpg" | "jpeg") => Some(ImageFormat::Jpeg { quality: 90 }),
+        Some("tif" | "tiff") => Some(ImageFormat::Tiff),
+        Some("pam") => None,
+        _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
+    };
+    let mut r = PageRenderer::new(
+        read(path)?,
+        RenderConfig { password: flag(args, "--password").map(Arc::from), reject_oversize: true, ..Default::default() },
+    );
+    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
     if let Some(e) = p.error {
         return Err(e.into());
     }
-    // PAM (netpbm RGB_ALPHA) keeps this tool dependency-free; convert with any image tool.
-    let mut f = std::fs::File::create(out).map_err(|e| e.to_string())?;
-    write!(f, "P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", p.width, p.height).map_err(|e| e.to_string())?;
-    f.write_all(&p.rgba).map_err(|e| e.to_string())?;
-    eprintln!("rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
+    let bytes = match format {
+        Some(f) => printcraft_engine::export::encode_image(p.width, p.height, &p.rgba, f)?,
+        None => {
+            // PAM (netpbm RGB_ALPHA): the raw premultiplied pixels, for tools that read it.
+            let mut pam = format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", p.width, p.height).into_bytes();
+            pam.extend_from_slice(&p.rgba);
+            pam
+        }
+    };
+    std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
+    let _ = writeln!(std::io::stderr().lock(), "rendered page {page} at {dpi} dpi: {}×{} px in {} ms", p.width, p.height, p.millis);
+    for warning in &p.warnings {
+        match warning {
+            printcraft_render::RenderWarning::ContentTruncated => {
+                let _ = writeln!(std::io::stderr().lock(), "warning: page {page}: content past the page's safety budget was skipped");
+            }
+        }
+    }
     Ok(())
 }
 
 /// Child-process body for `check`: prints one JSON line.
 fn check_one(args: &[String]) -> Result<(), CliError> {
+    validate_options("check-one", args, CHECK_ONE_OPTIONS)?;
     let path = *positional(args).first().ok_or("check-one: missing file")?;
     let dpi: f32 = flag(args, "--dpi").unwrap_or("36").parse().map_err(|_| "bad --dpi")?;
     let start = Instant::now();
@@ -305,8 +581,8 @@ fn check_one(args: &[String]) -> Result<(), CliError> {
             let mut r = PageRenderer::new(bytes, RenderConfig::default());
             let mut failed = Vec::new();
             for i in 0..info.pages.len().min(500) {
-                let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
-                if let Some(e) = r.render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 }).error {
+                let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
+                if let Some(e) = r.render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).error {
                     failed.push(format!("p{} text: {e}", i + 1));
                 }
                 if let Some(e) = p.error {
@@ -361,8 +637,20 @@ fn short(s: &str) -> String {
 fn collect(paths: &[&str]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    let mut visited = std::collections::HashSet::new();
     while let Some(p) = stack.pop() {
         if p.is_dir() {
+            // Directory aliases and symlink cycles must not scan the same tree repeatedly.
+            let identity = match p.canonicalize() {
+                Ok(identity) => identity,
+                Err(error) => {
+                    eprintln!("{}: could not resolve directory: {error}", p.display());
+                    continue;
+                }
+            };
+            if !visited.insert(identity) {
+                continue;
+            }
             if let Ok(rd) = std::fs::read_dir(&p) {
                 stack.extend(rd.flatten().map(|e| e.path()));
             }
@@ -375,6 +663,7 @@ fn collect(paths: &[&str]) -> Vec<PathBuf> {
 }
 
 fn check(args: &[String]) -> Result<(), CliError> {
+    validate_options("check", args, CHECK_OPTIONS)?;
     let files = collect(&positional(args));
     if files.is_empty() {
         return Err("check: no PDF files found".into());
@@ -479,6 +768,7 @@ fn print_output(auto: &printcraft_automation::Automation, content: Vec<printcraf
 }
 
 fn run(args: &[String]) -> Result<(), CliError> {
+    validate_options("run", args, RUN_OPTIONS)?;
     let mut auto = automation(args)?;
     if let Some(script) = flag(args, "--script") {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
@@ -506,8 +796,15 @@ fn run(args: &[String]) -> Result<(), CliError> {
 
 #[cfg(feature = "mcp")]
 fn mcp(args: &[String]) -> Result<(), CliError> {
-    let mut server = printcraft_automation::mcp::McpServer::new(automation(args)?);
-    eprintln!("printcraft-cli: MCP server on stdio (protocol {}); close stdin to stop", printcraft_automation::mcp::PROTOCOL_VERSIONS[0]);
+    validate_options("mcp", args, MCP_OPTIONS)?;
+    let compact = args.iter().any(|a| a == "--compact");
+    let mut server = printcraft_automation::mcp::McpServer::new(automation(args)?).with_compact(compact);
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "printcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",
+        printcraft_automation::mcp::PROTOCOL_VERSIONS[0],
+        if compact { ", compact tool list" } else { "" }
+    );
     server.serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|e| CliError::Message(e.to_string()))
 }
 
@@ -515,11 +812,13 @@ fn mcp(args: &[String]) -> Result<(), CliError> {
 
 /// One request to a running app's control channel (`printcraft --control FILE`).
 fn ui(args: &[String]) -> Result<(), CliError> {
+    validate_options("ui", args, UI_OPTIONS)?;
     use std::io::{BufRead, BufReader, Write as _};
     let file = flag(args, "--control").ok_or("ui: missing --control FILE (start the app with `printcraft --control FILE`)")?;
-    let info: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?).map_err(|e| format!("{file}: {e}"))?;
+    let info = read_control_file(file)?;
     let port = info["port"].as_u64().ok_or(format!("{file}: no port"))?;
+    // Refused rather than truncated, which would quietly reach some other port.
+    let port = u16::try_from(port).map_err(|_| format!("{file}: {port} is not a port number"))?;
     let token = info["token"].as_str().ok_or(format!("{file}: no token"))?;
     let pos = positional(args);
     let method = *pos.first().ok_or("ui: missing method (state, inspect, click, drag, type, key, command, commands, set, open, screenshot)")?;
@@ -529,8 +828,8 @@ fn ui(args: &[String]) -> Result<(), CliError> {
         let (k, v) = kv.split_once('=').ok_or(format!("ui: expected key=value, got {kv:?}"))?;
         params.insert(k.to_string(), serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.to_string())));
     }
-    let stream = std::net::TcpStream::connect(("127.0.0.1", port as u16))
-        .map_err(|e| format!("can't reach the app on port {port}: {e} (is it still running?)"))?;
+    let stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|e| format!("can't reach the app on port {port}: {e} (is it still running?)"))?;
     stream.set_read_timeout(Some(Duration::from_secs(40))).map_err(|e| e.to_string())?;
     let mut write = stream.try_clone().map_err(|e| e.to_string())?;
     let mut lines = BufReader::new(stream).lines();
@@ -553,4 +852,87 @@ fn ui(args: &[String]) -> Result<(), CliError> {
     }
     stdout_line(format_args!("{}", serde_json::to_string_pretty(&result).unwrap_or_default()))?;
     Ok(())
+}
+
+/// Most a control file may hold. The app writes under 100 bytes.
+const CONTROL_FILE_MAX: u64 = 64 * 1024;
+
+const CONTROL_FILE_ADVICE: &str =
+    "Start the app with a control file in a folder only you can write, such as `printcraft --control ~/.printcraft-control.json`";
+
+/// Read the file written by `printcraft --control FILE`.
+///
+/// It names the port that receives the token and every command, typed text included, so it must
+/// be the user's own. In a shared folder such as `/tmp`, another local user can create the file
+/// first; the app then can't write it, and the CLI would talk to the other user's listener.
+/// Refused: a symbolic link, anything but a regular file, and on Unix a file owned by someone
+/// else or open to other users (the app writes it with mode 600).
+fn read_control_file(file: &str) -> Result<serde_json::Value, String> {
+    use std::io::Read as _;
+    let at_path = std::fs::symlink_metadata(file).map_err(|e| format!("{file}: {e}"))?;
+    if at_path.file_type().is_symlink() {
+        return Err(format!("{file}: is a symbolic link, which could point at another user's file. {CONTROL_FILE_ADVICE}"));
+    }
+    if !at_path.is_file() {
+        return Err(format!("{file}: not a regular file. {CONTROL_FILE_ADVICE}"));
+    }
+    let f = std::fs::File::open(file).map_err(|e| format!("{file}: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // Checked on the open file, so nothing swapped in after `symlink_metadata` gets through.
+        let opened = f.metadata().map_err(|e| format!("{file}: {e}"))?;
+        if (opened.dev(), opened.ino()) != (at_path.dev(), at_path.ino()) {
+            return Err(format!("{file}: was replaced while being opened. {CONTROL_FILE_ADVICE}"));
+        }
+        if let Some(problem) = control_file_problem(opened.uid(), opened.mode(), current_uid()) {
+            return Err(format!("{file}: {problem}. {CONTROL_FILE_ADVICE}"));
+        }
+    }
+    let mut text = String::new();
+    f.take(CONTROL_FILE_MAX.saturating_add(1)).read_to_string(&mut text).map_err(|e| format!("{file}: {e}"))?;
+    if u64::try_from(text.len()).unwrap_or(u64::MAX) > CONTROL_FILE_MAX {
+        return Err(format!("{file}: too large for a control file (over {} KiB)", CONTROL_FILE_MAX / 1024));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("{file}: {e}"))
+}
+
+/// Why user `me` can't trust a control file with this owner and mode, if they can't.
+#[cfg(any(test, unix))]
+fn control_file_problem(owner: u32, mode: u32, me: u32) -> Option<String> {
+    if owner != me {
+        return Some(format!("owned by another user (uid {owner}; you are uid {me}), who may be the one listening for your commands"));
+    }
+    let permissions = mode & 0o7777;
+    (permissions & 0o077 != 0).then(|| format!("other users have access to it (mode {permissions:o}; the app writes it with mode 600)"))
+}
+
+/// The effective user id: the owner of the files this process creates, and so of a control file
+/// the app wrote for this user. std has no `geteuid` and this crate forbids `unsafe`; rustix's is
+/// safe and can't fail.
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    rustix::process::geteuid().as_raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::control_file_problem;
+
+    #[test]
+    fn a_control_file_must_be_yours_and_private() {
+        // Regular file type bits (0o100000) don't matter, only the owner and the permission bits.
+        assert_eq!(control_file_problem(1000, 0o100600, 1000), None);
+        assert_eq!(control_file_problem(1000, 0o600, 1000), None);
+        assert_eq!(control_file_problem(1000, 0o400, 1000), None);
+        let other = control_file_problem(1001, 0o600, 1000).unwrap_or_default();
+        assert!(other.contains("owned by another user") && other.contains("1001"), "{other}");
+        // Root gets no exception: a file a user planted is still theirs.
+        assert!(control_file_problem(1000, 0o600, 0).is_some_and(|p| p.contains("owned by another user")));
+        for mode in [0o644, 0o640, 0o604, 0o660, 0o606, 0o620, 0o602, 0o610, 0o601, 0o100666] {
+            let open = control_file_problem(1000, mode, 1000).unwrap_or_default();
+            assert!(open.contains("other users"), "{mode:o}: {open}");
+        }
+        assert!(control_file_problem(1000, 0o100644, 1000).unwrap_or_default().contains("mode 644"));
+    }
 }

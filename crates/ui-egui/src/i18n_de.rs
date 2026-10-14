@@ -736,7 +736,6 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("None (prefix only)", "Keine (nur Präfix)"),
     ("i, ii, iii", "i, ii, iii"),
     ("I, II, III", "I, II, III"),
-    ("Labels", "Bezeichnungen"),
     ("Rotate pages clockwise", "Seiten im Uhrzeigersinn drehen"),
     ("Rotate pages counterclockwise", "Seiten gegen den Uhrzeigersinn drehen"),
     ("Rotate pages…", "Seiten drehen…"),
@@ -921,7 +920,6 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("Category:", "Kategorie:"),
     // ── Undo labels (the engine's edits) ─────────────────────────────────────────────────────
     ("Rotate page", "Seite drehen"),
-    ("Rotate pages", "Seiten drehen"),
     ("Delete page", "Seite löschen"),
     ("Move page", "Seite verschieben"),
     ("Move pages", "Seiten verschieben"),
@@ -1103,7 +1101,6 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("Line Thickness:", "Linienstärke:"),
     ("Solid", "Durchgezogen"),
     ("Dashed", "Gestrichelt"),
-    ("Underline", "Unterstreichen"),
     ("Go to a page view", "Zu einer Seitenansicht"),
     ("Open a web link", "Weblink öffnen"),
     ("Open a web page", "Webseite öffnen"),
@@ -1806,8 +1803,6 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("Selection", "Auswahl"),
     ("Index", "Index"),
     ("Review", "Prüfen"),
-    ("Steps", "Schritte"),
-    ("Mo", "Mo"),
     // Saved signature and initials: use, change, remove.
     ("Sign yourself", "Selbst unterschreiben"),
     ("Change", "Ändern"),
@@ -1837,6 +1832,8 @@ pub(super) const EXACT: &[(&str, &str)] = &[
         "DPI sets the printed page size without resampling the image.",
         "Die Auflösung bestimmt die Seitengröße beim Drucken, das Bild selbst wird nicht umgerechnet.",
     ),
+    // Help ▸ Donate (PayPal).
+    ("Donate", "Spenden"),
     // Links from documents open only after a question.
     ("Open this web page?", "Diese Webseite öffnen?"),
     ("Write this email?", "Diese E-Mail schreiben?"),
@@ -1854,6 +1851,302 @@ pub(super) const EXACT: &[(&str, &str)] = &[
     ("the address is empty", "die Adresse ist leer"),
     ("the address contains hidden or invisible characters", "die Adresse enthält versteckte oder unsichtbare Zeichen"),
     ("the address isn't a complete web or email address", "die Adresse ist keine vollständige Web- oder E-Mail-Adresse"),
+    // PDFCraft's German (de.tsv) where CivilOps PDF says it differently: "Sie" and "Kennwort".
+    // Ours come first (`i18n/mod.rs`); placeholders stay as in the English label.
+    ("Get help, share feedback and follow development on Discord.", "Hilfe erhalten, Feedback geben und die Entwicklung auf Discord verfolgen."),
+    ("“{name}” is protected. Enter a password to open it.", "„{name}“ ist geschützt. Geben Sie das Kennwort ein, um die Datei zu öffnen."),
+    (
+        "Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.",
+        "Klicken Sie auf die Seite, um Text hinzuzufügen; jeder Klick beginnt ein neues Feld, ✓ schließt ab. Ziehen Sie Elemente, um sie zu verschieben, ziehen Sie an einer Ecke, um die Größe zu ändern, und doppelklicken Sie auf Text, um ihn zu bearbeiten.",
+    ),
+    (
+        "You have version {c}. Download the new version from its release page.",
+        "Sie haben Version {c}. Laden Sie die neue Version von ihrer Release-Seite herunter.",
+    ),
+    ("You have version {c}. All releases are listed at {page}.", "Sie haben Version {c}. Alle Versionen finden Sie unter {page}."),
+    (
+        "The key is in the Windows certificate store, which may ask to allow CivilOps PDF to use it.",
+        "Der Schlüssel liegt im Windows-Zertifikatspeicher, der Sie eventuell fragt, ob CivilOps PDF ihn verwenden darf.",
+    ),
+    (
+        "Security settings must allow assistive technology to read the content (\"Enable text access for screen reader devices\"). Change the document's security to allow it.",
+        "Die Sicherheitseinstellungen müssen Hilfstechnologien das Lesen des Inhalts erlauben („Textzugriff für Screenreader für Sehbehinderte erlauben“). Ändern Sie die Sicherheit des Dokuments, um dies zu erlauben.",
+    ),
+    (
+        "Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.",
+        "Seiten, die nur aus Bildern von Text bestehen, können weder vorgelesen noch durchsucht werden. Führen Sie Text erkennen (OCR) aus, um eine Textebene hinzuzufügen.",
+    ),
+    (
+        "Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).",
+        "Tags geben dem Dokument eine logische Struktur, der Hilfstechnologien folgen. Taggen Sie das Dokument (PDF automatisch taggen).",
+    ),
+    (
+        "Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.",
+        "Prüfen Sie, ob die Tags in der Reihenfolge gelesen werden, in der eine sehende Person lesen würde. Korrigieren Sie sie mit dem Werkzeug „Lesereihenfolge“ oder im Tags-Bedienfeld.",
+    ),
+    (
+        "Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.",
+        "Screenreader wählen ihre Stimme anhand der Dokumentsprache. Legen Sie sie unter Dokumenteigenschaften > Erweitert > Sprache fest.",
+    ),
+    (
+        "The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.",
+        "Das Fenster sollte einen aussagekräftigen Titel statt des Dateinamens zeigen. Legen Sie einen Titel fest und wählen Sie Ansicht beim Öffnen > Anzeigen: Dokumenttitel.",
+    ),
+    (
+        "Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.",
+        "Dokumente mit mehr als 20 Seiten brauchen Lesezeichen zur Navigation. Fügen Sie Lesezeichen für die Hauptabschnitte hinzu.",
+    ),
+    (
+        "Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.",
+        "Text muss sich für Menschen mit Sehschwäche ausreichend vom Hintergrund abheben. Prüfen Sie die Farben mit bloßem Auge oder mit einem Kontrastwerkzeug.",
+    ),
+    (
+        "Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.",
+        "Alles auf einer Seite muss getaggt oder als Artefakt markiert sein (Dekoration, Kopf- und Fußzeilen). Taggen Sie den ungetaggten Inhalt.",
+    ),
+    (
+        "Comments, links and fields must be in the tag tree to be announced. Tag the annotations.",
+        "Kommentare, Links und Felder müssen im Tag-Baum stehen, damit sie vorgelesen werden. Taggen Sie die Anmerkungen.",
+    ),
+    (
+        "Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.",
+        "Schriften müssen ihre Zeichen Unicode zuordnen, damit Text gelesen und kopiert werden kann. Korrigieren Sie die Schriften oder erstellen Sie das PDF neu.",
+    ),
+    (
+        "Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.",
+        "Video, Ton und Rich Media müssen getaggt sein, damit sie vorgelesen werden. Taggen Sie die Multimedia-Anmerkungen.",
+    ),
+    (
+        "Animation that flashes can cause seizures. Check scripts and media for flicker.",
+        "Blinkende Animationen können Anfälle auslösen. Prüfen Sie Skripte und Medien auf Flackern.",
+    ),
+    (
+        "People may need more time to respond. Check that nothing has a time limit.",
+        "Manche Menschen brauchen mehr Zeit zum Reagieren. Prüfen Sie, dass nichts ein Zeitlimit hat.",
+    ),
+    (
+        "Repeated navigation links should be skippable. Check links that appear on every page.",
+        "Wiederholte Navigationslinks sollten übersprungen werden können. Prüfen Sie Links, die auf jeder Seite erscheinen.",
+    ),
+    (
+        "Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.",
+        "Formularfelder müssen im Tag-Baum stehen (Form-Tags), damit sie vorgelesen werden. Taggen Sie die Formularfelder.",
+    ),
+    (
+        "Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.",
+        "Jedes Feld braucht einen Tooltip, der sagt, was einzugeben ist. Fügen Sie ihn unter Feldeigenschaften > Allgemein > Tooltip hinzu.",
+    ),
+    (
+        "Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.",
+        "Bilder brauchen einen beschreibenden Alternativtext oder müssen als dekorativ markiert sein. Fügen Sie jeder Abbildung Alternativtext hinzu.",
+    ),
+    (
+        "Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.",
+        "Alternativtext in einem Element, das bereits Alternativtext hat, wird nie gelesen. Entfernen Sie den inneren Alternativtext.",
+    ),
+    (
+        "Alternate text on an element without page content is never reached. Remove it or attach the element to content.",
+        "Alternativtext an einem Element ohne Seiteninhalt wird nie erreicht. Entfernen Sie ihn oder verknüpfen Sie das Element mit Inhalt.",
+    ),
+    (
+        "Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.",
+        "Alternativtext an einem Element, das einen Link oder ein Feld enthält, verbirgt diese Anmerkung vor Hilfstechnologien. Verschieben Sie den Alternativtext.",
+    ),
+    (
+        "Formulas and similar non-text elements need alternate text. Add alternate text to them.",
+        "Formeln und ähnliche Nicht-Text-Elemente brauchen Alternativtext. Fügen Sie ihnen Alternativtext hinzu.",
+    ),
+    ("Table cells belong in a row. Fix the table's tags.", "Tabellenzellen gehören in eine Zeile. Korrigieren Sie die Tags der Tabelle."),
+    (
+        "Header cells (TH) tell listeners what each column or row holds. Mark the header cells.",
+        "Kopfzellen (TH) sagen Zuhörenden, was jede Spalte oder Zeile enthält. Markieren Sie die Kopfzellen.",
+    ),
+    (
+        "Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).",
+        "Unregelmäßige Tabellen stören die Zellnavigation. Geben Sie jeder Zeile gleich viele Zellen (verbundene Zellen mitgezählt).",
+    ),
+    (
+        "A summary describes the table's purpose and layout. Add a Summary attribute to each table.",
+        "Eine Zusammenfassung beschreibt Zweck und Aufbau der Tabelle. Fügen Sie jeder Tabelle ein Summary-Attribut hinzu.",
+    ),
+    ("List items belong in a list. Fix the list's tags.", "Listeneinträge gehören in eine Liste. Korrigieren Sie die Tags der Liste."),
+    (
+        "List labels and bodies belong in a list item. Fix the list's tags.",
+        "Listenbeschriftungen und -inhalte gehören in einen Listeneintrag. Korrigieren Sie die Tags der Liste.",
+    ),
+    (
+        "Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.",
+        "Überschriftenebenen sollten nicht übersprungen werden (z. B. H1 gefolgt von H3). Taggen Sie die Überschriften neu.",
+    ),
+    (
+        "You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.",
+        "Sie sind dabei, 1 Schwärzungsmarkierung anzuwenden. Text, Bilder und Zeichnungen unter der Markierung sowie Kommentare und Formularfelder, die sie überlappen, werden dauerhaft entfernt.",
+    ),
+    (
+        "You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.",
+        "Sie sind dabei, {n} Schwärzungsmarkierungen anzuwenden. Text, Bilder und Zeichnungen unter den Markierungen sowie Kommentare und Formularfelder, die sie überlappen, werden dauerhaft entfernt.",
+    ),
+    (
+        "Removed 1 hidden item. Save to remove them from the file.",
+        "1 ausgeblendetes Element entfernt. Speichern Sie, um es aus der Datei zu entfernen.",
+    ),
+    (
+        "Removed {n} hidden items. Save to remove them from the file.",
+        "{n} ausgeblendete Elemente entfernt. Speichern Sie, um sie aus der Datei zu entfernen.",
+    ),
+    (
+        "Applied 1 redaction mark. Save to remove the content from the file.",
+        "1 Schwärzungsmarkierung angewendet. Speichern Sie, um den Inhalt aus der Datei zu entfernen.",
+    ),
+    (
+        "Applied {n} redaction marks. Save to remove the content from the file.",
+        "{n} Schwärzungsmarkierungen angewendet. Speichern Sie, um den Inhalt aus der Datei zu entfernen.",
+    ),
+    (
+        "Text recognition isn't installed: its model files are missing. Reinstall CivilOps PDF, or set PRINTCRAFT_MODELS to the folder that holds them.",
+        "Die Texterkennung ist nicht installiert: ihre Modelldateien fehlen. Installieren Sie CivilOps PDF neu oder setzen Sie PRINTCRAFT_MODELS auf den Ordner, der sie enthält.",
+    ),
+    ("On the web, open or drop an image to convert it", "Im Web ein Bild öffnen oder hierher ziehen, um es umzuwandeln"),
+    (
+        "The form asks to be submitted to {u}; CivilOps PDF doesn't send form data. Save the document to keep your entries.",
+        "Das Formular soll an {u} gesendet werden; CivilOps PDF sendet keine Formulardaten. Speichern Sie das Dokument, um Ihre Eingaben zu behalten.",
+    ),
+    (
+        "{name} submits the form to {url}; CivilOps PDF doesn't send form data. Save the document to keep your entries.",
+        "{name} sendet das Formular an {url}; CivilOps PDF sendet keine Formulardaten. Speichern Sie das Dokument, um Ihre Eingaben zu behalten.",
+    ),
+    ("Merging data files needs the desktop app", "Zum Zusammenführen von Datendateien brauchen Sie die Desktop-App"),
+    (
+        "Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.",
+        "Der portable Modus ist aus: In {folder} kann nicht geschrieben werden ({error}). Die Einstellungen werden stattdessen in Ihrem Benutzerordner gespeichert.",
+    ),
+    (
+        "That didn't work: an internal error stopped it ({m}). Your documents are unchanged.",
+        "Das hat nicht geklappt: Ein interner Fehler ist aufgetreten ({m}). Ihre Dokumente sind unverändert.",
+    ),
+    (
+        "“{name}” has security restrictions. Enter its permissions password to lift them.",
+        "„{name}“ hat Sicherheitseinschränkungen. Geben Sie das Berechtigungskennwort ein, um sie aufzuheben.",
+    ),
+    (
+        "Click on the page to add a {tool}, or drag to set its size",
+        "Klicken Sie auf die Seite, um „{tool}“ hinzuzufügen, oder ziehen Sie, um die Größe festzulegen",
+    ),
+    ("the document is protected by a password", "das Dokument ist durch ein Kennwort geschützt"),
+    ("the password is incorrect", "das Kennwort ist falsch"),
+    ("Go to page {p}", "Zu Seite {p} gehen"),
+    ("Type your {what}.", "Geben Sie Ihre {what} ein."),
+    ("Draw your {what} below.", "Zeichnen Sie Ihre {what} unten."),
+    ("Open a PDF to measure it.", "Öffnen Sie ein PDF, um darin zu messen."),
+    (
+        "Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.",
+        "Klicken Sie die Eckpunkte an. Eingabetaste oder Doppelklick schließt einen Umfang oder eine Fläche ab. Klicken Sie auf den ersten Punkt, um eine Fläche zu schließen.",
+    ),
+    ("Click the first point to begin.", "Klicken Sie, um den ersten Punkt zu setzen."),
+    ("{who} in this document wants to open this address in your browser:", "{who} in diesem Dokument möchte diese Adresse in Ihrem Browser öffnen:"),
+    (
+        "{who} in this document wants to open your email app with this address:",
+        "{who} in diesem Dokument möchte Ihr E-Mail-Programm mit dieser Adresse öffnen:",
+    ),
+    (
+        "This form's scripts are turned off because one ran too long. Reopen the document to run them again.",
+        "Die Skripte dieses Formulars sind ausgeschaltet, weil eines zu lange lief. Öffnen Sie das Dokument erneut, um sie wieder auszuführen.",
+    ),
+    (
+        "XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.",
+        "XFA-Formular: Seine Felder und XFA-Daten werden synchron gehalten, damit andere Programme anzeigen, was Sie ausfüllen.",
+    ),
+    ("Switch to two-page view first to show the cover page", "Wechseln Sie zuerst zur Zweiseitenansicht, um das Deckblatt anzuzeigen"),
+    ("Add the files to combine", "Die zu kombinierenden Dateien hinzufügen"),
+    ("Check the pages of {name}: {why}", "Prüfen Sie die Seiten von {name}: {why}"),
+    (
+        "Click to sort, drag to move the column. Drag its edge to resize it.",
+        "Klicken Sie zum Sortieren, ziehen Sie zum Verschieben der Spalte. Ziehen Sie ihren Rand, um die Breite zu ändern.",
+    ),
+    (
+        "Drop PDFs, images, text files or folders here, or choose them.",
+        "Legen Sie PDFs, Bilder, Textdateien oder Ordner hier ab oder wählen Sie sie aus.",
+    ),
+    ("Enter the password that opens it", "Kennwort zum Öffnen eingeben"),
+    ("Enter the permissions password to allow combining", "Berechtigungskennwort eingeben, um das Kombinieren zu erlauben"),
+    ("Hide password", "Kennwort ausblenden"),
+    (
+        "Opened, but its security settings don't allow combining. Enter the permissions password.",
+        "Geöffnet, aber die Sicherheitseinstellungen erlauben kein Kombinieren. Geben Sie das Berechtigungskennwort ein.",
+    ),
+    ("Password-protected", "Kennwortgeschützt"),
+    ("Select a file first", "Bitte zuerst eine Datei auswählen"),
+    ("Select a password-protected file first", "Bitte zuerst eine kennwortgeschützte Datei auswählen"),
+    ("Show password", "Kennwort anzeigen"),
+    ("The password is only used to read the file; it isn't saved.", "Das Kennwort wird nur zum Lesen der Datei verwendet und nicht gespeichert."),
+    ("The same password is tried on each file.", "Dasselbe Kennwort wird bei jeder Datei versucht."),
+    ("Wrong password", "Falsches Kennwort"),
+    (
+        "Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.",
+        "Wählen Sie ein PNG- oder JPEG-Bild (bis 4 MiB). Transparenz bleibt erhalten.",
+    ),
+    (
+        "Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.",
+        "Heften Sie einen Ordner an, um hier seine neuesten PDFs aufzulisten, etwa den, in dem Ihr Scanner oder ein synchronisierter Cloud-Speicher sie ablegt.",
+    ),
+    ("Choose a folder on this computer to pin", "Ordner auf diesem Computer zum Anheften wählen"),
+    ("You can pin up to {n} folders. Unpin one first.", "Sie können bis zu {n} Ordner anheften. Lösen Sie zuerst einen."),
+    ("Go to page…", "Zu Seite gehen…"),
+    (
+        "Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.",
+        "Einseitig drucken. Halten Sie die Blätter in Reihenfolge, schneiden Sie an den Marken und legen Sie die Stapel dann von links nach rechts, von oben nach unten aufeinander.",
+    ),
+    ("Another file dialog is still open. Finish with it first.", "Ein anderer Dateidialog ist noch geöffnet. Schließen Sie ihn zuerst."),
+    ("Couldn't show the file picker. Please try again.", "Die Dateiauswahl konnte nicht angezeigt werden. Bitte versuchen Sie es noch einmal."),
+    (
+        "The document changed while you were choosing a file, so nothing was changed.",
+        "Das Dokument hat sich geändert, während Sie eine Datei ausgewählt haben; deshalb wurde nichts geändert.",
+    ),
+    (
+        "The pages were extracted but not deleted, because the document changed while you were choosing a folder.",
+        "Die Seiten wurden extrahiert, aber nicht gelöscht, weil sich das Dokument geändert hat, während Sie einen Ordner ausgewählt haben.",
+    ),
+    (
+        "Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.",
+        "Skriptgesteuerte Inhalte müssen mit Tastatur und Hilfstechnologien bedienbar sein. Prüfen Sie die Skripte des Dokuments.",
+    ),
+    (
+        "Table rows belong directly in a table or its head, body or foot. Fix the table's tags.",
+        "Tabellenzeilen gehören direkt in eine Tabelle oder in deren Kopf-, Haupt- oder Fußbereich. Korrigieren Sie die Tags der Tabelle.",
+    ),
+    (
+        "yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.",
+        "yyyy oder yy Jahr · m oder mm Monat · mmm oder mmmm Monatsname · d oder dd Tag · ddd oder dddd Wochentag. H, h, M, s und t sind Zeitbuchstaben und können nicht allein verwendet werden: Setzen Sie {escape} vor einen Buchstaben, um ihn unverändert anzuzeigen.",
+    ),
+    (
+        "{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.",
+        "{chars} kann noch nicht in das PDF geschrieben werden: Text beim Ausfüllen und Unterschreiben ist auf westeuropäische Zeichen beschränkt. Wählen Sie ein numerisches Format wie dd.mm.yyyy.",
+    ),
+    (
+        "The document changed while you were editing field properties.",
+        "Das Dokument hat sich geändert, während Sie die Feldeigenschaften bearbeitet haben.",
+    ),
+    ("The selected fields could not be found. Select them again.", "Die ausgewählten Felder wurden nicht gefunden. Wählen Sie sie erneut aus."),
+    (
+        "Files are combined in the order shown. Drag them to change it.",
+        "Die Dateien werden in der gezeigten Reihenfolge kombiniert. Ziehen Sie sie, um die Reihenfolge zu ändern.",
+    ),
+    ("Check the pages", "Seiten prüfen"),
+    ("Switch to List view to change the pages it takes.", "Wechseln Sie zur Listenansicht, um die übernommenen Seiten zu ändern."),
+    (
+        "This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.",
+        "Diese Datei wurde auf dem Datenträger geändert. Laden Sie sie neu, um die neue Version zu sehen; Ihre nicht gespeicherten Änderungen gehen dabei verloren.",
+    ),
+    ("Save or revert changes before selecting another tag.", "Speichern oder verwerfen Sie die Änderungen, bevor Sie ein anderes Tag auswählen."),
+    (" · password-protected", " · kennwortgeschützt"),
+    ("Enter permissions password…", "Berechtigungskennwort eingeben…"),
+    ("Permissions password", "Berechtigungskennwort"),
+    ("Unlocked: the combined file won't be password-protected", "Entsperrt: Die kombinierte Datei wird nicht kennwortgeschützt sein"),
+    // Print: the option is called Originalgröße here.
+    (
+        "Drawing scale changes. Use Actual size for full-scale plans.",
+        "Der Zeichnungsmaßstab ändert sich. Für maßstabsgetreue Pläne „Originalgröße“ wählen.",
+    ),
 ];
 
 /// Labels with variable parts.
@@ -1878,10 +2171,7 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
     ("Page {#} of {#}", "Seite {} von {}"),
     ("Sheet {#} of {#}", "Blatt {} von {}"),
     ("Preview: page {#} of {#}", "Vorschau: Seite {} von {}"),
-    ("Go to page {#}", "Gehe zu Seite {}"),
-    ("of {#}", "von {}"),
-    ("of {#}", "von {}"),
-    ("of {#}", "von {}"),
+    ("Go to page {#}", "Zu Seite {} gehen"),
     ("of {#}", "von {}"),
     ("Current page ({})", "Aktuelle Seite ({})"),
     ("Set to current page ({})", "Auf aktuelle Seite setzen ({})"),
@@ -1932,7 +2222,6 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
     ("{name} — unsaved changes", "{}: nicht gespeicherte Änderungen"),
     ("Combined {#} files", "{} Dateien zusammengeführt"),
     ("Extracted {#} page(s)", "{} Seite(n) extrahiert"),
-    ("Exported {#} image{s}", "{0} {0|Bild|Bilder} exportiert"),
     ("Exported {#} image{s}", "{0} {0|Bild|Bilder} exportiert"),
     ("Exported the text of {#} page{s}", "Text von {0} {0|Seite|Seiten} exportiert"),
     ("Exported to {}", "Exportiert nach {}"),
@@ -2092,6 +2381,13 @@ mod tests {
         // No German label contains an em dash.
         for (_, de) in EXACT.iter().chain(TEMPLATES) {
             assert!(!de.contains('—'), "{de}");
+        }
+        // Every key once: a later duplicate would silently win.
+        for table in [EXACT, TEMPLATES] {
+            let mut seen = std::collections::HashSet::new();
+            for (en, _) in table {
+                assert!(seen.insert(*en), "{en:?} twice");
+            }
         }
         // Every template parses into as many parts as it has placeholders.
         for t in PARSED.iter() {

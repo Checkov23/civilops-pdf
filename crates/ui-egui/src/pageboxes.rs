@@ -1,7 +1,7 @@
 //! Set Page Boxes (Acrobat: Organize pages ▸ Set page boxes / Crop pages ▸ double-click), M4.4.
 //!
-//! Choose a box (crop, trim, bleed, art, media), margins from the media box in points, inches or
-//! millimetres, and the pages. A preview shows the current page's media box and the new box.
+//! Choose a box (crop, trim, bleed, art, media), margins from the media box in points, inches,
+//! millimetres or centimetres, and the pages. A preview shows the current page's media box and the new box.
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
 use printcraft_engine::{BoxSpec, Edit, PageBox};
@@ -9,30 +9,7 @@ use printcraft_engine::{BoxSpec, Edit, PageBox};
 use crate::theme::{self, Tokens};
 use crate::{PrintCraftApp, widgets};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unit {
-    Points,
-    Inches,
-    Millimetres,
-}
-
-impl Unit {
-    fn per_point(self) -> f64 {
-        match self {
-            Unit::Points => 1.0,
-            Unit::Inches => 1.0 / 72.0,
-            Unit::Millimetres => 25.4 / 72.0,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Unit::Points => "pt",
-            Unit::Inches => "in",
-            Unit::Millimetres => "mm",
-        }
-    }
-}
+pub use crate::units::Unit;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Range {
@@ -93,7 +70,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let boxes = doc.page_boxes();
     let count = boxes.len().max(1);
+    let units = app.units;
     let d = &mut app.boxes_draft;
+    // Opening the dialog starts in the unit chosen in Preferences.
+    if d.seeded.is_none() {
+        d.unit = units;
+    }
     // Seed the margins from the current page's box when the dialog opens or the box changes.
     if d.seeded != Some((current, d.which))
         && let Some(b) = boxes.get(current)
@@ -106,12 +88,12 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
         };
         d.seeded = Some((current, d.which));
     }
-    ui.label(egui::RichText::new("Set Page Boxes").font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!("Set Page Boxes")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             egui::Grid::new("boxes-grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                ui.label("Box");
+                ui.label(tl!("Box"));
                 let names = [
                     (PageBox::Crop, "CropBox"),
                     (PageBox::Trim, "TrimBox"),
@@ -126,18 +108,18 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
                     }
                 });
                 ui.end_row();
-                ui.label("Units");
+                ui.label(tl!("Units"));
                 egui::ComboBox::from_id_salt("boxes-unit").selected_text(d.unit.label()).show_ui(ui, |ui| {
-                    for u in [Unit::Inches, Unit::Millimetres, Unit::Points] {
+                    for u in Unit::ALL {
                         ui.selectable_value(&mut d.unit, u, u.label());
                     }
                 });
                 ui.end_row();
                 let k = d.unit.per_point();
-                for (label, idx) in [("Top", 3), ("Bottom", 1), ("Left", 0), ("Right", 2)] {
+                for (label, idx) in [(tl!("Top"), 3), (tl!("Bottom"), 1), (tl!("Left"), 0), (tl!("Right"), 2)] {
                     let l = ui.label(label);
                     let mut v = d.margins[idx] * k;
-                    let speed = if d.unit == Unit::Inches { 0.01 } else { 0.5 };
+                    let speed = d.unit.speed();
                     let r = ui
                         .add(egui::DragValue::new(&mut v).speed(speed).range(0.0..=10_000.0).max_decimals(3).suffix(format!(" {}", d.unit.label())))
                         .labelled_by(l.id);
@@ -147,25 +129,30 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
                     ui.end_row();
                 }
                 ui.label("");
-                if ui.button("Set to zero").clicked() {
+                if ui.button(tl!("Set to zero")).clicked() {
                     d.margins = [0.0; 4];
                 }
                 ui.end_row();
-                ui.label("Pages");
+                ui.label(tl!("Pages"));
                 ui.vertical(|ui| {
-                    ui.radio_value(&mut d.range, Range::All, "All");
-                    ui.radio_value(&mut d.range, Range::Current, format!("Current page ({})", current + 1));
+                    widgets::radio_value(ui, &mut d.range, Range::All, tl!("All"));
+                    widgets::radio_value(
+                        ui,
+                        &mut d.range,
+                        Range::Current,
+                        crate::i18n::fmt(tl!("Current page ({n})"), &[("n", &(current + 1).to_string())]),
+                    );
                     let (mut a, mut b) = match d.range {
                         Range::Pages(a, b) => (a, b),
                         _ => (1, count),
                     };
                     ui.horizontal(|ui| {
                         let on = matches!(d.range, Range::Pages(..));
-                        if ui.radio(on, "From").clicked() {
+                        if ui.add(widgets::radio(on, tl!("From"))).clicked() {
                             d.range = Range::Pages(a, b);
                         }
                         let ra = ui.add(egui::DragValue::new(&mut a).range(1..=count));
-                        ui.label("to");
+                        ui.label(tl!("to"));
                         let rb = ui.add(egui::DragValue::new(&mut b).range(1..=count));
                         if ra.changed() || rb.changed() {
                             d.range = Range::Pages(a.min(b), b.max(a));
@@ -193,7 +180,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
             ui.painter().text(
                 page.center_bottom() + vec2(0.0, 6.0),
                 egui::Align2::CENTER_TOP,
-                format!("Page {}", current + 1),
+                crate::i18n::fmt(tl!("Page {label}"), &[("label", &(current + 1).to_string())]),
                 theme::regular(11.0),
                 t.text_faint,
             );
@@ -202,10 +189,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> (b
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if widgets::pill_button(ui, "OK", true).clicked() {
+        if widgets::pill_button(ui, tl!("OK"), true).clicked() {
             apply = true;
         }
-        if widgets::pill_button(ui, "Cancel", false).clicked() {
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             cancel = true;
         }
     });

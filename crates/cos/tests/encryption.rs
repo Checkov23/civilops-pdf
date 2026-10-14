@@ -103,6 +103,36 @@ fn empty_user_password_opens_but_reports_restrictions() {
 }
 
 #[test]
+fn the_permissions_password_unlocks_an_open_document() {
+    for alg in ALL {
+        // Only a permissions password: opens without asking, restricted (#995).
+        let mut doc = Document::open(Arc::new(protect(alg, "", "perms", 0b0100))).unwrap();
+        // Read something before unlocking: it must stay readable afterwards.
+        assert_eq!(content(&doc), SECRET, "{alg:?}");
+        assert_eq!(doc.unlock("").unwrap_err(), CosError::WrongPassword, "{alg:?}");
+        assert_eq!(doc.unlock("nope").unwrap_err(), CosError::WrongPassword, "{alg:?}");
+        assert!(!doc.permissions().unwrap().modify(), "{alg:?}: still restricted");
+        doc.unlock("perms").unwrap();
+        assert_eq!(doc.security().unwrap().auth(), Auth::Owner, "{alg:?}");
+        assert!(doc.permissions().unwrap().modify(), "{alg:?}");
+        assert_eq!(content(&doc), SECRET, "{alg:?}");
+        assert_eq!(title(&doc).as_deref(), Some("Quarterly numbers"), "{alg:?}");
+        // Unlocked, security can be removed.
+        doc.remove_encryption();
+        let plain = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(Document::open(Arc::new(plain)).unwrap().security().is_none(), "{alg:?}");
+    }
+    // Opened with a separate open password: that password doesn't unlock.
+    let mut doc = Document::open_with_password(Arc::new(protect(Algorithm::Aes256, "open", "perms", 0b0100)), Some("open")).unwrap();
+    assert_eq!(doc.unlock("open").unwrap_err(), CosError::WrongPassword);
+    doc.unlock("perms").unwrap();
+    assert!(doc.permissions().unwrap().modify());
+    // Nothing to unlock: unencrypted, or already the owner.
+    Document::open(Arc::new(fixture())).unwrap().unlock("anything").unwrap();
+    doc.unlock("anything").unwrap();
+}
+
+#[test]
 fn incremental_edits_of_encrypted_documents_stay_encrypted() {
     for alg in ALL {
         let original = protect(alg, "user", "owner", -1);
@@ -194,4 +224,58 @@ fn qpdf_agrees() {
         }
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A signature dictionary's `/Contents` is never encrypted (§7.6.2): signers patch it in place
+/// after hashing the file around it. Its other strings, and the `/Contents` of anything that
+/// is not a signature dictionary, are encrypted as usual, and reading leaves it untouched.
+#[test]
+fn signature_contents_stay_unencrypted() {
+    for alg in ALL {
+        let mut doc = Document::open(Arc::new(fixture())).unwrap();
+        let hex = |b: &[u8]| Object::String(PdfString { bytes: b.to_vec(), hex: true });
+        let byte_range = Object::Array([0, 10, 20, 30].into_iter().map(Object::Int).collect());
+        let mut sig = printcraft_cos::Dict::new();
+        sig.set(b"Type".to_vec(), Object::name("Sig"));
+        sig.set(b"Contents".to_vec(), hex(&[0x30, 0x82, 0xDE, 0xAD]));
+        sig.set(b"ByteRange".to_vec(), byte_range.clone());
+        sig.set(b"Name".to_vec(), PdfString::literal(b"Signer Name".to_vec()));
+        let sig = doc.add(Object::Dict(sig));
+        // No /Type: still a signature dictionary by its /Contents and /ByteRange.
+        let mut untyped = printcraft_cos::Dict::new();
+        untyped.set(b"Contents".to_vec(), hex(&[0x30, 0x82, 0xBE, 0xEF]));
+        untyped.set(b"ByteRange".to_vec(), byte_range);
+        let untyped = doc.add(Object::Dict(untyped));
+        let mut note = printcraft_cos::Dict::new();
+        note.set(b"Type".to_vec(), Object::name("Annot"));
+        note.set(b"Contents".to_vec(), PdfString::literal(b"Private note".to_vec()));
+        let note = doc.add(Object::Dict(note));
+        doc.update_dict(doc.root().unwrap(), |c| {
+            c.set(b"Test".to_vec(), Object::Array(vec![Object::Ref(sig), Object::Ref(untyped), Object::Ref(note)]))
+        })
+        .unwrap();
+        doc.set_encryption(&NewEncryption {
+            algorithm: alg,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [3; 32],
+        })
+        .unwrap();
+        let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(raw.contains("<3082DEAD>") && raw.contains("<3082BEEF>"), "{alg:?}: signature /Contents written as is");
+        assert!(!raw.contains("Signer Name") && !raw.contains("Private note"), "{alg:?}: other strings are encrypted");
+        let back = Document::open(Arc::new(bytes)).unwrap();
+        let test = back.get(back.root().unwrap()).as_dict().unwrap().get(b"Test").unwrap().as_array().unwrap().clone();
+        let string = |i: usize, key: &[u8]| {
+            let o = back.resolve(&test[i]);
+            o.as_dict().unwrap().get(key).unwrap().as_string().unwrap().bytes.clone()
+        };
+        assert_eq!(string(0, b"Contents"), [0x30, 0x82, 0xDE, 0xAD], "{alg:?}: read back without decrypting");
+        assert_eq!(string(0, b"Name"), b"Signer Name", "{alg:?}");
+        assert_eq!(string(1, b"Contents"), [0x30, 0x82, 0xBE, 0xEF], "{alg:?}");
+        assert_eq!(string(2, b"Contents"), b"Private note", "{alg:?}");
+    }
 }

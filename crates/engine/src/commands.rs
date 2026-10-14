@@ -24,6 +24,8 @@ pub enum Needs {
     Modification,
     /// The open document's security allows adding and changing comments.
     Annotate,
+    /// The open document's security allows copying text and images out of it.
+    Copying,
     /// The document has form fields and its security allows filling them in.
     FillForms,
     /// The document has comments and allows changes.
@@ -34,14 +36,21 @@ pub enum Needs {
     HasRedactions,
     /// The document has page marks of this kind and allows changes.
     Marks(crate::MarkKind),
-    /// The document's security may be changed (owner, or nothing restricted).
+    /// The document's security may be changed (owner, or nothing restricted), or would be
+    /// once its permissions password is entered.
     Security,
-    /// The document is protected and its security may be removed.
+    /// The document is protected and its security may be removed (perhaps after entering
+    /// its permissions password).
     ProtectedSecurity,
+    /// The document's restrictions can be lifted with its permissions password.
+    Unlock,
     /// There is something to undo.
     Undo,
     /// There is something to redo.
     Redo,
+    /// A document is open in two-page view. The engine has no views, so it checks the
+    /// document and the frontend checks the view.
+    TwoPageView,
 }
 
 /// A keyboard shortcut. `command` is ⌘ on macOS and Ctrl elsewhere.
@@ -51,17 +60,24 @@ pub struct Shortcut {
     pub shift: bool,
     /// ⌃ on macOS (in addition to ⌘); unused elsewhere.
     pub mac_ctrl: bool,
-    /// Key name: a letter, a digit, or `Delete`.
+    /// Key name: a letter, a digit, punctuation such as `,`, or `Delete`.
     pub key: &'static str,
 }
 
 impl Shortcut {
-    const fn cmd(key: &'static str) -> Self {
+    /// ⌘ (Ctrl elsewhere) and `key`.
+    pub const fn cmd(key: &'static str) -> Self {
         Self { command: true, shift: false, mac_ctrl: false, key }
     }
 
-    const fn cmd_shift(key: &'static str) -> Self {
+    /// ⇧⌘ (Ctrl+Shift elsewhere) and `key`.
+    pub const fn cmd_shift(key: &'static str) -> Self {
         Self { command: true, shift: true, mac_ctrl: false, key }
+    }
+
+    /// The command modifier on its own, for text such as "⌘-scroll" / "Ctrl-scroll".
+    pub fn command_name(mac: bool) -> &'static str {
+        if mac { "⌘" } else { "Ctrl" }
     }
 
     /// How the shortcut is written in menus: `⇧⌘S` on macOS, `Ctrl+Shift+S` elsewhere.
@@ -146,11 +162,24 @@ const HELP: Option<&str> = Some("Help");
 /// Every command, in menu order.
 pub const COMMANDS: &[CommandSpec] = &[
     c("file.open", "Open…", FILE, Some(Shortcut::cmd("O")), Nothing, "folder-open"),
+    c("file.open_recent", "Open Recent", FILE, None, Nothing, "clock"),
+    // Shown at the foot of File ▸ Open Recent and on Home, not as its own File menu item.
+    c("file.clear_recent", "Clear Recent Files", None, None, Nothing, "trash-2"),
+    c("file.pin_folder", "Pin folder to Home…", FILE, None, Nothing, "folder-plus"),
     c("create.blank", "New blank PDF", FILE, None, Nothing, "file-plus-2"),
+    c("measure.distance", "Measure distance", None, None, Annotate, "ruler"),
+    c("measure.perimeter", "Measure perimeter", None, None, Annotate, "ruler"),
+    c("measure.area", "Measure area", None, None, Annotate, "ruler"),
+    c("measure.scale", "Set measurement scale", None, None, Annotate, "ruler"),
+    c("measure.info", "Measurement information", None, None, Document, "ruler"),
+    c("measure.snap", "Measurement snapping", None, None, Document, "ruler"),
+    c("measure.export", "Export measurements as CSV", None, None, Document, "file-output"),
     c("page.copy", "Copy pages", None, None, Document, "copy"),
     c("page.cut", "Cut pages", None, None, Assembly, "scissors"),
     c("page.paste", "Paste pages", None, None, Assembly, "clipboard-paste"),
     c("create.file", "Create PDF from file…", FILE, None, Nothing, "file-input"),
+    c("create.multiple", "Create PDF from multiple files…", FILE, None, Nothing, "files"),
+    c("create.multiple_separate", "Create separate PDFs…", FILE, None, Nothing, "files"),
     c("create.images", "Create PDF from images…", FILE, None, Nothing, "image"),
     c("create.clipboard", "Create PDF from clipboard", FILE, None, Nothing, "copy-plus"),
     c("page.combine", "Combine files…", FILE, None, Nothing, "files"),
@@ -166,12 +195,33 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.find", "Find…", EDIT, Some(Shortcut::cmd("F")), Document, "search"),
     c("edit.advanced_search", "Advanced search…", EDIT, Some(Shortcut::cmd_shift("F")), Document, "search"),
     c("view.palette", "Find tools and commands…", VIEW, Some(Shortcut::cmd("K")), Nothing, "search"),
-    c("view.fit_visible", "Fit visible", VIEW, Some(Shortcut::cmd("3")), Document, "scan"),
+    // Page display: View ▸ Page display and the rail's button list the base layouts as radios and
+    // continuous scrolling as a checkbox, so `menu = None` keeps them out of the generated menus.
+    // The palette still runs them.
+    c("view.layout.single", "Single page", None, None, Document, "file-text"),
+    c("view.layout.two_up", "Two-page view", None, None, Document, "columns-2"),
+    c("view.continuous", "Continuous scrolling", None, None, Document, "arrow-up-down"),
+    c("view.layout.cover", "Show cover page in two-page view", None, None, TwoPageView, "bookmark"),
+    // Acrobat's view modes, a page display and a zoom at once (the rail's Page display menu).
+    c("view.fit_width_scrolling", "Fit to width scrolling", None, None, Document, "arrow-left-right"),
+    c("view.fit_one_page", "Fit one full page", None, None, Document, "maximize-2"),
+    // In View ▸ Zoom with the view-local zoom keys, so `menu = None` keeps it out of the generated
+    // View menu (where it would show twice). The palette and ⌘3 still run it.
+    c("view.fit_visible", "Fit visible", None, Some(Shortcut::cmd("3")), Document, "scan"),
     c("view.marquee_zoom", "Marquee zoom", VIEW, None, Document, "zoom-in"),
-    c("edit.snapshot", "Take a snapshot", EDIT, None, Document, "camera"),
+    // Acrobat's column select: drag a rectangle and select only the text inside it. Alt/Option-
+    // drag with the Select tool does the same; this is the way in where the desktop takes
+    // Alt-drag for moving windows (several Linux window managers).
+    c("edit.column_select", "Column select", EDIT, None, Document, "text-select"),
+    c("edit.snapshot", "Take a snapshot", EDIT, None, Copying, "camera"),
     c("view.full_screen", "Full screen mode", VIEW, Some(Shortcut::cmd("L")), Document, "maximize"),
     c("view.read_mode", "Read mode", VIEW, Some(Shortcut { command: true, shift: false, mac_ctrl: true, key: "H" }), Document, "book-open"),
-    c("view.theme", "Switch light / dark theme", VIEW, None, Nothing, "moon"),
+    c("view.focus_page_input", "Go to page…", VIEW, Some(Shortcut::cmd_shift("N")), Document, "text-cursor-input"),
+    c("ui.dock.reset", "Reset panel layout", VIEW, None, Nothing, "settings"),
+    c("view.theme", "Switch light / dark theme", None, None, Nothing, "moon"),
+    c("view.theme.system", "Use system setting", None, None, Nothing, "settings"),
+    c("view.theme.light", "Light gray", None, None, Nothing, "sun"),
+    c("view.theme.dark", "Dark gray", None, None, Nothing, "moon"),
     c("comment.list", "Comments panel", VIEW, None, Document, "message-square-text"),
     c("comment.note", "Add a sticky note", None, None, Annotate, "sticky-note"),
     c("comment.freetext", "Add a text box", None, None, Annotate, "type"),
@@ -192,9 +242,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("comment.replace", "Replace text", None, None, Annotate, "replace"),
     c("comment.attach", "Attach a file", None, None, Annotate, "paperclip"),
     c("comment.eraser", "Erase drawings", None, None, Annotate, "eraser"),
-    c("measure.length", "Measure length", None, None, Annotate, "ruler"),
-    c("measure.area", "Measure area", None, None, Annotate, "square-dashed"),
-    c("measure.scale", "Set scale…", None, None, Annotate, "sliders-horizontal"),
+    c("plan.length", "Measure length", None, None, Annotate, "ruler"),
+    c("plan.area", "Measure area", None, None, Annotate, "square-dashed"),
+    c("plan.scale", "Set scale…", None, None, Annotate, "sliders-horizontal"),
     c("form.fields", "Form fields panel", VIEW, None, Document, "list"),
     c("form.clear", "Clear form", EDIT, None, FillForms, "eraser"),
     c("comment.flatten", "Flatten comments", None, None, HasComments, "layers"),
@@ -260,24 +310,28 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("sign.fill.signature.remove", "Fill & Sign: remove saved signature", None, None, Nothing, "x"),
     c("sign.fill.initials.remove", "Fill & Sign: remove saved initials", None, None, Nothing, "x"),
     c("sign.fill.initials.change", "Fill & Sign: change initials", None, None, Nothing, "signature"),
-    c("export.image", "Export to image…", FILE, None, Document, "image"),
+    c("export.image", "Export to image…", FILE, None, Copying, "image"),
     c("optimize.reduce", "Reduce file size…", FILE, None, Document, "file-down"),
     c("optimize.advanced", "Optimize PDF…", FILE, None, Document, "settings-2"),
-    c("export.text", "Export to text…", FILE, None, Document, "type"),
-    c("export.docx", "Export to Word…", FILE, None, Document, "file-text"),
-    c("export.html", "Export to HTML…", FILE, None, Document, "file-symlink"),
-    c("export.rtf", "Export to RTF…", FILE, None, Document, "file-text"),
-    c("app.preferences", "Preferences…", None, None, Nothing, "settings"),
+    c("export.text", "Export to text…", FILE, None, Copying, "type"),
+    c("export.docx", "Export to Word…", FILE, None, Copying, "file-text"),
+    c("export.pptx", "Export to PowerPoint…", FILE, None, Copying, "presentation"),
+    c("export.html", "Export to HTML…", FILE, None, Copying, "file-symlink"),
+    c("export.rtf", "Export to RTF…", FILE, None, Copying, "file-text"),
+    c("app.preferences", "Preferences…", EDIT, Some(Shortcut::cmd(",")), Nothing, "settings"),
     c("tools.js_console", "JavaScript console…", None, Some(Shortcut::cmd("J")), Document, "square-terminal"),
     c("tools.document_js", "Document JavaScripts…", None, None, Modification, "file-code"),
     // CivilOps PDF: in the Edit menu, so the text recognition is found without the tool list.
     c("ocr.recognize", "Recognize text…", EDIT, None, Modification, "scan-text"),
+    c("ocr.enhance_camera", "Enhance camera image", None, None, Modification, "camera"),
     c("ocr.recognize_batch", "Recognize text in multiple files…", None, None, Nothing, "files"),
     c("a11y.check", "Check for accessibility…", None, None, Document, "accessibility"),
+    c("a11y.autotag", "Automatically tag PDF", None, None, Document, "tag"),
     c("a11y.report", "Open accessibility report", None, None, Document, "file-text"),
     c("a11y.reading_options", "Change reading options…", None, None, Document, "book-open"),
     c("a11y.alt_text", "Add alternate text…", None, None, Modification, "image"),
-    c("export.all_images", "Export all images…", FILE, None, Document, "image"),
+    c("a11y.tags", "Tags panel", None, None, Document, "tag"),
+    c("export.all_images", "Export all images…", FILE, None, Copying, "image"),
     c("edit.header_footer", "Add header & footer…", None, None, Modification, "heading"),
     c("edit.header_footer.update", "Update header & footer…", None, None, Marks(crate::MarkKind::HeaderFooter), "heading"),
     c("edit.header_footer.remove", "Remove header & footer", None, None, Marks(crate::MarkKind::HeaderFooter), "heading"),
@@ -289,9 +343,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("edit.background.remove", "Remove background", None, None, Marks(crate::MarkKind::Background), "palette"),
     c("protect.password", "Protect using password…", FILE, None, Security, "lock"),
     c("protect.remove", "Remove security", FILE, None, ProtectedSecurity, "lock-open"),
+    c("protect.unlock", "Enter permissions password…", None, None, Unlock, "lock-open"),
     c("protect.properties", "Security properties…", FILE, None, Document, "shield-check"),
     c("page.organize", "Organize pages", PAGES, None, Document, "layout-grid"),
     c("bookmark.add", "New bookmark", PAGES, Some(Shortcut::cmd("B")), Assembly, "bookmark-plus"),
+    c("bookmark.from_structure", "New bookmarks from structure", PAGES, None, Assembly, "list"),
     c("page.rotate", "Rotate pages clockwise", PAGES, None, Assembly, "rotate-cw"),
     c("page.rotate_ccw", "Rotate pages counterclockwise", PAGES, None, Assembly, "rotate-ccw"),
     c("page.delete", "Delete pages", PAGES, None, Assembly, "trash-2"),
@@ -307,6 +363,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("page.number", "Number pages…", PAGES, None, Assembly, "hash"),
     c("help.shortcuts", "Keyboard shortcuts", HELP, None, Nothing, "circle-help"),
     c("help.website", "CivilOps website", HELP, None, Nothing, "globe"),
+    c("help.donate", "Donate", HELP, None, Nothing, "heart"),
     c("help.check_updates", "Check for updates…", HELP, None, Nothing, "cloud"),
     c("help.about", "About CivilOps PDF", HELP, None, Nothing, "info"),
 ];
@@ -325,29 +382,40 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
     let doc = active.and_then(|id| session.get(id));
     match spec.needs {
         Nothing => true,
-        Document => doc.is_some(),
+        Document | TwoPageView => doc.is_some(),
         Assembly => doc.is_some_and(|d| d.allows_assembly()),
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
+        Copying => doc.is_some_and(|d| d.allows_copying()),
         FillForms => doc.is_some_and(|d| d.allows_form_filling() && !d.form.is_empty()),
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks.contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),
         HasFields => doc.is_some_and(|d| d.allows_modification() && !d.form.is_empty()),
         HasRedactions => doc.is_some_and(|d| d.allows_modification() && d.redaction_marks() > 0),
-        Security => doc.is_some_and(|d| d.allows_security_change()),
-        ProtectedSecurity => doc.is_some_and(|d| d.allows_security_change() && d.security_summary().is_some()),
+        Security => doc.is_some_and(|d| d.allows_security_change() || d.can_unlock()),
+        ProtectedSecurity => doc.is_some_and(|d| (d.allows_security_change() || d.can_unlock()) && d.security_summary().is_some()),
+        Unlock => doc.is_some_and(|d| d.can_unlock()),
         Undo => doc.is_some_and(|d| d.can_undo().is_some()),
         Redo => doc.is_some_and(|d| d.can_redo().is_some()),
     }
 }
 
+/// The edit `spec` names now, with the wording that names it ("Undo {}"), so an interface can say
+/// each part in its own language. `None` for every other command, and when there is nothing to undo.
+pub fn current_edit<'a>(spec: &CommandSpec, session: &'a Session, active: Option<DocId>) -> Option<(&'static str, &'a crate::Label)> {
+    let doc = active.and_then(|id| session.get(id))?;
+    match spec.id {
+        "edit.undo" => doc.undo_label().map(|l| ("Undo {}", l)),
+        "edit.redo" => doc.redo_label().map(|l| ("Redo {}", l)),
+        _ => None,
+    }
+}
+
 /// The label to show for `spec` now ("Undo Rotate page" rather than "Undo").
 pub fn current_label(spec: &CommandSpec, session: &Session, active: Option<DocId>) -> String {
-    let doc = active.and_then(|id| session.get(id));
-    match (spec.id, doc) {
-        ("edit.undo", Some(d)) => d.can_undo().map(|l| format!("Undo {l}")).unwrap_or_else(|| spec.label.into()),
-        ("edit.redo", Some(d)) => d.can_redo().map(|l| format!("Redo {l}")).unwrap_or_else(|| spec.label.into()),
-        _ => spec.label.into(),
+    match current_edit(spec, session, active) {
+        Some((wording, label)) => wording.replacen("{}", label.as_str(), 1),
+        None => spec.label.into(),
     }
 }
 
@@ -386,6 +454,11 @@ mod tests {
         assert_eq!(s.label(true), "⇧⌘S");
         assert_eq!(s.label(false), "Ctrl+Shift+S");
         assert_eq!(command("view.read_mode").unwrap().shortcut.unwrap().label(true), "⌃⌘H");
+        assert_eq!(Shortcut::cmd("+").label(false), "Ctrl++");
+        assert_eq!(Shortcut::cmd_shift("−").label(true), "⇧⌘−");
+        assert_eq!(Shortcut::cmd_shift("−").label(false), "Ctrl+Shift+−");
+        assert_eq!(Shortcut::command_name(true), "⌘");
+        assert_eq!(Shortcut::command_name(false), "Ctrl");
     }
 
     #[test]

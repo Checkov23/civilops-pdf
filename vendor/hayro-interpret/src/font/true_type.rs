@@ -1,5 +1,5 @@
 use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
-use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard};
+use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win_ansi};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
     Encoding, FallbackFontQuery, FontFlags, glyph_name_to_unicode, read_to_unicode,
@@ -191,7 +191,7 @@ impl TrueTypeFont {
 
         match &self.kind {
             Kind::Embedded(e) => e
-                .code_to_name(code as u8)
+                .code_to_unicode_name(code as u8)
                 .and_then(glyph_name_to_unicode)
                 .map(BfString::Char),
             Kind::Standard(s) => s.char_code_to_unicode(code as u8).map(BfString::Char),
@@ -275,6 +275,19 @@ impl EmbeddedKind {
             // See PDFJS-6410 - PDF has no base encoding, so let's fallback to
             // standard here.
             .or_else(|| standard::get(code))
+    }
+
+    /// PrintCraft patch: the glyph name text extraction reads a code as. Without a base encoding
+    /// a TrueType font's codes are read as WinAnsi, matching pdftotext's output, not as
+    /// Standard: OCR engines write the text layer of a scan with WinAnsi codes and no
+    /// `/Encoding`, and Standard has no name for ü, ö or ß and gives é (0xE9) as Ø. Glyph
+    /// selection (`code_to_name`) is unchanged.
+    fn code_to_unicode_name(&self, code: u8) -> Option<&str> {
+        self.differences
+            .get(&code)
+            .map(|s| s.as_str())
+            .or_else(|| self.encoding.map_code(code))
+            .or_else(|| win_ansi::get(code))
     }
 
     fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
@@ -399,18 +412,15 @@ pub(crate) fn read_widths(dict: &Dict<'_>, descriptor: &Dict<'_>) -> Option<(Vec
     let missing_width = descriptor.get::<f32>(MISSING_WIDTH).unwrap_or(0.0);
 
     if let (Some(fc), Some(lc), Some(w)) = (first_char, last_char, widths_arr) {
-        let iter = w.iter::<f32>().take(lc.checked_sub(fc)?.checked_add(1)?);
-
-        for _ in 0..fc {
-            widths.push(Width::Missing);
-        }
-
-        for w in iter {
-            widths.push(Width::Value(w));
-        }
-
-        while widths.len() <= (u8::MAX as usize) + 1 {
-            widths.push(Width::Missing);
+        // PrintCraft patch: simple-font codes are single bytes, so only codes up to 255 get an
+        // entry (one per code below /FirstChar was pushed: 4294967295 asked for 34 GB). An
+        // entry that isn't a number leaves its code missing instead of ending the array, and a
+        // /LastChar below /FirstChar means no widths rather than no font.
+        widths = vec![Width::Missing; u8::MAX as usize + 1];
+        for (code, entry) in (fc..=lc.min(u8::MAX as usize)).zip(w.iter::<Object<'_>>()) {
+            if let (Some(slot), Object::Number(n)) = (widths.get_mut(code), entry) {
+                *slot = Width::Value(n.as_f32());
+            }
         }
     }
 

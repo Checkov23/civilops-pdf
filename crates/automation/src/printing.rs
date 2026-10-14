@@ -12,8 +12,29 @@ fn bad(m: impl Into<String>) -> ToolError {
 
 impl Automation {
     pub(crate) fn printers(&self) -> Result<Value> {
-        let list: Vec<Value> = spool::printers().into_iter().map(|p| json!({ "name": p.name, "default": p.default })).collect();
+        let list: Vec<Value> = spool::printers()
+            .into_iter()
+            .map(|p| {
+                let mut v = json!({ "name": p.name, "default": p.default });
+                if let Some(two_sided) = p.two_sided {
+                    v["two_sided"] = json!(two_sided);
+                }
+                v
+            })
+            .collect();
         Ok(json!({ "count": list.len(), "printers": list }))
+    }
+
+    pub(crate) fn printer_options(&self, a: &Args) -> Result<Value> {
+        let printer = a.str("printer")?;
+        let list: Vec<Value> = spool::printer_options(printer)
+            .into_iter()
+            .map(|o| {
+                let choices: Vec<Value> = o.choices.iter().map(|(value, label)| json!({ "value": value, "label": label })).collect();
+                json!({ "key": o.key, "label": o.label, "group": o.group, "default": o.default, "choices": choices })
+            })
+            .collect();
+        Ok(json!({ "printer": printer, "count": list.len(), "options": list }))
     }
 
     pub(crate) fn doc_print(&mut self, a: &Args) -> Result<Value> {
@@ -40,12 +61,14 @@ impl Automation {
                     "horizontal-reversed" => PageOrder::HorizontalReversed,
                     "vertical" => PageOrder::Vertical,
                     "vertical-reversed" => PageOrder::VerticalReversed,
+                    "cut-stack" => PageOrder::CutStack,
                     o => return Err(bad(format!("unknown order {o:?}"))),
                 };
                 match Layout::multiple(per) {
-                    Layout::Multiple { cols, rows, .. } => Layout::Multiple {
+                    Layout::Multiple { cols, rows, per_sheet, .. } => Layout::Multiple {
                         cols,
                         rows,
+                        per_sheet,
                         order,
                         border: a.opt_bool("border")?.unwrap_or(false),
                         auto_rotate: a.opt_bool("auto_rotate")?.unwrap_or(true),
@@ -69,6 +92,12 @@ impl Automation {
             },
             l => return Err(bad(format!("unknown layout {l:?}"))),
         };
+        if matches!(layout, Layout::Multiple { order: PageOrder::CutStack, .. }) && a.opt_str("duplex")?.unwrap_or("off") != "off" {
+            return Err(bad("cut-and-stack printing needs duplex off (single-sided sheets)"));
+        }
+        if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {
+            return Err(bad("cut-stack order needs layout multiple"));
+        }
         let orientation = match a.opt_str("orientation")?.unwrap_or("auto") {
             "auto" => Orientation::Auto,
             "portrait" => Orientation::Portrait,
@@ -86,9 +115,15 @@ impl Automation {
             None => PAPERS[0].1,
             Some(p) => PAPERS
                 .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(p) || n.replace("US ", "").eq_ignore_ascii_case(p))
+                .find(|(n, _)| {
+                    n.eq_ignore_ascii_case(p)
+                        || n.replace("US ", "").eq_ignore_ascii_case(p)
+                        || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
+                })
                 .map(|x| x.1)
-                .ok_or_else(|| bad(format!("unknown paper {p:?} (Letter, Legal, Tabloid, A3, A4, A5)")))?,
+                .ok_or_else(|| {
+                    bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")))
+                })?,
         };
         let settings = print::Settings { pages, paper, orientation, layout, content };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
@@ -107,14 +142,26 @@ impl Automation {
                     printer: if printer == "default" { None } else { Some(printer.to_string()) },
                     copies: a.opt_int("copies")?.unwrap_or(1).clamp(1, 999) as u32,
                     collate: a.opt_bool("collate")?.unwrap_or(true),
-                    duplex: match a.opt_str("duplex")?.unwrap_or("off") {
+                    duplex: Some(match a.opt_str("duplex")?.unwrap_or("off") {
                         "off" => spool::Duplex::Off,
                         "long-edge" => spool::Duplex::LongEdge,
                         "short-edge" => spool::Duplex::ShortEdge,
                         d => return Err(bad(format!("unknown duplex {d:?}"))),
-                    },
+                    }),
+                    scaling: spool::Scaling::Exact,
                     grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
                     title: name,
+                    options: match a.get("options") {
+                        None => Vec::new(),
+                        Some(Value::Object(m)) => m
+                            .iter()
+                            .map(|(k, v)| match v.as_str() {
+                                Some(v) => Ok((k.clone(), v.to_string())),
+                                None => Err(bad(format!("options.{k} must be a string (a choice from printer_options)"))),
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                        Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
+                    },
                 };
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }

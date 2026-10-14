@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, write_full, write_incremental};
+use printcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
 
 /// Four pages, a shared font, document info with a non-ASCII title.
 fn fixture() -> Vec<u8> {
@@ -89,6 +89,164 @@ fn incremental_saves_stack_on_an_xref_stream_file() {
     assert_eq!(hayro_pages(&updated), 4);
 }
 
+/// The revision is joined to the original once, at its exact size. A revision of more than a few
+/// kilobytes used to outgrow the buffer: the whole original was copied a second time, and the
+/// result kept up to as much again unused for as long as it was the document's working bytes.
+#[test]
+fn incremental_saves_are_allocated_at_their_exact_size() {
+    let table = Arc::new(fixture());
+    let stream = Arc::new(write_full(&Document::open(table.clone()).unwrap(), &SaveOptions::default()).unwrap());
+    let no_newline = Arc::new(fixture().trim_ascii_end().to_vec());
+    for original in [table, stream, no_newline] {
+        let mut doc = Document::open(original.clone()).unwrap();
+        let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let added = doc.add(Object::Stream(Stream { dict: Dict::new(), raw: data.clone().into() }));
+        let updated = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(updated.capacity(), updated.len());
+        assert!(updated.starts_with(&original), "an incremental save only appends");
+        let back = Document::open(Arc::new(updated.clone())).unwrap();
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        match &*back.get(added) {
+            Object::Stream(s) => assert_eq!(*s.raw, data),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(hayro_pages(&updated), 4);
+    }
+}
+
+/// A full save grows its buffer as it writes, so it used to end with up to as much again unused,
+/// kept alive with the document's working bytes. It now ends at its exact size.
+#[test]
+fn full_saves_are_allocated_at_their_exact_size() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    let added = doc.add(Object::Stream(Stream { dict: Dict::new(), raw: Arc::new(data.clone()).into() }));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| d.set(b"Extra".to_vec(), Object::Ref(added))).unwrap();
+    for object_streams in [true, false] {
+        let full = write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
+        assert_eq!(full.capacity(), full.len(), "object streams: {object_streams}");
+        let back = Document::open(Arc::new(full.clone())).unwrap();
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        let extra = back.dict(&Object::Ref(back.root().unwrap())).and_then(|d| d.get(b"Extra").cloned()).unwrap();
+        match &*back.resolve(&extra) {
+            Object::Stream(s) => assert_eq!(*s.raw, data),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(hayro_pages(&full), 4);
+    }
+}
+
+/// A one-page classic-table file with no `/ID`, the case that used to append `xref` and then
+/// `trailer` with no subsection (#1339).
+fn classic_table() -> Vec<u8> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>",
+        "<< /Length 0 >>\nstream\n\nendstream",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    bytes
+}
+
+fn qpdf_check(bytes: &[u8]) -> Option<std::process::Output> {
+    let Ok(version) = std::process::Command::new("qpdf").arg("--version").output() else {
+        return None;
+    };
+    assert!(version.status.success());
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("printcraft-xref-{}-{n}.pdf", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let check = std::process::Command::new("qpdf").arg("--check").arg(&path).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+    Some(check)
+}
+
+fn page(doc: &Document) -> Dict {
+    let root = doc.resolve(doc.trailer().get(b"Root").unwrap());
+    let pages = doc.resolve(root.as_dict().unwrap().get(b"Pages").unwrap());
+    let kids = pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap();
+    doc.resolve(kids.first().unwrap()).as_dict().cloned().unwrap()
+}
+
+fn assert_qpdf_clean(bytes: &[u8]) {
+    let Some(check) = qpdf_check(bytes) else {
+        eprintln!("qpdf not installed: skipped");
+        return;
+    };
+    let report = format!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
+    assert!(check.status.success() && !report.contains("WARNING"), "{report}");
+}
+
+#[test]
+fn unchanged_incremental_save_of_a_classic_table_is_a_valid_xref() {
+    let input = classic_table();
+    let doc = Document::open(Arc::new(input.clone())).unwrap();
+    assert!(!doc.is_modified());
+    assert!(doc.repair_log().is_empty());
+    assert_eq!(doc.revisions().len(), 1);
+    assert!(!doc.revisions()[0].is_stream);
+
+    let unchanged = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(unchanged.starts_with(&input));
+    let appended = &unchanged[input.len()..];
+    assert!(appended.windows(8).any(|w| w == b"xref\n0 0"), "a section with no entries still needs a subsection");
+    assert!(!appended.windows(13).any(|w| w == b"xref\ntrailer"));
+
+    let back = Document::open(Arc::new(unchanged.clone())).unwrap();
+    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+    assert_eq!(back.revisions().len(), 2);
+    assert_eq!(page(&back).name(b"Type"), Some(b"Page".as_slice()));
+    assert!(back.trailer().get(b"ID").is_some(), "a file without an identifier still receives one");
+    assert_eq!(hayro_pages(&unchanged), 1);
+    assert_qpdf_clean(&unchanged);
+
+    let mut edited = doc.clone();
+    edited.update_dict(ObjRef::new(3, 0), |d| d.set(b"Rotate".to_vec(), Object::Int(90))).unwrap();
+    let edited = write_incremental(&edited, &SaveOptions::default()).unwrap();
+    let edited_back = Document::open(Arc::new(edited.clone())).unwrap();
+    assert!(edited_back.repair_log().is_empty(), "{:?}", edited_back.repair_log());
+    assert_eq!(edited_back.get(ObjRef::new(3, 0)).as_dict().unwrap().int(b"Rotate"), Some(90));
+    assert_qpdf_clean(&edited);
+
+    let stamped = write_incremental(&doc, &SaveOptions { mod_date: Some("D:20260101000000Z".into()), ..SaveOptions::default() }).unwrap();
+    let stamped_back = Document::open(Arc::new(stamped.clone())).unwrap();
+    assert!(stamped_back.repair_log().is_empty(), "{:?}", stamped_back.repair_log());
+    let info = stamped_back.resolve(stamped_back.trailer().get(b"Info").unwrap());
+    assert_eq!(
+        info.as_dict().unwrap().get(b"ModDate").and_then(|d| d.as_string()).map(|s| s.bytes.as_slice()),
+        Some(b"D:20260101000000Z".as_slice())
+    );
+    assert_qpdf_clean(&stamped);
+}
+
+#[test]
+fn incremental_save_keeps_a_trailer_only_edit() {
+    let input = classic_table();
+    let mut doc = Document::open(Arc::new(input)).unwrap();
+    assert!(!doc.is_modified());
+    doc.trailer_mut().set(b"Custom".to_vec(), Object::String(printcraft_cos::PdfString::literal(b"keep me".to_vec())));
+    let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let back = Document::open(Arc::new(saved.clone())).unwrap();
+    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+    assert_eq!(back.trailer().get(b"Custom").and_then(|o| o.as_string()).map(|s| s.bytes.as_slice()), Some(b"keep me".as_slice()));
+    assert_eq!(hayro_pages(&saved), 1);
+    assert_qpdf_clean(&saved);
+}
+
 #[test]
 fn qpdf_accepts_object_stream_output() {
     let Ok(out) = std::process::Command::new("qpdf").arg("--version").output() else {
@@ -104,6 +262,35 @@ fn qpdf_accepts_object_stream_output() {
     let _ = std::fs::remove_file(&path);
     let report = String::from_utf8_lossy(&check.stdout);
     assert!(check.status.success() && report.contains("No syntax or stream encoding errors"), "{report}");
+}
+
+#[test]
+fn the_catalog_of_an_encrypted_document_stays_outside_object_streams() {
+    // Acrobat reports an encrypted file as damaged when its catalog is in an object stream,
+    // before asking for the password (#774). Unencrypted output still packs the catalog.
+    fn root_is_packed(bytes: &[u8], password: Option<&str>) -> bool {
+        let doc = Document::open_with_password(Arc::new(bytes.to_vec()), password).unwrap();
+        let root = doc.trailer().reference(b"Root").unwrap();
+        let direct = format!("\n{} 0 obj", root.num);
+        !bytes.windows(direct.len()).any(|w| w == direct.as_bytes())
+    }
+    let plain = Document::open(Arc::new(fixture())).unwrap();
+    assert!(root_is_packed(&write_full(&plain, &SaveOptions::default()).unwrap(), None), "unencrypted: catalog in an object stream");
+    let mut enc = plain.clone();
+    enc.set_encryption(&printcraft_cos::NewEncryption {
+        algorithm: printcraft_cos::Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let packed = write_full(&enc, &SaveOptions::default()).unwrap();
+    assert!(!root_is_packed(&packed, Some("user")), "encrypted: catalog must be a standalone object");
+    let back = Document::open_with_password(Arc::new(packed.clone()), Some("user")).expect("reopens");
+    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+    assert_eq!(title(&back), b"Caf\xe9 (draft)");
 }
 
 #[test]

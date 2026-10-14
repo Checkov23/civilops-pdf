@@ -28,6 +28,8 @@ fn one_page() -> Vec<u8> {
 fn harness(civilops: bool) -> Harness<'static, PrintCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
+        // The labels below are English, whatever language the system has.
+        app.set_option("language", "en").unwrap();
         app.civilops_layout = civilops;
         if civilops {
             app.left_open = false;

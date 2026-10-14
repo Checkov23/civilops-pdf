@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 printcraft-cos = { workspace = true }
 printcraft-fonts = { workspace = true }
+printcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

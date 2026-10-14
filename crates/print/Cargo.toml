@@ -9,12 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+craft-print = { workspace = true }
 printcraft-cos = { workspace = true }
 printcraft-content = { workspace = true }
 printcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
-# CivilOps PDF: Windows printing renders the sheets and hands them to the printer as images.
-[target.'cfg(windows)'.dependencies]
-printcraft-render = { workspace = true }
-png = "0.18"

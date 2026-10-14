@@ -1,6 +1,6 @@
 # printcraft-annot
 
-Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends only on `printcraft-cos`.
+Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `printcraft-cos`, `printcraft-fonts` and `printcraft-model`.
 
 ## What it does
 
@@ -10,7 +10,14 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends only on `printcraf
 - **Appearance streams** (`appearance::build`) generated from the annotation dictionary, so new
   and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`).
   Note icons are CivilOps PDF's own drawings. Text boxes use standard Helvetica (WinAnsi), with
-  line breaking by approximate Helvetica proportions (no font program is bundled).
+  line breaking by approximate Helvetica proportions (no font program is bundled). Text it can't
+  draw (in a text box, callout, Fill & Sign text, measurement label or dynamic stamp's by-line;
+  `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
+  the first such character (`printcraft_fonts::UNDRAWN_MARK`) so the engine reports the edit and
+  flattening refuses to make it permanent. Two refusals (`AnnotError::Undrawable`): a redaction
+  mark's overlay text, which becomes page content when applied; and a restyle or resize of a
+  comment another program drew with a font that has those characters, whose appearance is kept
+  rather than redrawn with `?` (new text for it is taken).
 - **Edits:** reply (`/IRT`), set review status (a `/State` reply, as Acrobat's "Set status"
   does), change text, move, resize, restyle, delete (with pop-up and replies).
 
@@ -23,6 +30,7 @@ set_review_state(&mut doc, page, index, ReviewState::Accepted, "Ada", &meta)?;
 move_annotation(&mut doc, page, index, dx, dy, &meta)?;
 set_style(&mut doc, page, index, Some(rgb), Some(0.5), Some(2.0), &meta)?;
 delete_annotation(&mut doc, page, index)?;
+signature_image(&doc, page, index)?; // embedded image XObject of Fill & Sign signature/initials
 ```
 
 A comment is addressed by `(page, index in /Annots)`, the same pair
@@ -37,6 +45,12 @@ deterministic; the engine supplies them.
   cloudy borders or callouts, instead of leaving a stale appearance.
 - Replies get the parent's `/Rect` and an empty appearance: they appear in comment lists but
   never paint a second icon.
+- Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
+  viewers scale that appearance into the new rectangle. Locked stamps refuse the edit.
+- Picture stamps (a natural-size or explicit-rectangle image, a PDF page, or an image
+  signature) and CivilOps PDF's rubber stamps counterrotate their appearance on rotated pages, so
+  the picture or label reads upright as the page is displayed. Restyling a picture stamp keeps
+  that appearance matrix. The rotation is the page's `/Rotate` at placement.
 
 ## Not yet
 

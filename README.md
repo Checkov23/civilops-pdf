@@ -24,9 +24,15 @@ zusammenstellen, unterschreiben und drucken. Läuft lokal unter Windows, ohne Ko
   dort installierten Sprachen), Bearbeiten ▸ Text erkennen.
 - **Kommentare, Formulare, Seiten ordnen, Schützen, Unterschreiben, Schwärzen, Exportieren** und
   mehr unter „Alle Werkzeuge“.
-- **Deutsche Oberfläche** (Einstellungen ▸ Sprache der Oberfläche: Deutsch, English, 日本語).
-- **Drucken unter Windows** über den Windows-Druckdienst (300 dpi, Papierformat und
-  Ausrichtung je Blatt, Exemplare, Sortieren, Duplex, Graustufen).
+- **Deutsche Oberfläche** mit „Sie“ und den Begriffen von CivilOps; dazu 21 weitere Sprachen
+  (Einstellungen ▸ Sprache der Oberfläche).
+- **Drucken** mit Vorschau je Blatt: Originalgröße (maßstabsgetreu), Anpassen, Poster,
+  mehrere Seiten je Blatt, Broschüre, Exemplare, beidseitig, Graustufen und die
+  Einstellungen des Druckertreibers.
+- **Ein Fenster**: Dateien, die Explorer oder Outlook öffnen, kommen als neuer Reiter in das
+  laufende Programm. Auf der Startseite lassen sich Ordner anheften (zum Beispiel der des
+  Scanners), die ihre neuesten PDFs zeigen.
+- **Spenden**: Hilfe ▸ Spenden, im Fenster „Über“ und auf der Startseite (PayPal).
 - **Installer und Updates** (Velopack): Installation pro Benutzer ohne Adminrechte, beim Start
   lädt das Programm eine neuere Fassung im Hintergrund und meldet sie; eingespielt wird beim
   nächsten Start oder mit „Jetzt neu starten“ (nur, wenn alles gespeichert ist).
@@ -72,15 +78,23 @@ Kanals. Das Protokoll der Update-Prüfung steht in `%LOCALAPPDATA%\CivilOpsPDF\a
 | Darstellung | `crates/render` (hayro, in `vendor/`) |
 | Oberfläche | `crates/ui-egui` (egui, in `vendor/egui` mit Übersetzungshaken) |
 | Werkzeugleiste | `crates/ui-egui/src/tool_bar.rs`, Menüs in `chrome.rs`, Farben in `theme.rs` |
-| Messen | `crates/annot/src/measure.rs`, `crates/ui-egui/src/measure_ui.rs` |
-| Objekte | `crates/edit/src/objects.rs`, `crates/ui-egui/src/objects_ui.rs` |
+| Messen | `crates/annot/src/measure.rs`, `crates/ui-egui/src/plan_measure_ui.rs` (die Messwerkzeuge von PDFCraft, `crates/measure` und `measure_ui.rs`, bleiben Befehle ohne eigenen Platz) |
+| Objekte | `crates/edit/src/plan_objects.rs`, `crates/ui-egui/src/objects_ui.rs` |
 | Texte | `crates/edit/src/text.rs`, `crates/ui-egui/src/edit_text_ui.rs` |
 | Texterkennung | `crates/ocr` (Windows: `win.rs`) |
-| Deutsch | `crates/ui-egui/src/i18n_de.rs` |
-| Drucken unter Windows | `crates/print/src/win_print.rs` |
+| Deutsch | `crates/ui-egui/src/i18n_de.rs` (gilt vor der deutschen Übersetzung von PDFCraft, `crates/ui-egui/src/i18n/de.tsv`); weitere Sprachen in `crates/ui-egui/src/i18n/` |
+| Drucken | `crates/print`, `crates/ui-egui/src/print_ui.rs` (unter Windows über craft-print) |
 | Automatik und Kommandozeile | `crates/automation`, `apps/printcraft-cli` |
 | Installer und Updates | `crates/aktualisierung` (Velopack), `crates/ui-egui/src/updates.rs`, `packaging/civilops/` |
 | Erscheinungsbild | `assets/civilops/` |
+
+## Abgleich mit PDFCraft
+
+CivilOps PDF ist aus PrintCraft entstanden, das heute PDFCraft heißt. Neuerungen von dort kommen
+gesammelt herein: Die Umbenennung wird zurückgedreht (PdfCraft → PrintCraft), dann wird mit
+dem zuletzt übernommenen Stand als Basis zusammengeführt und das Ergebnis als ein Commit
+veröffentlicht. Werkzeugleiste, Messen, Objekte, Deutsch, Texterkennung, Updates und Symbole
+bleiben die von CivilOps PDF. Zuletzt übernommen: PDFCraft 0.7.1 (Stand `7437bde`).
 
 ## Lizenz
 

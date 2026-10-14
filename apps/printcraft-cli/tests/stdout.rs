@@ -16,7 +16,7 @@ fn output_commands_exit_cleanly_when_the_reader_has_closed() {
     let base = std::env::temp_dir().join(format!("printcraft-cli-stdout-{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
     let pdf = base.join("text.pdf");
-    let bytes = printcraft_engine::Session::new().create_from_text("Pipe test", "Hello from PrintCraft").unwrap();
+    let bytes = printcraft_engine::Session::new().create_from_text("Pipe test", "Hello from CivilOps PDF").unwrap();
     std::fs::write(&pdf, bytes.as_slice()).unwrap();
     let path = pdf.to_str().unwrap();
     let script = base.join("steps.json");

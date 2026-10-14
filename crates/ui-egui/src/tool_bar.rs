@@ -140,7 +140,7 @@ fn tools(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .filter(|t| t.starts_with("1:"));
     let scale_label = scale.as_deref().unwrap_or("Scale");
     if tool(ui, "sliders-horizontal", scale_label, "Set the scale: 1:n or calibrate on the plan", comment(CommentTool::Calibrate), false).clicked() {
-        app.execute("measure.scale");
+        app.execute("plan.scale");
     }
     divider(ui, t);
     for (c, label, tip) in [

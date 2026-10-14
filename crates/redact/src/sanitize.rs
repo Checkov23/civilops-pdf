@@ -113,8 +113,10 @@ fn outline_len(doc: &Document, first: Option<&Object>, depth: usize) -> usize {
     n
 }
 
+/// A comment as the comments list sees it, less file attachments (removed with Attachments) and
+/// redaction marks.
 fn is_comment(subtype: &[u8]) -> bool {
-    !matches!(subtype, b"Link" | b"Widget" | b"Popup" | b"FileAttachment" | b"Redact")
+    !matches!(subtype, b"FileAttachment" | b"Redact") && printcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
 
 /// The layers that are off in the default configuration.
@@ -142,6 +144,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         return Ok(0);
     }
     let mut total = 0;
+    // The original image and form XObjects the rewrite drops or replaces, on any page.
+    let mut doomed = Vec::new();
     let n = printcraft_model::pages(doc).len();
     for pi in 0..n {
         let page = printcraft_model::pages(doc).swap_remove(pi);
@@ -166,6 +170,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         if !write {
             continue;
         }
+        doomed.extend_from_slice(&out.doomed);
         let mut new_list = list.clone();
         let mut changed = false;
         for (i, new) in out.streams.into_iter().enumerate() {
@@ -178,10 +183,20 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             new_list[i] = Object::Ref(doc.add(Object::Stream(printcraft_cos::Stream::flate(dict, &bytes))));
             changed = true;
         }
-        if changed || !out.xobjects.is_empty() {
+        if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
             let mut res = resources;
-            if !out.xobjects.is_empty() {
+            if !out.xobjects.is_empty() || !out.replaced.is_empty() {
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+                // A full save keeps whatever is still referenced: unlink the originals this page no
+                // longer draws so the removed form or image bytes cannot survive in the saved file.
+                let page_content: Vec<Vec<u8>> = new_list
+                    .iter()
+                    .map(|o| match &*doc.resolve(o) {
+                        Object::Stream(s) => s.decoded().unwrap_or_default(),
+                        _ => Vec::new(),
+                    })
+                    .collect();
+                crate::interp::prune(&mut xo, &out.replaced, &page_content);
                 for (n, r) in &out.xobjects {
                     xo.set(n.clone(), Object::Ref(*r));
                 }
@@ -193,6 +208,9 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             })?;
         }
     }
+    // What a page no longer draws must not stay reachable through an inherited or shared
+    // /Resources either.
+    crate::interp::unlink_doomed(doc, &doomed)?;
     Ok(total)
 }
 

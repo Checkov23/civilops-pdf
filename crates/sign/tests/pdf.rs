@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use printcraft_cos::{Document, Object, PdfString, SaveOptions, write_incremental};
-use printcraft_sign::{Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, der, pkcs12, signatures};
+use printcraft_sign::{
+    Detail, Modification, SignError, SignOptions, Status, Time, TimestampAuthority, TrustStore, WORDINGS, der, in_english, kind, pkcs12, signatures,
+};
 
 fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -40,6 +42,29 @@ fn open(b: &[u8]) -> Document {
     Document::open(Arc::new(b.to_vec())).unwrap()
 }
 
+#[test]
+fn standalone_timestamp_scan_survives_cache_batches_and_object_streams() {
+    let mut doc = open(&fixture());
+    let filler: Vec<_> = (0..300).map(|i| Object::Ref(doc.add(Object::Int(i)))).collect();
+    let mut stamp = printcraft_cos::Dict::new();
+    stamp.set(b"Type".to_vec(), Object::name("Sig"));
+    stamp.set(b"SubFilter".to_vec(), Object::name("ETSI.RFC3161"));
+    stamp.set(b"ByteRange".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(2), Object::Int(1)]));
+    stamp.set(b"Contents".to_vec(), Object::String(PdfString::literal("invalid-token")));
+    let stamp = doc.add(Object::Dict(stamp));
+    doc.update_dict(doc.root().unwrap(), |catalog| {
+        catalog.set(b"UninspectedObjects".to_vec(), Object::Array(filler));
+        catalog.set(b"UninspectedTimestamp".to_vec(), Object::Ref(stamp));
+    })
+    .unwrap();
+    let bytes = printcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let doc = open(&bytes);
+    assert!(doc.object_numbers().len() > 300);
+    let listed = signatures(&doc, &bytes, &TrustStore::default());
+    assert!(listed.iter().any(|s| s.doc_timestamp && s.status != Status::Valid));
+    assert!(listed.iter().any(|s| s.field == "Approval" && !s.signed));
+}
+
 fn opts() -> SignOptions {
     SignOptions {
         page: 0,
@@ -66,7 +91,7 @@ fn signing_then_validating_with_and_without_trust() {
         assert_eq!(s.signer.as_deref(), id.certificate.subject.common_name());
         assert_eq!((s.reason.as_deref(), s.location.as_deref(), s.page), (Some("I approve this document"), Some("London"), Some(0)));
         assert!(s.visible && s.signed_len == signed.len() && s.revision == 2);
-        assert!(s.details.iter().any(|d| d.contains("identity is unknown")));
+        assert!(s.details.iter().any(|d| d.message.contains("identity is unknown")));
         // The unsigned field is listed too.
         assert!(sigs.iter().any(|s| s.field == "Approval" && !s.signed));
         // Trusting the signer (or its root) makes it valid.
@@ -81,7 +106,7 @@ fn signing_then_validating_with_and_without_trust() {
         tampered[i] = b'K';
         let s = signatures(&open(&tampered), &tampered, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
         assert_eq!(s.status, Status::Invalid);
-        assert!(s.details[0].contains("altered or corrupted"), "{:?}", s.details);
+        assert!(s.details[0].message.contains("altered or corrupted"), "{:?}", s.details);
     }
 }
 
@@ -97,7 +122,7 @@ fn signing_an_existing_field_and_counter_signing() {
     assert!(a.signed);
     assert_eq!(a.rect, Some([150.0, 20.0, 280.0, 70.0]));
     assert_eq!(a.revision, 2);
-    assert_eq!(a.modification, Modification::Allowed(vec!["signature".into()]), "{:?}", a.details);
+    assert_eq!(a.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{:?}", a.details);
     assert_eq!(a.status, Status::Unknown);
     let b = sigs.iter().find(|s| s.field == "Signature1").unwrap();
     assert_eq!((b.revision, b.modification.clone()), (3, Modification::None));
@@ -105,6 +130,60 @@ fn signing_an_existing_field_and_counter_signing() {
         printcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }),
         Err(printcraft_sign::SignError::Pdf(_))
     ));
+}
+
+/// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
+/// it is listed as unsigned and can be signed by name.
+#[test]
+fn a_field_with_a_null_value_is_unsigned_and_can_be_signed() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let field = printcraft_cos::ObjRef { num: 6, generation: 0 };
+    let direct = edit_after(&fixture(), |doc| doc.update_dict(field, |d| d.set(b"V".to_vec(), Object::Null)).unwrap());
+    let indirect = edit_after(&fixture(), |doc| {
+        let null = doc.add(Object::Null);
+        doc.update_dict(field, |d| d.set(b"V".to_vec(), Object::Ref(null))).unwrap();
+    });
+    for (what, unsigned) in [("direct null", direct), ("indirect null", indirect)] {
+        let doc = open(&unsigned);
+        assert!(doc.get(field).as_dict().is_some_and(|d| d.contains(b"V")), "{what}: the fixture keeps its /V");
+        let listed = signatures(&doc, &unsigned, &TrustStore::default());
+        assert!(listed.iter().any(|s| s.field == "Approval" && !s.signed), "{what}");
+        let signed =
+            printcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        let listed = signatures(&open(&signed), &signed, &TrustStore::default());
+        assert!(listed.iter().any(|s| s.field == "Approval" && s.signed), "{what}");
+        assert!(!listed.iter().any(|s| s.field == "Signature1"), "{what}: no new field");
+    }
+}
+
+/// Follow-up to #1374: a signature field whose /V is neither null nor a signature dictionary is
+/// refused by name with an error saying so, instead of being overwritten or called signed.
+#[test]
+fn a_field_whose_value_is_not_a_signature_is_refused_by_name() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let field = printcraft_cos::ObjRef { num: 6, generation: 0 };
+    let values = [
+        ("empty string", Object::String(PdfString::literal(""))),
+        ("number", Object::Int(5)),
+        ("name", Object::name("Off")),
+        ("array", Object::Array(Vec::new())),
+    ];
+    for (what, value) in values {
+        let direct = edit_after(&fixture(), |doc| doc.update_dict(field, |d| d.set(b"V".to_vec(), value.clone())).unwrap());
+        let indirect = edit_after(&fixture(), |doc| {
+            let v = doc.add(value.clone());
+            doc.update_dict(field, |d| d.set(b"V".to_vec(), Object::Ref(v))).unwrap();
+        });
+        for (how, bytes) in [("direct", direct), ("indirect", indirect)] {
+            let doc = open(&bytes);
+            let listed = signatures(&doc, &bytes, &TrustStore::default());
+            assert!(listed.iter().any(|s| s.field == "Approval" && !s.signed), "{how} {what}");
+            match printcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }) {
+                Err(SignError::Pdf(e)) => assert_eq!(e, "the value of the field \"Approval\" is not a signature", "{how} {what}"),
+                other => panic!("{how} {what}: {:?}", other.map(|b| b.len())),
+            }
+        }
+    }
 }
 
 /// Append a revision that changes object `num` with `f`.
@@ -146,10 +225,10 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
     let s = check(&edit_after(&signed, add_comment));
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
-    assert_eq!(s.modification, Modification::Allowed(vec!["comments".into()]));
+    assert_eq!(s.modification, Modification::Allowed(vec![kind::COMMENTS]));
     let s = check(&edit_after(&signed, change_text));
     assert_eq!(s.status, Status::Invalid);
-    assert_eq!(s.modification, Modification::Disallowed(vec!["page content".into()]));
+    assert_eq!(s.modification, Modification::Disallowed(vec![kind::PAGE_CONTENT]));
     // Certified with "no changes allowed": even a comment invalidates it.
     let certified = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
     let s = check(&certified);
@@ -168,6 +247,110 @@ fn invisible_signatures_and_refusals() {
     assert!(!s.visible);
     assert!(printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { page: 5, ..opts() }).is_err());
     assert_eq!(printcraft_sign::pdf::display_date("D:20261002120000+01'00'"), "2026.10.02 12:00:00 +01'00'");
+}
+
+/// The normal appearance of the signature field `name`: its decoded content and resources.
+fn appearance_of(bytes: &[u8], name: &str) -> (String, printcraft_cos::Dict) {
+    appearance_in(&open(bytes), name)
+}
+
+fn appearance_in(doc: &Document, name: &str) -> (String, printcraft_cos::Dict) {
+    let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
+    let form = doc.resolve(catalog.get(b"AcroForm").unwrap()).as_dict().cloned().unwrap();
+    let fields = doc.resolve(form.get(b"Fields").unwrap()).as_array().cloned().unwrap();
+    let field = fields
+        .iter()
+        .filter_map(|f| doc.resolve(f).as_dict().cloned())
+        .find(|f| matches!(f.get(b"T"), Some(Object::String(s)) if s.bytes == name.as_bytes()))
+        .unwrap();
+    let ap = doc.resolve(field.get(b"AP").unwrap()).as_dict().cloned().unwrap();
+    let Object::Stream(s) = &*doc.resolve(ap.get(b"N").unwrap()) else { panic!("no normal appearance") };
+    let res = doc.resolve(s.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    (String::from_utf8_lossy(&s.decoded().unwrap()).into_owned(), res)
+}
+
+/// A 40 x 10 image, opaque or with one translucent pixel.
+fn picture(translucent: bool) -> printcraft_sign::Graphic {
+    let mut rgba: Vec<u8> = (0..400).flat_map(|_| [10, 20, 30, 255]).collect();
+    if translucent {
+        rgba[3] = 128;
+    }
+    printcraft_sign::Graphic::Image { width: 40, height: 10, rgba: Arc::new(rgba) }
+}
+
+#[test]
+fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
+    use printcraft_sign::{Appearance, Graphic};
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let name = format!("({})", id.certificate.display_name());
+    let plain = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    // Without a graphic the name is large on the left and in the details.
+    assert_eq!(appearance_of(&plain, "Signature1").0.matches(&name).count(), 2);
+    let strokes = Graphic::Strokes(vec![vec![[0.0, 0.0], [0.3, 0.2], [0.6, 0.0], [1.0, 0.2]], vec![[0.5, 0.1]]]);
+    let typed = Graphic::Outlines(vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]], vec![[0.2, 0.1], [0.8, 0.1], [0.5, 0.4]]]);
+    for (graphic, drawn) in [
+        (strokes, " c\n"),
+        (typed, "f*\n"),
+        // 40 x 10 in the left half (94 x 44 inside the padding): 94 wide, centred vertically.
+        (picture(true), "q 94 0 0 23.5 3 13.25 cm /Im1 Do Q"),
+    ] {
+        let signed = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { graphic: Some(graphic.clone()), ..opts() }).unwrap();
+        let s = signatures(&open(&signed), &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+        assert_eq!((s.status, s.modification), (Status::Unknown, Modification::None), "{graphic:?}: {:?}", s.details);
+        let (content, res) = appearance_of(&signed, "Signature1");
+        assert!(content.contains(drawn), "{graphic:?}: {content}");
+        // The graphic takes the name's place on the left; the details still name the signer.
+        assert_eq!(content.matches(&name).count(), 1, "{content}");
+        assert_eq!(res.get(b"XObject").is_some(), matches!(graphic, Graphic::Image { .. }));
+    }
+    // Translucent images keep their alpha as a soft mask; opaque ones need none.
+    for translucent in [true, false] {
+        let signed = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { graphic: Some(picture(translucent)), ..opts() }).unwrap();
+        let doc = open(&signed);
+        let (_, res) = appearance_of(&signed, "Signature1");
+        let xobjects = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let Object::Stream(im) = &*doc.resolve(xobjects.get(b"Im1").unwrap()) else { panic!() };
+        assert_eq!((im.dict.int(b"Width"), im.dict.int(b"Height")), (Some(40), Some(10)));
+        assert_eq!(im.decoded().unwrap().len(), 40 * 10 * 3);
+        assert_eq!(im.dict.get(b"SMask").is_some(), translucent);
+    }
+    // With no text at all, the graphic has the whole box (194 x 44): 176 x 44, centred.
+    let bare = Appearance { name: false, date: false, reason: false, location: false, distinguished_name: false, labels: false };
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { graphic: Some(picture(false)), appearance: bare, ..opts() }).unwrap();
+    assert!(appearance_of(&signed, "Signature1").0.contains("q 176 0 0 44 12 3 cm /Im1 Do Q"));
+    // An invisible signature has nothing to show: no image is embedded.
+    let invisible = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { rect: None, graphic: Some(picture(false)), ..opts() }).unwrap();
+    assert!(!invisible.windows(6).any(|w| w == b"/Image"));
+}
+
+#[test]
+fn malformed_signature_graphics_are_refused_not_drawn() {
+    use printcraft_sign::Graphic;
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let huge = vec![vec![[0.0, 0.0]; 300_001]];
+    for graphic in [
+        Graphic::Strokes(vec![]),
+        Graphic::Strokes(vec![vec![]]),
+        Graphic::Strokes(vec![vec![[0.0, 0.0], [f64::NAN, 1.0]]]),
+        Graphic::Strokes(vec![vec![[-1e308, 0.0], [1e308, 1.0]]]),
+        Graphic::Strokes(huge),
+        // Outlines need three points to enclose anything.
+        Graphic::Outlines(vec![vec![[0.0, 0.0], [1.0, 1.0]]]),
+        Graphic::Outlines(vec![vec![[0.0, 0.0], [1.0, f64::INFINITY], [1.0, 0.0]]]),
+        Graphic::Image { width: 40, height: 10, rgba: Arc::new(vec![0; 399]) },
+        Graphic::Image { width: 0, height: 10, rgba: Arc::new(vec![]) },
+        Graphic::Image { width: u32::MAX, height: u32::MAX, rgba: Arc::new(vec![]) },
+    ] {
+        let what = format!("{graphic:?}");
+        assert!(what.len() < 200, "Debug never dumps pixels or points: {what}");
+        let r = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { graphic: Some(graphic), ..opts() });
+        assert!(matches!(r, Err(SignError::Pdf(ref m)) if m.contains("signature graphic")), "{what}: {r:?}");
+    }
+    // A single dot is a (tiny) drawing, not an error.
+    let dot = Graphic::Strokes(vec![vec![[0.5, 0.5]]]);
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { graphic: Some(dot), ..opts() }).unwrap();
+    let (content, _) = appearance_of(&signed, "Signature1");
+    assert!(!content.contains("NaN") && !content.contains("inf"), "{content}");
 }
 
 /// A deterministic TSA: signs an RFC 3161 response locally with a test digital ID at a fixed
@@ -208,13 +391,13 @@ fn signing_with_a_timestamp_embeds_a_verified_rfc3161_token() {
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
     assert!(s.timestamp, "{:?}", s.details);
     assert_eq!(s.timestamp_time, Some(tsa.time), "the token's generation time, verified over the signature value");
-    assert!(s.details.iter().any(|d| d.contains("trusted time")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("trusted time")), "{:?}", s.details);
     // A trusted signer with an untrusted TSA: still valid, but the token's time is unverified.
     let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] }).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
     assert!(s.timestamp);
     assert_eq!(s.timestamp_time, None);
-    assert!(s.details.iter().any(|d| d.contains("unverified timestamp")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("unverified timestamp")), "{:?}", s.details);
     // Untrusted, the signature stays intact-but-unknown; the timestamp is still noted.
     let s = signatures(&open(&signed), &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Unknown);
@@ -265,9 +448,53 @@ fn a_document_timestamp_covers_the_file_and_validates() {
         Modification::Allowed(k) => k,
         other => panic!("{other:?}"),
     };
-    assert!(allowed.contains(&"signature".to_string()), "{allowed:?}");
+    assert!(allowed.contains(&kind::SIGNATURE), "{allowed:?}");
     let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
+}
+
+#[test]
+fn cached_discovery_still_validates_current_timestamp_bytes_ranges_and_trust() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let mut source = open(&fixture());
+    source
+        .update_dict(source.root().unwrap(), |d| {
+            d.remove(b"AcroForm");
+        })
+        .unwrap();
+    let bytes = printcraft_sign::timestamp_document(&source, &tsa, "D:20261006120000Z").unwrap();
+    let doc = open(&bytes);
+    let cache = printcraft_sign::DigestCache::default();
+    let trusted = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let check = |doc: &Document, bytes: &[u8], trust: &TrustStore| {
+        let listed = printcraft_sign::pdf::list_cached(doc, bytes, trust, &cache);
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].doc_timestamp);
+        listed.into_iter().next().unwrap()
+    };
+    assert_eq!(check(&doc, &bytes, &TrustStore::default()).status, Status::Unknown);
+    assert_eq!(check(&doc, &bytes, &trusted).status, Status::Valid);
+    assert_eq!(check(&doc, &bytes, &TrustStore::default()).status, Status::Unknown);
+    let mut tampered = bytes.clone();
+    let at = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+    tampered[at] = b'K';
+    assert_eq!(check(&doc, &tampered, &trusted).status, Status::Invalid);
+    assert_eq!(check(&doc, &[], &trusted).status, Status::Invalid);
+    let stamp = doc.scan_objects().find(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"SubFilter") == Some(b"ETSI.RFC3161"))).unwrap().0;
+    let mut edited = doc.clone();
+    edited.update_dict(stamp, |d| d.set(b"ByteRange".to_vec(), Object::Array(vec![Object::Int(-1)]))).unwrap();
+    assert_eq!(check(&edited, &bytes, &trusted).status, Status::Invalid);
+    assert_eq!(check(&doc, &bytes, &trusted).status, Status::Valid);
+    // Even a malformed token in the same byte ranges must be read again after discovery.
+    let br = doc.get(stamp).as_dict().unwrap().get(b"ByteRange").unwrap().as_array().unwrap().clone();
+    let gap_start = br[1].as_int().unwrap() as usize;
+    tampered = bytes.clone();
+    tampered[gap_start + 1] = b'F';
+    tampered[gap_start + 2] = b'F';
+    assert_eq!(check(&doc, &tampered, &trusted).status, Status::Invalid);
 }
 
 #[test]
@@ -293,7 +520,7 @@ fn embedding_ltv_evidence_adds_a_dss_and_keeps_signatures_valid() {
         Modification::Allowed(k) => k,
         other => panic!("{other:?}"),
     };
-    assert!(allowed.contains(&"document security store".to_string()), "{allowed:?}");
+    assert!(allowed.contains(&kind::SECURITY_STORE), "{allowed:?}");
     // Embedding twice keeps one certificate (byte-identical dedup) and stays valid.
     let twice = dss::embed(&doc, &evidence).unwrap();
     let doc2 = open(&twice);
@@ -322,8 +549,8 @@ fn sign_then_ltv_then_timestamp_makes_a_b_lta_file() {
         Modification::Allowed(k) => k,
         other => panic!("{other:?}"),
     };
-    assert!(allowed.contains(&"document security store".to_string()) && allowed.contains(&"signature".to_string()), "{allowed:?}");
-    assert!(!allowed.contains(&"page content".to_string()), "{allowed:?}");
+    assert!(allowed.contains(&kind::SECURITY_STORE) && allowed.contains(&kind::SIGNATURE), "{allowed:?}");
+    assert!(!allowed.contains(&kind::PAGE_CONTENT), "{allowed:?}");
     let stamp = all.iter().find(|s| s.doc_timestamp).unwrap();
     assert_eq!(stamp.status, Status::Valid, "{:?}", stamp.details);
 }
@@ -354,7 +581,7 @@ fn an_embedded_verified_revocation_invalidates_the_signature() {
     let ltv = dss::embed(&open(&signed), &Evidence { certs: Vec::new(), ocsps: Vec::new(), crls: vec![crl] }).unwrap();
     let s = signatures(&open(&ltv), &ltv, &TrustStore::default()).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
     assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
-    assert!(s.details.iter().any(|d| d.contains("revoked") && d.contains("CRL")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("revoked") && d.message.contains("CRL")), "{:?}", s.details);
 }
 
 #[test]
@@ -373,7 +600,7 @@ fn validates_a_signature_made_by_openssl() {
     // A later comment is allowed for this approval signature.
     let edited = edit_after(&bytes, add_comment);
     let s = signatures(&open(&edited), &edited, &TrustStore::default()).into_iter().next().unwrap();
-    assert_eq!(s.modification, Modification::Allowed(vec!["comments".into()]));
+    assert_eq!(s.modification, Modification::Allowed(vec![kind::COMMENTS]));
 }
 
 #[test]
@@ -518,7 +745,385 @@ fn declaring_a_form_xfa_does_not_excuse_replacing_the_pages() {
         assert_eq!(check(&signed).status, Status::Valid);
         let s = check(&edit_after(&signed, xfa_page_swap));
         assert_eq!(s.status, Status::Invalid, "{certify:?}: {:?}", s.details);
-        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&"document structure".to_string())), "{:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::STRUCTURE)), "{:?}", s.modification);
+    }
+}
+
+/// Re-encode a DER CMS the way Windows CryptoAPI / Adobe PPKMS / `openssl cms -stream` write it:
+/// indefinite lengths on ContentInfo, [0] and SignedData (the signed attributes stay DER).
+fn to_ber(der_cms: &[u8]) -> Vec<u8> {
+    use printcraft_sign::der::Tlv;
+    let ci = Tlv::parse(der_cms).unwrap().0.children().unwrap();
+    let sd = ci[1].inner().unwrap().children().unwrap();
+    let mut out = vec![0x30, 0x80];
+    out.extend_from_slice(ci[0].raw);
+    out.extend_from_slice(&[0xA0, 0x80, 0x30, 0x80]);
+    for c in sd {
+        out.extend_from_slice(c.raw);
+    }
+    out.extend_from_slice(&[0; 6]);
+    out
+}
+
+/// The signature `/Contents` hex of the only signed field, and its position in `pdf`.
+fn contents_span(pdf: &[u8]) -> (usize, usize) {
+    let key = b"/Contents <";
+    let start = pdf.windows(key.len()).position(|w| w == key).map(|i| i + key.len()).unwrap();
+    (start, start + pdf[start..].iter().position(|b| *b == b'>').unwrap())
+}
+
+#[test]
+fn validates_signatures_written_with_ber_indefinite_lengths() {
+    for file in ["rsa-aes.p12", "ec-p256.p12"] {
+        let id = pkcs12::open(&data(file), "test").unwrap();
+        let mut signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+        let (a, b) = contents_span(&signed);
+        let hex = |s: &[u8]| s.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let der: Vec<u8> = (a..b).step_by(2).map(|i| u8::from_str_radix(std::str::from_utf8(&signed[i..i + 2]).unwrap(), 16).unwrap()).collect();
+        let der_len = printcraft_sign::der::Tlv::parse(&der).unwrap().0.raw.len();
+        let mut ber = to_ber(&der[..der_len]);
+        assert_eq!(ber[1], 0x80, "indefinite");
+        ber.resize((b - a) / 2, 0);
+        signed[a..b].copy_from_slice(hex(&ber).as_bytes());
+        let anchor = id.certificate.clone();
+        let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] }).into_iter().find(|s| s.signed).unwrap();
+        assert_eq!(s.status, Status::Valid, "{file}: {:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("BER")), "the tolerance is reported: {:?}", s.details);
+        // Tampering is still caught: the digest check is not relaxed.
+        let mut tampered = signed.clone();
+        let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+        tampered[i] = b'K';
+        let s = signatures(&open(&tampered), &tampered, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+        assert_eq!(s.status, Status::Invalid);
+    }
+}
+
+#[test]
+fn validation_data_and_xmp_added_after_signing_are_not_tampering() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    // As DocuSign / Acrobat LTV do: a DSS whose /Certs and /VRI are indirect objects, and XMP.
+    let edited = edit_after(&signed, |doc| {
+        let mut cert = printcraft_cos::Dict::new();
+        cert.set(b"Length".to_vec(), Object::Int(3));
+        let cert = doc.add(Object::Stream(printcraft_cos::Stream::from_raw(cert, vec![1, 2, 3])));
+        let certs = doc.add(Object::Array(vec![Object::Ref(cert)]));
+        let vri = doc.add(Object::Dict(printcraft_cos::Dict::new()));
+        let mut dss = printcraft_cos::Dict::new();
+        dss.set(b"Certs".to_vec(), Object::Ref(certs));
+        dss.set(b"VRI".to_vec(), Object::Ref(vri));
+        let dss = doc.add(Object::Dict(dss));
+        let mut xmp = printcraft_cos::Dict::new();
+        xmp.set(b"Type".to_vec(), Object::name("Metadata"));
+        xmp.set(b"Subtype".to_vec(), Object::name("XML"));
+        xmp.set(b"Length".to_vec(), Object::Int(1));
+        let xmp = doc.add(Object::Stream(printcraft_cos::Stream::from_raw(xmp, b"x".to_vec())));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.set(b"DSS".to_vec(), Object::Ref(dss));
+            c.set(b"Metadata".to_vec(), Object::Ref(xmp));
+        })
+        .unwrap();
+    });
+    let s = signatures(&open(&edited), &edited, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert!(matches!(s.modification, Modification::Allowed(_)), "{:?}", s.modification);
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    // Page content changes are still refused.
+    let edited = edit_after(&signed, change_text);
+    let s = signatures(&open(&edited), &edited, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid);
+}
+
+// ── DSS and metadata: what later revisions may add ─────────────────────────────────────────
+
+fn oref(num: u32) -> Object {
+    Object::Ref(printcraft_cos::ObjRef { num, generation: 0 })
+}
+
+fn dict_of(entries: Vec<(&str, Object)>) -> printcraft_cos::Dict {
+    let mut d = printcraft_cos::Dict::new();
+    for (k, v) in entries {
+        d.set(k.as_bytes().to_vec(), v);
+    }
+    d
+}
+
+fn stream_of(body: &[u8]) -> Object {
+    let d = dict_of(vec![("Length", Object::Int(body.len() as i64))]);
+    Object::Stream(printcraft_cos::Stream::from_raw(d, body.to_vec()))
+}
+
+/// Set the catalog's `/DSS`.
+fn set_dss(doc: &mut Document, dss: Object) {
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"DSS".to_vec(), dss)).unwrap();
+}
+
+/// Rewrite object `num` (the page's contents) so the page shows other text.
+fn forge_contents(doc: &mut Document, num: u32) {
+    doc.set(printcraft_cos::ObjRef { num, generation: 0 }, stream_of(b"BT /F1 14 Tf 20 250 Td (Forged) Tj ET"));
+}
+
+/// `fixture()` with the page's `/Contents` an indirect array (object 7) holding object 4.
+fn fixture_with_contents_array() -> Vec<u8> {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 7 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"[4 0 R]",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Every DocMDP level: no certification (an approval signature), then P=1, 2 and 3.
+const LEVELS: [Option<u8>; 4] = [None, Some(1), Some(2), Some(3)];
+
+/// Each tampering `attack` of the signed `base` is refused at every level, with `kind` among the
+/// reasons, while the untouched file stays valid.
+fn assert_refused_at_every_level(base: &[u8], kind: &str, attack: impl Fn(&mut Document)) {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    for certify in LEVELS {
+        let signed = printcraft_sign::sign(&open(base), &id, &SignOptions { certify, ..opts() }).unwrap();
+        assert_eq!(check(&signed).status, Status::Valid, "{certify:?}: untouched");
+        let s = check(&edit_after(&signed, &attack));
+        assert_eq!(s.status, Status::Invalid, "{certify:?}: {:?} {:?}", s.modification, s.details);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind)), "{certify:?}: {:?}", s.modification);
+    }
+}
+
+#[test]
+fn a_dss_entry_does_not_make_the_object_it_names_part_of_the_store() {
+    // `/DSS << /X 4 0 R >>` and a rewrite of object 4, the page's contents: the contents are
+    // still page content.
+    assert_refused_at_every_level(&fixture(), "page content", |doc| {
+        set_dss(doc, Object::Dict(dict_of(vec![("X", oref(4))])));
+        forge_contents(doc, 4);
+    });
+    // The same through an indirect store, and through every key the store does define.
+    for key in ["X", "Certs", "CRLs", "OCSPs"] {
+        assert_refused_at_every_level(&fixture(), "page content", |doc| {
+            let dss = doc.add(Object::Dict(dict_of(vec![(key, Object::Array(vec![oref(4)]))])));
+            set_dss(doc, Object::Ref(dss));
+            forge_contents(doc, 4);
+        });
+    }
+    // A VRI entry's /Cert array, and its /TS.
+    for key in ["Cert", "CRL", "OCSP", "TS"] {
+        assert_refused_at_every_level(&fixture(), "page content", |doc| {
+            let value = if key == "TS" { oref(4) } else { Object::Array(vec![oref(4)]) };
+            let entry = doc.add(Object::Dict(dict_of(vec![(key, value)])));
+            let vri = doc.add(Object::Dict(dict_of(vec![("0123456789ABCDEF0123456789ABCDEF01234567", Object::Ref(entry))])));
+            let dss = doc.add(Object::Dict(dict_of(vec![("VRI", Object::Ref(vri))])));
+            set_dss(doc, Object::Ref(dss));
+            forge_contents(doc, 4);
+        });
+    }
+}
+
+#[test]
+fn an_existing_dictionary_is_not_a_store_part_because_the_store_names_it() {
+    // The font dictionary (object 5), rewritten and then listed as the store, its /VRI, a VRI
+    // entry, or simply labelled /Type /DSS.
+    let rewrite_font = |doc: &mut Document, extra: Option<(&str, Object)>| {
+        let mut d = dict_of(vec![("Type", Object::name("Font")), ("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Courier"))]);
+        if let Some((k, v)) = extra {
+            d.set(k.as_bytes().to_vec(), v);
+        }
+        doc.set(printcraft_cos::ObjRef { num: 5, generation: 0 }, Object::Dict(d));
+    };
+    assert_refused_at_every_level(&fixture(), "other changes", |doc| {
+        rewrite_font(doc, Some(("Type", Object::name("DSS"))));
+    });
+    assert_refused_at_every_level(&fixture(), "other changes", |doc| {
+        set_dss(doc, oref(5));
+        rewrite_font(doc, None);
+    });
+    assert_refused_at_every_level(&fixture(), "other changes", |doc| {
+        set_dss(doc, Object::Dict(dict_of(vec![("VRI", oref(5))])));
+        rewrite_font(doc, None);
+    });
+    // An existing dictionary with only DSS-looking keys that the signed file never had as a store.
+    assert_refused_at_every_level(&fixture(), "other changes", |doc| {
+        doc.set(
+            printcraft_cos::ObjRef { num: 5, generation: 0 },
+            Object::Dict(dict_of(vec![("Type", Object::name("Font")), ("Cert", Object::Array(vec![]))])),
+        );
+        set_dss(doc, Object::Dict(dict_of(vec![("VRI", Object::Dict(dict_of(vec![("0123456789ABCDEF0123456789ABCDEF01234567", oref(5))])))])));
+    });
+}
+
+#[test]
+fn an_existing_array_stays_what_it_is_when_the_store_points_at_it() {
+    // The page's /Contents is an indirect array (object 7). Pointing /Certs at it and appending
+    // a new stream still changes what the page shows.
+    assert_refused_at_every_level(&fixture_with_contents_array(), "other changes", |doc| {
+        let extra = doc.add(stream_of(b"BT /F1 14 Tf 20 200 Td (Forged) Tj ET"));
+        doc.set(printcraft_cos::ObjRef { num: 7, generation: 0 }, Object::Array(vec![oref(4), Object::Ref(extra)]));
+        set_dss(doc, Object::Dict(dict_of(vec![("Certs", oref(7))])));
+    });
+}
+
+#[test]
+fn a_dictionary_labelled_metadata_is_not_a_metadata_change() {
+    // Only the catalog's XMP stream is metadata (a stream, not a dictionary a label was put on).
+    assert_refused_at_every_level(&fixture(), "other changes", |doc| {
+        doc.set(
+            printcraft_cos::ObjRef { num: 5, generation: 0 },
+            Object::Dict(dict_of(vec![
+                ("Type", Object::name("Metadata")),
+                ("Subtype", Object::name("Type1")),
+                ("BaseFont", Object::name("Courier")),
+            ])),
+        );
+    });
+}
+
+/// A one-page document like `fixture()` (objects 1–6) plus a stream, object 7, with the given
+/// dictionary entries and body. `catalog_extra` goes into the catalog; the page draws object 7
+/// as a Form XObject when `drawn`.
+fn fixture_with_stream_7(catalog_extra: &str, drawn: bool, dict: &str, body: &[u8]) -> Vec<u8> {
+    let page_content: &[u8] =
+        if drawn { b"BT /F1 14 Tf 20 250 Td (Contract text) Tj ET /Fm1 Do" } else { b"BT /F1 14 Tf 20 250 Td (Contract text) Tj ET" };
+    let xobject = if drawn { " /XObject << /Fm1 7 0 R >>" } else { "" };
+    let stream = |dict: &str, body: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", body.len()).into_bytes();
+        o.extend_from_slice(body);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> {catalog_extra} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >>{xobject} >> /Annots [6 0 R] >>"
+        )
+        .into_bytes(),
+        stream("", page_content),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>".to_vec(),
+        stream(dict, body),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it() {
+    // A Form XObject the page draws, labelled /Type /Metadata before signing (the renderer ignores
+    // /Type). Rewriting it later changes what the page shows, so it is not a metadata change.
+    let base = fixture_with_stream_7("", true, "/Type /Metadata /Subtype /Form /BBox [0 0 300 300]", b"0 0 1 rg 10 10 100 100 re f");
+    assert_refused_at_every_level(&base, "other changes", |doc| {
+        let d = dict_of(vec![
+            ("Type", Object::name("Metadata")),
+            ("Subtype", Object::name("Form")),
+            ("BBox", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])),
+            ("Length", Object::Int(27)),
+        ]);
+        doc.set(
+            printcraft_cos::ObjRef { num: 7, generation: 0 },
+            Object::Stream(printcraft_cos::Stream::from_raw(d, b"1 0 0 rg 10 10 100 100 re f".to_vec())),
+        );
+    });
+}
+
+#[test]
+fn the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing() {
+    // The control for the test above: the stream the signed catalog's /Metadata names is the
+    // document's XMP, and rewriting it is allowed at every level.
+    let base = fixture_with_stream_7("/Metadata 7 0 R", false, "/Type /Metadata /Subtype /XML", b"<x:xmpmeta/>");
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for certify in LEVELS {
+        let signed = printcraft_sign::sign(&open(&base), &id, &SignOptions { certify, ..opts() }).unwrap();
+        let edited = edit_after(&signed, |doc| {
+            let d = dict_of(vec![("Type", Object::name("Metadata")), ("Subtype", Object::name("XML")), ("Length", Object::Int(13))]);
+            doc.set(printcraft_cos::ObjRef { num: 7, generation: 0 }, Object::Stream(printcraft_cos::Stream::from_raw(d, b"<x:xmpmeta />".to_vec())));
+        });
+        let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
+        assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::METADATA)), "{certify:?}: {:?}", s.modification);
+        assert_eq!(s.status, Status::Valid, "{certify:?}: {:?}", s.details);
+    }
+}
+
+/// A document whose catalog already has a store: `/Certs` (object `.0`) with one certificate,
+/// and `/VRI` (object `.1`).
+fn fixture_with_dss() -> (Vec<u8>, u32, u32) {
+    let mut ids = (0, 0);
+    let bytes = edit_after(&fixture(), |doc| {
+        let cert = doc.add(stream_of(&[1, 2, 3]));
+        let certs = doc.add(Object::Array(vec![Object::Ref(cert)]));
+        let vri = doc.add(Object::Dict(printcraft_cos::Dict::new()));
+        let dss = doc.add(Object::Dict(dict_of(vec![("Type", Object::name("DSS")), ("Certs", Object::Ref(certs)), ("VRI", Object::Ref(vri))])));
+        set_dss(doc, Object::Ref(dss));
+        ids = (certs.num, vri.num);
+    });
+    (bytes, ids.0, ids.1)
+}
+
+#[test]
+fn a_signed_store_may_grow_but_not_lose_or_swap_entries() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    let (base, certs, vri) = fixture_with_dss();
+    for certify in LEVELS {
+        let signed = printcraft_sign::sign(&open(&base), &id, &SignOptions { certify, ..opts() }).unwrap();
+        assert_eq!(check(&signed).status, Status::Valid, "{certify:?}");
+        // Validation data appended to the arrays, and a VRI entry: what Acrobat's LTV does.
+        let grown = edit_after(&signed, |doc| {
+            let more = doc.add(stream_of(&[4, 5, 6]));
+            let entry = doc.add(Object::Dict(dict_of(vec![("Cert", Object::Array(vec![Object::Ref(more)]))])));
+            let old = open(&signed);
+            let Object::Array(mut kept) = (*old.get(printcraft_cos::ObjRef { num: certs, generation: 0 })).clone() else { panic!("array") };
+            kept.push(Object::Ref(more));
+            doc.set(printcraft_cos::ObjRef { num: certs, generation: 0 }, Object::Array(kept));
+            doc.set(
+                printcraft_cos::ObjRef { num: vri, generation: 0 },
+                Object::Dict(dict_of(vec![("0123456789ABCDEF0123456789ABCDEF01234567", Object::Ref(entry))])),
+            );
+        });
+        let s = check(&grown);
+        assert_eq!(s.status, Status::Valid, "{certify:?}: {:?} {:?}", s.modification, s.details);
+        assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SECURITY_STORE)), "{:?}", s.modification);
+        // Dropping what was signed is a change, not an addition.
+        let dropped = edit_after(&signed, |doc| {
+            doc.set(printcraft_cos::ObjRef { num: certs, generation: 0 }, Object::Array(vec![]));
+        });
+        let s = check(&dropped);
+        assert_eq!(s.status, Status::Invalid, "{certify:?}: {:?}", s.modification);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::OTHER)), "{:?}", s.modification);
     }
 }
 
@@ -539,7 +1144,7 @@ fn a_form_xobject_relabelled_metadata_is_not_a_metadata_change() {
     let edited = edit_after(&signed, relabel);
     let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
-    assert!(matches!(&s.modification, Modification::Disallowed(k) if !k.contains(&"metadata".to_string())), "{:?}", s.modification);
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if !k.contains(&kind::METADATA)), "{:?}", s.modification);
     // The catalog's own XMP stream may still be updated.
     let with_xmp = edit_after(&fixture_with_xobject(), |doc| {
         let xmp = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".to_vec();
@@ -564,7 +1169,105 @@ fn a_form_xobject_relabelled_metadata_is_not_a_metadata_change() {
     });
     let s = signatures(&open(&rewrite_xmp), &rewrite_xmp, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
-    assert_eq!(s.modification, Modification::Allowed(vec!["metadata".into()]));
+    assert_eq!(s.modification, Modification::Allowed(vec!["metadata"]));
+}
+
+#[test]
+fn a_form_xobject_relabelled_as_file_plumbing_is_still_judged() {
+    // Whether a changed stream is an xref or object stream is what it was when signed: a
+    // drawn Form XObject rewritten after signing and labelled /ObjStm or /XRef still shows its
+    // new content (the renderer ignores /Type), so it must not be skipped.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for certify in LEVELS {
+        let signed = printcraft_sign::sign(&open(&fixture_with_xobject()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        for label in ["ObjStm", "XRef"] {
+            let edited = edit_after(&signed, |doc| {
+                let mut d = printcraft_cos::Dict::new();
+                d.set(b"Type".to_vec(), Object::name(label));
+                d.set(b"Subtype".to_vec(), Object::name("Form"));
+                d.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)]));
+                let body = b"BT /F1 14 Tf 20 250 Td (Forged text) Tj ET".to_vec();
+                d.set(b"Length".to_vec(), Object::Int(body.len() as i64));
+                doc.set(printcraft_cos::ObjRef { num: 7, generation: 0 }, Object::Stream(printcraft_cos::Stream::from_raw(d, body)));
+            });
+            let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
+            assert_eq!(s.status, Status::Invalid, "{certify:?} /{label}: {:?}", s.details);
+            assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&"other changes")), "{:?}", s.modification);
+        }
+    }
+}
+
+/// `fixture()` with a document information dictionary (object 7) named by the trailer's `/Info`.
+fn fixture_with_info() -> Vec<u8> {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"<< /Producer (PrintCraft) /CreationDate (D:20260101000000Z) >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 7 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn a_signed_page_relabelled_or_stripped_of_type_is_still_page_content() {
+    // A page is judged by the role it had when signed, not by the /Type its new version carries.
+    // A hand-written incremental revision that rewrites the signed page's /Contents while
+    // relabelling it /Type /Sig (permitted at every level) or dropping /Type and adding /ModDate
+    // (read as a metadata change) must still be a disallowed page content change at every level.
+    let forge_page = |ty: Option<&'static str>| {
+        move |doc: &mut Document| {
+            let forged = doc.add(stream_of(b"BT /F1 14 Tf 20 250 Td (Amount due: 999999 EUR) Tj ET"));
+            let mut entries = vec![
+                ("Parent", oref(2)),
+                ("MediaBox", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])),
+                ("Contents", Object::Ref(forged)),
+                ("Resources", Object::Dict(dict_of(vec![("Font", Object::Dict(dict_of(vec![("F1", oref(5))])))]))),
+                ("Annots", Object::Array(vec![oref(6)])),
+            ];
+            match ty {
+                Some(name) => entries.insert(0, ("Type", Object::name(name))),
+                None => entries.push(("ModDate", Object::String(PdfString::literal("D:20261003000000Z")))),
+            }
+            doc.set(printcraft_cos::ObjRef { num: 3, generation: 0 }, Object::Dict(dict_of(entries)));
+        }
+    };
+    assert_refused_at_every_level(&fixture(), "page content", forge_page(Some("Sig")));
+    assert_refused_at_every_level(&fixture(), "page content", forge_page(None));
+
+    // Positive control: an ordinary /Info /ModDate bump on the signed revision's own information
+    // dictionary stays a permitted metadata change.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for certify in LEVELS {
+        let signed = printcraft_sign::sign(&open(&fixture_with_info()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        let bumped = edit_after(&signed, |doc| {
+            doc.update_dict(printcraft_cos::ObjRef { num: 7, generation: 0 }, |d| {
+                d.set(b"ModDate".to_vec(), Object::String(PdfString::literal("D:20261003120000Z")));
+            })
+            .unwrap();
+        });
+        let s = signatures(&open(&bumped), &bumped, &trust).into_iter().find(|s| s.signed).unwrap();
+        assert_eq!(s.status, Status::Valid, "{certify:?}: {:?}", s.details);
+        assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&"metadata")), "{certify:?}: {:?}", s.modification);
+    }
 }
 
 /// A self-signed CRL from `id` revoking its own certificate, valid from `this` to `next`.
@@ -595,9 +1298,9 @@ fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     for trust in [TrustStore::default(), TrustStore { certs: vec![anchor] }] {
         let s = signatures(&open(&ltv), &ltv, &trust).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
-        assert!(s.details.iter().any(|d| d.contains("not valid at the time of signing")), "{:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("not valid at the time of signing")), "{:?}", s.details);
         assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
-        assert!(s.details.iter().any(|d| d.contains("revoked")), "{:?}", s.details);
+        assert!(s.details.iter().any(|d| d.message.contains("revoked")), "{:?}", s.details);
     }
 }
 
@@ -616,9 +1319,9 @@ fn an_untrusted_timestamp_does_not_set_the_validation_time() {
     let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor.clone()] }).into_iter().find(|s| s.signed).unwrap();
     assert_ne!(s.status, Status::Valid, "{:?}", s.details);
     assert_eq!(s.timestamp_time, None, "an untrusted token's time is not a trusted time");
-    assert!(s.details.iter().any(|d| d.contains("not valid at the time of signing")), "{:?}", s.details);
-    assert!(!s.details.iter().any(|d| d.contains("trusted time")), "{:?}", s.details);
-    assert!(s.details.iter().any(|d| d.contains("unverified timestamp")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("not valid at the time of signing")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("trusted time")), "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("unverified timestamp")), "{:?}", s.details);
     // Trusting the TSA makes its time authoritative: the certificate was valid then.
     let trust = TrustStore { certs: vec![anchor, tsa.id.certificate.clone()] };
     let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
@@ -637,4 +1340,642 @@ fn a_timestamp_token_may_sign_with_a_different_digest_than_its_imprint() {
             .unwrap();
     let token = printcraft_sign::timestamp::parse_response(&resp, &q).unwrap();
     assert_eq!((token.digest, token.imprint, token.gen_time), (printcraft_sign::DigestAlg::Sha1, imprint, time));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_store_enumeration_and_missing_identity() {
+    let listing = printcraft_sign::windows::list().unwrap();
+    assert_eq!(listing.ids.len(), printcraft_sign::windows::identities().unwrap().len());
+    // Whatever this machine's store holds, every certificate left out is named and explained.
+    for u in &listing.unusable {
+        assert!(!u.subject.is_empty() && !u.reason.is_empty() && u.fingerprint.len() == 95, "{u:?}");
+    }
+    assert!(printcraft_sign::windows::find("windows:no such signer").is_err());
+}
+
+#[cfg(windows)]
+fn powershell(script: &str) -> std::process::Output {
+    // Load the certificate provider explicitly in a profile-free Windows PowerShell child.
+    let script = format!(
+        r#"$ErrorActionPreference='Stop'; Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"; {script}"#
+    );
+    std::process::Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).output().unwrap()
+}
+
+/// Thumbprints of temporary Current User Personal certificates, removed with their keys on drop.
+#[cfg(windows)]
+struct Certificates(Vec<String>);
+
+#[cfg(windows)]
+impl Drop for Certificates {
+    fn drop(&mut self) {
+        for thumbprint in &self.0 {
+            // New-SelfSignedCertificate also leaves a public copy of a self-signed or CA
+            // certificate in Intermediate Certification Authorities (CA). -DeleteKey fails on
+            // a certificate without a key; the plain removal then runs.
+            let out = powershell(&format!(
+                "$p='Cert:\\CurrentUser\\My\\{thumbprint}'; try {{ Remove-Item -LiteralPath $p -DeleteKey }} catch {{ Remove-Item -LiteralPath $p }}; $copy='Cert:\\CurrentUser\\CA\\{thumbprint}'; if (Test-Path -LiteralPath $copy) {{ Remove-Item -LiteralPath $copy }}"
+            ));
+            if !out.status.success() {
+                eprintln!("test certificate cleanup failed: {}", String::from_utf8_lossy(&out.stderr));
+            }
+        }
+    }
+}
+
+/// Uses only newly created software-backed CNG keys, removed even when signing fails.
+#[cfg(windows)]
+#[test]
+#[ignore = "creates temporary certificates in the Windows Current User Personal store"]
+fn signing_with_windows_store_identities() {
+    let mut created = Certificates(Vec::new());
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).unwrap();
+    let unique: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    for algorithm in ["RSA", "ECDSA_nistP256", "ECDSA_nistP384"] {
+        let name = format!("CivilOps PDF Test {unique} {algorithm}");
+        let rsa = if algorithm == "RSA" { "-KeyLength 2048" } else { "" };
+        let out = powershell(&format!(
+            "$ErrorActionPreference='Stop'; $c=New-SelfSignedCertificate -Subject 'CN={name}' -CertStoreLocation 'Cert:\\CurrentUser\\My' -Provider 'Microsoft Software Key Storage Provider' -KeyAlgorithm {algorithm} {rsa} -KeyUsage DigitalSignature -KeyExportPolicy NonExportable; $c.Thumbprint"
+        ));
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let thumbprint = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        assert_eq!(thumbprint.len(), 40);
+        assert!(thumbprint.bytes().all(|b| b.is_ascii_hexdigit()));
+        created.0.push(thumbprint);
+        let listed = printcraft_sign::windows::identities().unwrap();
+        let listed_id = listed.iter().find(|id| id.certificate.subject.common_name() == Some(name.as_str())).expect("new identity listed");
+        let reference = printcraft_sign::windows::reference(&listed_id.certificate);
+        let id = printcraft_sign::windows::find(&reference).unwrap();
+        assert_eq!(printcraft_sign::windows::find(&format!("windows:{name}")).unwrap().certificate.raw, id.certificate.raw);
+        assert!(id.key.is_external());
+        let mut options = opts();
+        let now = powershell("(Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')");
+        assert!(now.status.success());
+        options.date = format!("D:{}Z", String::from_utf8(now.stdout).unwrap().trim());
+        let signed = printcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+        let validated = signatures(&open(&signed), &signed, &TrustStore { certs: vec![id.certificate.clone()] });
+        let signature = validated.iter().find(|s| s.signed).unwrap();
+        assert_eq!(signature.status, Status::Valid, "{:?}", signature.details);
+        assert_eq!(signature.modification, Modification::None);
+        assert_eq!(signature.signer.as_deref(), Some(name.as_str()));
+    }
+    // A certificate without a private key (issued to someone else, filed under Personal) is
+    // reported as such rather than listed or dropped silently (issue #179).
+    let ada = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap().certificate;
+    let cer = std::env::temp_dir().join(format!("printcraft-windows-store-{unique}.cer"));
+    std::fs::write(&cer, &ada.raw).unwrap();
+    let out = powershell(&format!("(Import-Certificate -FilePath '{}' -CertStoreLocation 'Cert:\\CurrentUser\\My').Thumbprint", cer.display()));
+    let _ = std::fs::remove_file(&cer);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    created.0.push(String::from_utf8(out.stdout).unwrap().trim().to_string());
+    let listing = printcraft_sign::windows::list().unwrap();
+    let reported = listing.unusable.iter().find(|u| u.fingerprint == ada.fingerprint()).expect("key-less certificate reported");
+    assert!(reported.no_private_key, "{reported:?}");
+    assert_eq!(reported.subject, ada.display_name());
+    assert!(listing.ids.iter().all(|id| id.certificate.raw != ada.raw));
+    let thumbprints = created.0.clone();
+    drop(created);
+    for thumbprint in thumbprints {
+        for store in ["My", "CA"] {
+            let out = powershell(&format!("if (Test-Path -LiteralPath 'Cert:\\CurrentUser\\{store}\\{thumbprint}') {{ exit 1 }}"));
+            assert!(out.status.success(), "test certificate remains in {store}: {thumbprint}");
+        }
+    }
+}
+
+/// An identity found for signing brings the issuers Windows chains it to (not the root), so the
+/// signature validates against the root alone. Uses only temporary software-backed CNG keys.
+#[cfg(windows)]
+#[test]
+#[ignore = "creates temporary certificates in the Windows Current User Personal store"]
+fn a_windows_store_identity_signs_with_its_issuers() {
+    let mut created = Certificates(Vec::new());
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).unwrap();
+    let unique: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let [root, issuer, signer] = ["Root", "Issuer", "Signer"].map(|role| format!("CivilOps PDF Test {unique} {role}"));
+    let mut create = |name: &str, signed_by: Option<&str>, extra: &str| {
+        let by = signed_by.map(|t| format!("-Signer (Get-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{t}')")).unwrap_or_default();
+        let out = powershell(&format!(
+            "$c=New-SelfSignedCertificate -Subject 'CN={name}' -CertStoreLocation 'Cert:\\CurrentUser\\My' -Provider 'Microsoft Software Key Storage Provider' -KeyAlgorithm RSA -KeyLength 2048 -KeyExportPolicy NonExportable {by} {extra}; $c.Thumbprint"
+        ));
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let thumbprint = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        assert_eq!(thumbprint.len(), 40);
+        created.0.push(thumbprint.clone());
+        thumbprint
+    };
+    let ca = "-KeyUsage CertSign -TextExtension @('2.5.29.19={text}CA=true')";
+    let root_thumbprint = create(&root, None, ca);
+    let issuer_thumbprint = create(&issuer, Some(&root_thumbprint), ca);
+    create(&signer, Some(&issuer_thumbprint), "-KeyUsage DigitalSignature");
+
+    let listed = printcraft_sign::windows::identities().unwrap();
+    let anchor = listed.iter().find(|id| id.certificate.subject.common_name() == Some(root.as_str())).expect("root listed").certificate.clone();
+    // Listing builds no chains; finding the identity to sign with does.
+    assert!(listed.iter().all(|id| id.chain.is_empty()));
+    let id = printcraft_sign::windows::find(&format!("windows:{signer}")).unwrap();
+    let chain: Vec<_> = id.chain.iter().map(|c| c.subject.common_name()).collect();
+    assert_eq!(chain, [Some(issuer.as_str())], "the issuer, without the signer's own certificate or the root");
+
+    let mut options = opts();
+    let now = powershell("(Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')");
+    assert!(now.status.success());
+    options.date = format!("D:{}Z", String::from_utf8(now.stdout).unwrap().trim());
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+    let validated = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] });
+    let signature = validated.iter().find(|s| s.signed).unwrap();
+    assert_eq!(signature.status, Status::Valid, "{:?}", signature.details);
+    assert_eq!(signature.signer.as_deref(), Some(signer.as_str()));
+}
+
+/// Documenso-style: an AcroForm signature field `Timestamp_1` whose `/V` is the document
+/// timestamp dictionary (`/Type /DocTimeStamp`, `/SubFilter /ETSI.RFC3161`).
+fn fixture_timestamped_in_a_field(tsa: &TestTsa) -> Vec<u8> {
+    let mut value_num = 0;
+    let base = edit_after(&fixture(), |doc| {
+        let field = doc.add(Object::Null);
+        // `timestamp_document` adds its dictionary next.
+        value_num = field.num + 1;
+        let at = |num| Object::Ref(printcraft_cos::ObjRef { num, generation: 0 });
+        let mut widget = printcraft_cos::Dict::new();
+        for (k, v) in [
+            ("Type", Object::name("Annot")),
+            ("Subtype", Object::name("Widget")),
+            ("FT", Object::name("Sig")),
+            ("T", Object::String(PdfString::text("Timestamp_1"))),
+            ("Rect", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(0), Object::Int(0)])),
+            ("P", at(3)),
+            ("F", Object::Int(132)),
+            ("V", at(value_num)),
+        ] {
+            widget.set(k.as_bytes().to_vec(), v);
+        }
+        doc.set(field, Object::Dict(widget));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(form)) = c.get_mut(b"AcroForm")
+                && let Some(Object::Array(fields)) = form.get_mut(b"Fields")
+            {
+                fields.push(Object::Ref(field));
+            }
+        })
+        .unwrap();
+    });
+    let stamped = printcraft_sign::timestamp_document(&open(&base), tsa, "D:20261006120000Z").unwrap();
+    let held = open(&stamped).get(printcraft_cos::ObjRef { num: value_num, generation: 0 });
+    assert_eq!(held.as_dict().and_then(|d| d.name(b"Type")), Some(&b"DocTimeStamp"[..]), "the field holds the timestamp");
+    stamped
+}
+
+#[test]
+fn a_document_timestamp_held_by_a_signature_field_is_checked_as_a_timestamp() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let all = signatures(&open(&stamped), &stamped, &trust);
+    let stamps: Vec<_> = all.iter().filter(|s| s.signed).collect();
+    assert_eq!(stamps.len(), 1, "listed once, not as field and as standalone: {:?}", all.iter().map(|s| &s.field).collect::<Vec<_>>());
+    let s = stamps[0];
+    assert_eq!(s.field, "Timestamp_1");
+    assert!(s.doc_timestamp && s.timestamp);
+    assert_eq!(s.sub_filter.as_deref(), Some("ETSI.RFC3161"));
+    assert_eq!(s.timestamp_time, Some(tsa.time));
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    // Without trusting the TSA the stamp is intact but unknown, never "altered".
+    let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("altered or corrupted")), "{:?}", s.details);
+    // A changed byte in what it covers is still caught, and reported as the timestamp's.
+    let mut tampered = stamped.clone();
+    let i = tampered.windows(13).position(|w| w == b"Contract text").unwrap();
+    tampered[i] = b'K';
+    let s = signatures(&open(&tampered), &tampered, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid);
+    assert!(s.details.iter().any(|d| d.message.contains("since the timestamp was applied")), "{:?}", s.details);
+}
+
+/// A trusted timestamp authority whose certificate was not yet valid when it stamped proves
+/// nothing: the field timestamp stays Unknown, never Valid.
+#[test]
+fn a_field_timestamp_from_a_trusted_tsa_outside_its_validity_is_not_valid() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        // Before the TSA certificate's validity (it starts in October 2026).
+        time: Time { year: 2020, month: 1, day: 1, hour: 0, minute: 0, second: 0 },
+    };
+    let stamped = fixture_timestamped_in_a_field(&tsa);
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert!(s.doc_timestamp);
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("was not valid at the time of timestamping")), "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("its authority is trusted")), "{:?}", s.details);
+}
+
+#[test]
+fn a_standalone_timestamp_typed_sig_by_an_older_writer_is_still_a_timestamp() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let stamped = printcraft_sign::timestamp_document(&open(&fixture()), &tsa, "D:20261006120000Z").unwrap();
+    let s = signatures(&open(&stamped), &stamped, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).unwrap();
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    // The same bytes with `/Type /Sig` in place of `/Type /DocTimeStamp` (padded to the same
+    // length): the imprint no longer matches, but it is still found as a timestamp.
+    let mut old = stamped.clone();
+    let at = old.windows(19).position(|w| w == b"/Type /DocTimeStamp").unwrap();
+    old[at..at + 19].copy_from_slice(b"/Type /Sig         ");
+    let s = signatures(&open(&old), &old, &TrustStore::default()).into_iter().find(|s| s.doc_timestamp).expect("found as a timestamp");
+    assert_eq!(s.status, Status::Invalid);
+}
+
+/// A legacy adbe.x509.rsa_sha1 signature whose certificate carries an RSA key the verifier
+/// rejects (public exponent 1) is Invalid, not "can't check yet".
+#[test]
+fn a_legacy_x509_signature_with_a_malformed_rsa_key_is_invalid() {
+    let pdf = data("x509-rsa-sha1.pdf");
+    let at = pdf.windows(10).position(|w| w == b"0203010001").expect("the certificate's exponent 65537");
+    let mut bad = pdf.clone();
+    bad[at..at + 10].copy_from_slice(b"0203000001");
+    let s = signatures(&open(&bad), &bad, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.sub_filter.as_deref(), Some("adbe.x509.rsa_sha1"));
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("can't check this signature yet")), "{:?}", s.details);
+}
+
+#[test]
+fn validates_the_legacy_adbe_x509_rsa_sha1_format() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    // tests/data/x509-rsa-sha1.pdf: made with OpenSSL (README.md) as Acrobat 4-era signers wrote it.
+    let pdf = data("x509-rsa-sha1.pdf");
+    let s = signatures(&open(&pdf), &pdf, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.sub_filter.as_deref(), Some("adbe.x509.rsa_sha1"));
+    assert_eq!(s.status, Status::Unknown, "intact, identity not trusted: {:?}", s.details);
+    assert_eq!(s.signer.as_deref(), Some("Test Signer RSA"));
+    assert_eq!(s.algorithm.as_deref(), Some("RSA 2048-bit with SHA-1"));
+    assert_eq!(s.modification, Modification::None);
+    // SHA-1 still validates, but the panel says it is weak.
+    let weak = "This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.";
+    assert_eq!(s.details.iter().filter(|d| d.message == weak).count(), 1, "{:?}", s.details);
+    assert!(s.details.iter().any(|d| d.message.contains("legacy adbe.x509.rsa_sha1 format")), "{:?}", s.details);
+    let trusted = TrustStore { certs: vec![id.certificate.clone()] };
+    let s = signatures(&open(&pdf), &pdf, &trusted).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    // One changed byte inside the signed range.
+    let mut bad = pdf.clone();
+    let i = bad.windows(8).position(|w| w == b"(Legacy)").unwrap() + 1;
+    bad[i] = b'l';
+    let s = signatures(&open(&bad), &bad, &trusted).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+}
+
+/// `fixture()` protected with an empty user password (opens without asking, like most
+/// "secured" forms) and an owner password, then saved.
+fn protected(alg: printcraft_cos::Algorithm, permissions: i32) -> Vec<u8> {
+    let mut doc = open(&fixture());
+    doc.set_encryption(&printcraft_cos::NewEncryption {
+        algorithm: alg,
+        user_password: "",
+        owner_password: "owner",
+        permissions,
+        encrypt_metadata: true,
+        seed: [17; 32],
+    })
+    .unwrap();
+    printcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+fn open_pw(b: &[u8], pw: Option<&str>) -> Document {
+    Document::open_with_password(Arc::new(b.to_vec()), pw).unwrap()
+}
+
+/// Filling in forms and signing existing fields only (bits 3, 7–10): what Acrobat's "Filling
+/// in form fields, and signing existing signature fields" writes.
+const FILL_AND_SIGN_ONLY: i32 = -3132;
+
+const ALL_ALGORITHMS: [printcraft_cos::Algorithm; 4] =
+    [printcraft_cos::Algorithm::Rc4_40, printcraft_cos::Algorithm::Rc4_128, printcraft_cos::Algorithm::Aes128, printcraft_cos::Algorithm::Aes256];
+
+#[test]
+fn encrypted_documents_are_signed_with_an_unencrypted_contents() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let id2 = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone(), id2.certificate.clone()] };
+    for alg in ALL_ALGORITHMS {
+        let base = protected(alg, -1);
+        let doc = open_pw(&base, None);
+        assert_eq!(doc.security().unwrap().auth(), printcraft_cos::Auth::User);
+        let signed = printcraft_sign::sign(&doc, &id, &opts()).unwrap();
+        assert!(signed.starts_with(&base), "{alg:?}: an incremental update");
+        let added = String::from_utf8_lossy(&signed[base.len()..]);
+        assert!(added.contains("/Encrypt") && added.contains("/ID"), "{alg:?}: the update keeps the file's security");
+        assert!(!added.contains("I approve") && !added.contains("London"), "{alg:?}: the new strings are encrypted");
+        assert!(added.contains("/Contents <30"), "{alg:?}: the CMS is written in the clear");
+        let reopened = open_pw(&signed, None);
+        assert!(reopened.security().is_some());
+        let sigs = signatures(&reopened, &signed, &trust);
+        let s = sigs.iter().find(|s| s.signed).unwrap();
+        assert_eq!(s.status, Status::Valid, "{alg:?}: {:?}", s.details);
+        assert_eq!(s.modification, Modification::None);
+        assert_eq!((s.reason.as_deref(), s.location.as_deref()), (Some("I approve this document"), Some("London")), "{alg:?}");
+        assert!(s.visible && s.revision == 2 && s.signed_len == signed.len());
+        // The parsed /Contents is the CMS itself, not "decrypted" noise.
+        let cms = reopened
+            .scan_objects()
+            .filter_map(|(_, o)| o.as_dict().filter(|d| d.name(b"Type") == Some(b"Sig")).and_then(|d| d.get(b"Contents").cloned()))
+            .next()
+            .unwrap();
+        assert_eq!(cms.as_string().unwrap().bytes.first(), Some(&0x30), "{alg:?}");
+        // Counter-signing the existing field keeps the first signature valid.
+        let both = printcraft_sign::sign(&reopened, &id2, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+        let sigs = signatures(&open_pw(&both, None), &both, &trust);
+        let first = sigs.iter().find(|s| s.field == "Signature1").unwrap();
+        assert_eq!(first.status, Status::Valid, "{alg:?}: {:?}", first.details);
+        assert_eq!(first.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{alg:?}: {:?}", first.details);
+        let second = sigs.iter().find(|s| s.field == "Approval").unwrap();
+        assert_eq!((second.status, second.revision), (Status::Valid, 3), "{alg:?}: {:?}", second.details);
+        // The page text is still encrypted, and tampering with its ciphertext breaks both.
+        assert!(!String::from_utf8_lossy(&both).contains("Contract text"));
+        let mut tampered = both.clone();
+        let at = base.len() / 2;
+        tampered[at] ^= 1;
+        let tampered_sigs = signatures(&open_pw(&tampered, None), &tampered, &trust);
+        assert!(tampered_sigs.iter().filter(|s| s.signed).all(|s| s.status == Status::Invalid), "{alg:?}");
+    }
+}
+
+#[test]
+fn an_encrypted_documents_signature_graphic_is_encrypted_with_it() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for alg in ALL_ALGORITHMS {
+        let base = protected(alg, -1);
+        let signed = printcraft_sign::sign(&open_pw(&base, None), &id, &SignOptions { graphic: Some(picture(true)), ..opts() }).unwrap();
+        let doc = open_pw(&signed, None);
+        let s = signatures(&doc, &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+        assert_eq!((s.status, s.modification), (Status::Valid, Modification::None), "{alg:?}");
+        // Read back through the security handler, the pixels and their mask are exact; a stream
+        // written in the clear would be "decrypted" into noise and fail to inflate.
+        let (content, res) = appearance_in(&doc, "Signature1");
+        assert!(content.contains("/Im1 Do"), "{alg:?}: {content}");
+        let xobjects = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let Object::Stream(im) = &*doc.resolve(xobjects.get(b"Im1").unwrap()) else { panic!() };
+        assert_eq!(im.decoded().unwrap()[..3], [10, 20, 30], "{alg:?}");
+        let Object::Stream(mask) = &*doc.resolve(im.dict.get(b"SMask").unwrap()) else { panic!() };
+        assert_eq!(mask.decoded().unwrap()[..2], [128, 255], "{alg:?}");
+    }
+}
+
+#[test]
+fn encrypted_documents_are_signed_only_as_their_permissions_allow() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let base = protected(printcraft_cos::Algorithm::Aes256, FILL_AND_SIGN_ONLY);
+    let user = open_pw(&base, None);
+    let refused = |r: Result<Vec<u8>, SignError>, what: &str| match r {
+        Err(SignError::Pdf(m)) => assert!(m.contains(what) && m.contains("permissions password"), "{m}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|b| b.len())),
+    };
+    // A new field is a form change the settings don't allow.
+    refused(printcraft_sign::sign(&user, &id, &opts()), "adding new signature fields");
+    // So is certifying, even in an existing field.
+    refused(printcraft_sign::sign(&user, &id, &SignOptions { field: Some("Approval".into()), certify: Some(2), ..opts() }), "certifying");
+    // Signing the existing field is allowed.
+    let signed = printcraft_sign::sign(&user, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let s = signatures(&open_pw(&signed, None), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.field.as_str(), s.status), ("Approval", Status::Valid), "{:?}", s.details);
+    // Settings that allow no form filling refuse even that (print only).
+    let print_only = open_pw(&protected(printcraft_cos::Algorithm::Aes256, -3900), None);
+    refused(printcraft_sign::sign(&print_only, &id, &SignOptions { field: Some("Approval".into()), ..opts() }), "signing");
+    // The owner may do anything: a new, certifying signature.
+    let owner = open_pw(&base, Some("owner"));
+    let certified = printcraft_sign::sign(&owner, &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let s = signatures(&open_pw(&certified, None), &certified, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.certify, Some(2), "{:?}", s.details);
+}
+
+/// A security change that hasn't been saved would turn the signing save into a full rewrite that
+/// applies or removes protection: signing refuses until it is saved.
+#[test]
+fn signing_waits_for_a_pending_security_change_to_be_saved() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let mut owner = open_pw(&protected(printcraft_cos::Algorithm::Aes256, FILL_AND_SIGN_ONLY), Some("owner"));
+    owner.remove_encryption();
+    match printcraft_sign::sign(&owner, &id, &opts()) {
+        Err(SignError::Pdf(m)) => assert!(m.contains("save the document's new security settings"), "{m}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|b| b.len())),
+    }
+}
+
+#[test]
+fn encrypted_documents_take_a_document_timestamp() {
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let base = protected(printcraft_cos::Algorithm::Aes128, FILL_AND_SIGN_ONLY);
+    let stamped = printcraft_sign::timestamp_document(&open_pw(&base, None), &tsa, "D:20261006120000Z").unwrap();
+    assert!(stamped.starts_with(&base));
+    let s = signatures(&open_pw(&stamped, None), &stamped, &TrustStore { certs: vec![tsa.id.certificate.clone()] })
+        .into_iter()
+        .find(|s| s.doc_timestamp)
+        .unwrap();
+    assert_eq!((s.status, s.timestamp_time), (Status::Valid, Some(tsa.time)), "{:?}", s.details);
+    let print_only = open_pw(&protected(printcraft_cos::Algorithm::Aes128, -3900), None);
+    assert!(matches!(printcraft_sign::timestamp_document(&print_only, &tsa, "D:20261006120000Z"), Err(SignError::Pdf(_))));
+}
+
+/// A visible signature draws its details in Helvetica: a reason or location it can't draw is
+/// refused with the character and what to do instead, rather than drawn as `?`. An
+/// invisible signature stores the same reason as text and signs.
+#[test]
+fn visible_appearance_text_helvetica_cannot_draw_is_refused() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let shown = printcraft_sign::Appearance { reason: true, location: true, ..printcraft_sign::Appearance::default() };
+    let chinese = SignOptions { reason: Some("同意此文件".into()), appearance: shown.clone(), ..opts() };
+    let err = printcraft_sign::sign(&open(&fixture()), &id, &chinese).unwrap_err().to_string();
+    assert!(err.contains("\"同\" (U+540C)") && err.contains("the reason") && err.contains("sign without a visible appearance"), "{err}");
+    let located = SignOptions { location: Some("北京".into()), appearance: shown, ..opts() };
+    assert!(printcraft_sign::sign(&open(&fixture()), &id, &located).unwrap_err().to_string().contains("the location"));
+    // Left out of the appearance, or signed invisibly: it signs, and the reason is kept as text.
+    let hidden = SignOptions { reason: Some("同意此文件".into()), ..opts() };
+    assert!(!hidden.appearance.reason, "the default appearance doesn't show the reason");
+    printcraft_sign::sign(&open(&fixture()), &id, &hidden).unwrap();
+    let invisible = SignOptions { rect: None, ..chinese };
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &invisible).unwrap();
+    let doc = open(&signed);
+    let s = signatures(&doc, &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.reason.as_deref(), Some("同意此文件"));
+}
+
+/// Every sentence this crate says about a signature is listed in `WORDINGS`, and every sentence on
+/// that list is one it still says: the details are written as `Detail::plain`/`Detail::of`, the
+/// sentences the modules that read a signature word for themselves are pushed as notes and quirks,
+/// and the summaries are the only words `summary` chooses between, so all of them can be read off
+/// the files. An interface then has these to translate and only these.
+#[test]
+fn wordings_are_complete() {
+    let source = include_str!("../src/pdf.rs");
+    // The modules below `pdf` word whole sentences too: how a signature value had to be read, and
+    // what a certificate does not allow.
+    let elsewhere =
+        [include_str!("../src/x509.rs"), include_str!("../src/cms.rs"), include_str!("../src/keys.rs"), include_str!("../src/rsa_pad.rs")];
+    /// A sentence said to the user, as opposed to an OID, a name or a tag: it reads as English.
+    fn is_sentence(s: &str) -> bool {
+        s.len() > 24 && s.ends_with('.') && s.contains(' ') && s.starts_with(|c: char| c.is_ascii_uppercase())
+    }
+    // The literals of a stretch of the file, each as it is written there.
+    fn literals(text: &str) -> Vec<&str> {
+        let (mut out, mut rest) = (Vec::new(), text);
+        while let Some(at) = rest.find('"') {
+            rest = &rest[at + 1..];
+            let Some(end) = rest.find('"') else { break };
+            out.push(&rest[..end]);
+            rest = &rest[end + 1..];
+        }
+        out
+    }
+    /// The literals written right after each of `shapes`, wherever they appear in `text`.
+    fn after<'a>(text: &'a str, shapes: &[&str]) -> Vec<&'a str> {
+        let mut out = Vec::new();
+        for shape in shapes {
+            let mut rest = text;
+            while let Some(at) = rest.find(shape) {
+                rest = &rest[at + shape.len()..];
+                // A long sentence is written on the line below, and `plain` passes its own on.
+                let Some(text) = rest.trim_start().strip_prefix('"') else { continue };
+                let Some(end) = text.find('"') else { break };
+                out.push(&text[..end]);
+                rest = text;
+            }
+        }
+        out
+    }
+    let mut said = after(source, &["Detail::plain(", "Detail::of("]);
+    let at_hand = ["Detail::plain(", "Detail::of(", ".push(", "Some("];
+    said.extend(elsewhere.iter().flat_map(|s| after(s, &at_hand)).filter(|s| is_sentence(s)));
+    let summary = source.split("pub fn summary").nth(1).and_then(|s| s.split("\n    }").next()).unwrap_or_default();
+    said.extend(literals(summary));
+    assert!(said.len() >= 40, "the sentences are not being read off the files: {said:#?}");
+    let missing: Vec<&&str> = said.iter().filter(|s| !WORDINGS.contains(s)).collect();
+    assert!(missing.is_empty(), "add these to WORDINGS, and a translation of each to every interface: {missing:#?}");
+    let unsaid: Vec<&&str> = WORDINGS.iter().filter(|s| !said.contains(s)).collect();
+    assert!(unsaid.is_empty(), "WORDINGS lists sentences this crate no longer says: {unsaid:#?}");
+    // And every word it calls a change by is in `kind::ALL`, which is what an interface translates.
+    let vocabulary = source.split("pub mod kind {").nth(1).and_then(|s| s.split("\n}").next()).unwrap_or_default();
+    let words = literals(vocabulary);
+    assert!(words.len() >= 11, "the vocabulary is not being read off the file: {words:#?}");
+    let missing: Vec<&&str> = words.iter().filter(|w| !kind::ALL.contains(w)).collect();
+    assert!(missing.is_empty(), "add these to kind::ALL, and a translation of each to every interface: {missing:#?}");
+    let gone: Vec<&&str> = kind::ALL.iter().filter(|w| !words.contains(w)).collect();
+    assert!(gone.is_empty(), "kind::ALL lists words that are no longer there: {gone:#?}");
+}
+
+/// Each detail says itself: in English it comes to the sentence it carries, and its wording is one an
+/// interface can look up. This is what the Signatures panel relies on to read in another language.
+#[test]
+fn details_say_themselves() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let sigs = signatures(&open(&signed), &signed, &TrustStore::default());
+    let details: Vec<&Detail> = sigs.iter().flat_map(|s| s.details.iter()).collect();
+    assert!(!details.is_empty());
+    for d in details {
+        assert_eq!(d.said(&in_english), d.message);
+        assert!(WORDINGS.contains(&d.pattern), "{:?} is not in WORDINGS", d.pattern);
+        // A wording has exactly as many holes as its fill has things to put in them.
+        let holes = d.pattern.matches("{}").count();
+        let wanted = match &d.fill {
+            printcraft_sign::Fill::Nothing => 0,
+            printcraft_sign::Fill::Names(..) => 2,
+            _ => 1,
+        };
+        assert_eq!(holes, wanted, "{:?} has {holes} holes", d.pattern);
+    }
+}
+
+/// `signed` with one more revision appended by hand: a new definition of object 4 (the page's
+/// content stream) that draws `text`, then a cross-reference table section whose subsections are
+/// what `xref` returns for the offset of that definition. The section continues the signed chain.
+fn append_content_revision(signed: &[u8], text: &str, xref: impl Fn(usize) -> String) -> Vec<u8> {
+    let at = signed.windows(9).rposition(|w| w == b"startxref").unwrap() + 9;
+    let prev: String = signed[at..].iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit()).map(|b| *b as char).collect();
+    let mut out = signed.to_vec();
+    let content = format!("BT /F1 14 Tf 20 250 Td ({text}) Tj ET");
+    let object = out.len();
+    out.extend_from_slice(format!("4 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len()).as_bytes());
+    let section = out.len();
+    out.extend_from_slice(
+        format!("xref\n{}trailer\n<< /Size 60 /Root 1 0 R /Prev {prev} >>\nstartxref\n{section}\n%%EOF\n", xref(object)).as_bytes(),
+    );
+    out
+}
+
+fn xref_entry(offset: usize) -> String {
+    format!("{offset:010} 00000 n \n")
+}
+
+/// The reader that judges changes and the renderer that draws the page resolve some
+/// cross-reference entries differently. A revision appended after signing can redefine the page's
+/// content and give the object an entry the reader sets aside (an in-use entry at offset 0, or
+/// a second entry after one that still names the signed object): the reader then keeps comparing
+/// the signed object with itself while the page shows the new one. Such an entry is never a
+/// permitted change.
+#[test]
+fn a_cross_reference_entry_the_reader_sets_aside_does_not_hide_new_page_content() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for certify in LEVELS {
+        let signed = printcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify, ..opts() }).unwrap();
+        // Where the signed revision keeps the page's content stream.
+        let signed_at = signed.windows(8).position(|w| w == b"\n4 0 obj").unwrap() + 1;
+        // Each writes the section's subsections, given where the new object 4 was put.
+        type Subsections = Box<dyn Fn(usize) -> String>;
+        let attacks: [(&str, Subsections); 3] = [
+            ("an in-use entry at offset 0", Box::new(|_| format!("4 1\n{}", xref_entry(0)))),
+            ("a second entry for the object", Box::new(move |new| format!("4 1\n{}4 1\n{}", xref_entry(signed_at), xref_entry(new)))),
+            // The plain case, which was always caught: one entry naming the new object.
+            ("an ordinary entry", Box::new(|new| format!("4 1\n{}", xref_entry(new)))),
+        ];
+        for (name, xref) in attacks {
+            let edited = append_content_revision(&signed, "Forged text", xref);
+            let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
+            assert_eq!(s.status, Status::Invalid, "{certify:?}, {name}: {:?}", s.details);
+            assert!(
+                matches!(&s.modification, Modification::Disallowed(k) if k.contains(&"page content")),
+                "{certify:?}, {name}: {:?}",
+                s.modification
+            );
+        }
+    }
+}
+
+/// An entry that does not point at the object it names leaves the reader to find the object by
+/// searching the file. What it finds may equal the signed object, yet another reader may search
+/// differently: the object cannot be called unchanged.
+#[test]
+fn a_cross_reference_entry_that_misses_its_object_is_not_an_unchanged_object() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = printcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    // A copy of the signed content, named by an entry two bytes into its `4 0 obj` header.
+    let edited = append_content_revision(&signed, "Contract text", |new| format!("4 1\n{}", xref_entry(new + 2)));
+    let doc = open(&edited);
+    assert!(!doc.xref_entry_is_exact(4) && doc.xref_entry_is_exact(3));
+    let s = signatures(&doc, &edited, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Invalid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&"other changes")), "{:?}", s.modification);
+
+    // The same copy under an entry that does point at it is the unchanged object it looks like.
+    let honest = append_content_revision(&signed, "Contract text", |new| format!("4 1\n{}", xref_entry(new)));
+    let s = signatures(&open(&honest), &honest, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
 }

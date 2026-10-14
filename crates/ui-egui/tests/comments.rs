@@ -26,6 +26,7 @@ trailer << /Root 1 0 R >>
 fn harness(setup: impl FnOnce(&mut PrintCraftApp) + 'static) -> Harness<'static, PrintCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("author", "Tester").unwrap();
@@ -116,6 +117,121 @@ fn dragging_over_text_with_the_highlighter_highlights_it() {
 }
 
 #[test]
+fn the_quick_bar_colour_changes_the_selected_comment() {
+    use printcraft_ui_egui::comments::CommentTool;
+
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    assert_eq!(comments(&h)[0].color, Some([1.0, 0.94, 0.0]));
+
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).expect("document");
+    assert_eq!(doc.comment_props(0, 0).and_then(|props| props.color), Some([0.0, 0.47, 0.84]));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"), "recoloring is one undo step");
+    assert_eq!(state.comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
+}
+
+#[test]
+fn the_quick_bar_colour_changes_the_selected_arrow() {
+    use printcraft_ui_egui::comments::CommentTool;
+
+    // Arrows are saved as Line annotations; the Arrow tool's colour must still reach them.
+    let mut h = harness(|app| app.set_option("quick", "arrow").unwrap());
+    drag_pt(&mut h, (20.0, 20.0), (120.0, 30.0));
+    assert_eq!(comments(&h)[0].subtype, "Line");
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(CommentTool::Arrow), "the arrow tool is still active");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the new arrow is selected");
+
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).expect("document");
+    assert_eq!(doc.comment_props(0, 0).and_then(|props| props.color), Some([0.0, 0.47, 0.84]));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"));
+}
+
+#[test]
+fn the_quick_bar_colour_skips_the_selected_comment_when_commenting_is_forbidden() {
+    use printcraft_ui_egui::comments::CommentTool;
+
+    // One page with a yellow highlight, encrypted to allow printing only (no commenting).
+    let plain = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Highlight /Rect [20 140 120 165] /QuadPoints [20 165 120 165 20 140 120 140] /C [1 0.94 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut doc = printcraft_cos::Document::open(std::sync::Arc::new(plain.to_vec())).expect("fixture parses");
+    doc.set_encryption(&printcraft_cos::NewEncryption {
+        algorithm: printcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: 0b0100,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .expect("encrypts");
+    let bytes = printcraft_cos::write_full(&doc, &Default::default()).expect("writes");
+    let mut h = harness(move |app| {
+        app.open_bytes("restricted.pdf", None, bytes).expect("opens restricted");
+        app.set_option("quick", "highlight").unwrap();
+    });
+    let id = h.state().active_ids().expect("active document").1;
+    assert!(!h.state().session.get(id).expect("document").allows_annotation(), "commenting is forbidden");
+    let index = h.state().views.iter().position(|v| v.id == id).expect("view");
+    h.state_mut().views[index].comments.selected = Some((0, 0));
+    h.run_steps(2);
+
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+
+    let state = h.state();
+    let doc = state.session.get(id).expect("document");
+    assert_eq!(doc.comment_props(0, 0).and_then(|props| props.color), Some([1.0, 0.94, 0.0]), "the comment keeps its colour");
+    assert_eq!(doc.can_undo(), None, "no edit was made");
+    assert_eq!(state.toast, None, "picking a colour is not reported as a failed edit");
+    assert_eq!(state.comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84], "the tool default still changes");
+}
+
+#[test]
+fn a_new_highlight_opens_its_note_for_typing() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    assert_eq!(h.state().views[0].comments.editing, None);
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, String::new())), "the Comments panel edits the new highlight");
+    // An area highlight opens its note too, replacing the empty one.
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    assert_eq!(comments(&h).len(), 2);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, String::new())));
+    // A note being typed is kept: the next highlight is only selected.
+    h.state_mut().views[0].comments.editing = Some((0, 1, "typed".into()));
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    assert_eq!(comments(&h).len(), 3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "typed".into())));
+}
+
+#[test]
 fn a_selection_made_first_is_marked_when_a_tool_is_picked() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);
@@ -125,6 +241,44 @@ fn a_selection_made_first_is_marked_when_a_tool_is_picked() {
     assert_eq!(c.len(), 1);
     assert_eq!(c[0].subtype, "StrikeOut");
     assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
+}
+
+#[test]
+fn selected_text_shows_actions_and_underlines_without_changing_tools() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.get_by_label("Add comment");
+    h.get_by_label("Replace text");
+    h.get_by_label("Underline").click();
+    h.run_steps(3);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Underline");
+    assert!(h.state().views[0].selected_text().is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+#[test]
+fn selected_text_replace_action_opens_replacement_composer() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.get_by_label("Replace text").click();
+    h.run_steps(2);
+    h.get_by_label("Replacement text");
+    assert!(h.state().views[0].selected_text().is_none());
+}
+
+#[test]
+fn selected_text_comment_action_opens_note_composer() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.get_by_label("Add comment").click();
+    h.run_steps(2);
+    assert!(matches!(h.state().views[0].comments.composer.as_ref().map(|c| &c.kind), Some(printcraft_ui_egui::comments::ComposerKind::Note)));
+    assert!(h.state().views[0].selected_text().is_none());
 }
 
 #[test]
@@ -145,6 +299,30 @@ fn shapes_and_ink_are_drawn_by_dragging() {
     assert_eq!(kinds, ["Square", "Ink", "Line"], "{c:?}");
     let r = c[0].rect;
     assert!((r[0] - 40.0).abs() < 3.0 && (r[1] - 40.0).abs() < 3.0 && (r[2] - 140.0).abs() < 3.0 && (r[3] - 100.0).abs() < 3.0, "{r:?}");
+}
+
+#[test]
+fn pen_strokes_stay_unselected_so_writing_continues() {
+    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    // No Comments panel: the author's name should only show in a hover popup.
+    h.state_mut().set_option("panel", "none").unwrap();
+    h.run_steps(2);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 60.0));
+    assert_eq!(h.state().views[0].comments.selected, None, "the first stroke isn't selected");
+    // The pointer still rests on the stroke: no author popup covers it.
+    h.hover_at(at(&h, 140.0, 60.0));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Tester").is_none(), "no author popup while drawing");
+    drag_pt(&mut h, (60.0, 100.0), (160.0, 60.0));
+    let c = comments(&h);
+    let kinds: Vec<&str> = c.iter().map(|a| a.subtype.as_str()).collect();
+    assert_eq!(kinds, ["Ink", "Ink"], "{c:?}");
+    assert_eq!(h.state().views[0].comments.selected, None, "nothing is selected after drawing");
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(printcraft_ui_egui::comments::CommentTool::Ink), "the pen stays on");
+    // Other drawn shapes are still selected when made.
+    h.state_mut().set_option("quick", "square").unwrap();
+    drag_pt(&mut h, (180.0, 100.0), (260.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
 }
 
 #[test]
@@ -216,6 +394,76 @@ fn the_panel_posts_comments_and_replies() {
     h.get_by_label_contains("Agreed");
 }
 
+/// The side panel's width as egui keeps it from one frame to the next.
+fn panel_width(h: &Harness<'static, PrintCraftApp>) -> f32 {
+    h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new("printcraft-inspector-body"))).expect("the inspector body is shown").width()
+}
+
+#[test]
+fn the_panel_keeps_its_width_with_a_reply_box_open() {
+    // The reply row reserved 48 px for "Post"; Russian's wider button overflowed it, and a
+    // resizable panel keeps the width its content used, so every repaint widened the panel.
+    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    field(&h, "Add a comment").click();
+    h.run_steps(2);
+    field(&h, "Add a comment").type_text("General remark");
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    field(&h, "Add a reply").click(); // the new comment is selected
+    h.run_steps(2);
+    field(&h, "Add a reply").type_text("Agreed");
+    h.run_steps(1);
+    h.state_mut().set_option("language", "ru").unwrap();
+    h.run_steps(3);
+    let before = panel_width(&h);
+    h.get_by_label("Опубликовать").hover();
+    for _ in 0..30 {
+        h.run_steps(1);
+    }
+    assert_eq!(panel_width(&h), before, "the Comments panel drifted wider");
+}
+
+#[test]
+fn line_ending_properties_change_and_undo() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (160.0, 40.0));
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Line ending");
+    h.query_all_by_value("None").next().expect("start ending").click();
+    h.run_steps(2);
+    for label in ["Open arrow", "Closed arrow", "Butt", "Reverse open arrow", "Reverse closed arrow", "Slash", "Square", "Circle", "Diamond"] {
+        h.get_by_label(label);
+    }
+    assert_eq!(h.query_all_by_label("ROpenArrow").count(), 0);
+    assert_eq!(h.query_all_by_label("OpenArrow").count(), 0);
+    h.get_by_label("None").click();
+    h.run_steps(1);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        assert_eq!(d.edited.endings.as_deref(), Some(&[printcraft_engine::LineEnding::None, printcraft_engine::LineEnding::None][..]));
+        d.edited.endings = Some(vec![printcraft_engine::LineEnding::None, printcraft_engine::LineEnding::Diamond]);
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let endings = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Change comment properties"));
+        doc.comment_props(0, 0).unwrap().endings
+    };
+    assert_eq!(endings.as_deref(), Some(&[printcraft_engine::LineEnding::None, printcraft_engine::LineEnding::Diamond][..]));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(
+        doc.comment_props(0, 0).unwrap().endings.as_deref(),
+        Some(&[printcraft_engine::LineEnding::None, printcraft_engine::LineEnding::None][..])
+    );
+}
+
 #[test]
 fn comment_properties_change_appearance_and_author() {
     let mut h = harness(|app| app.set_option("quick", "square").unwrap());
@@ -240,6 +488,64 @@ fn comment_properties_change_appearance_and_author() {
     let p = doc.comment_props(0, 0).unwrap();
     assert_eq!((p.color, p.width, p.author.as_str()), (Some([0.0, 0.0, 1.0]), Some(5.0), "Grace"));
     assert_eq!(doc.can_undo(), Some("Change comment properties"), "one undo step");
+}
+
+/// #686: rectangles, ovals, polygons and clouds can be filled, from the quick bar for new ones
+/// and from Properties for existing ones; "No fill" takes it away again.
+#[test]
+fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
+    use printcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    h.run_steps(2);
+    // No fill by default; the quick bar says so.
+    h.get_by_label("Fill colour: none");
+    h.state_mut().comment_prefs.set_fill(CommentTool::Rectangle, Some([1.0, 0.5, 0.0]));
+    // Tools without an interior keep no fill.
+    h.state_mut().comment_prefs.set_fill(CommentTool::Line, Some([1.0, 0.5, 0.0]));
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Line).fill, None);
+    h.run_steps(2);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let fill_of = |h: &Harness<'static, PrintCraftApp>, index: usize| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let p = doc.comment_props(0, index).unwrap();
+        assert!(p.fillable);
+        p.fill
+    };
+    assert_eq!(fill_of(&h, 0), Some([1.0, 0.5, 0.0]), "the new rectangle is filled");
+    // Quick bar ▸ Fill colour ▸ No fill: the next rectangle has none.
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    h.get_by_label("Fill colour").click();
+    h.run_steps(2);
+    h.get_by_label("No fill").click();
+    h.run_steps(2);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, None);
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    assert_eq!(fill_of(&h, 1), None);
+
+    // Properties ▸ Fill colour changes an existing one, as one undo step.
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.get_by_label("Rectangle Properties");
+    h.get_by_label("Fill colour");
+    assert_eq!(h.state().comment_props.as_ref().unwrap().original.fill, Some([1.0, 0.5, 0.0]));
+    h.get_by_label("No fill").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(fill_of(&h, 0), None);
+    let undo = h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
+    assert_eq!(undo.as_deref(), Some("Change comment properties"));
+    h.state_mut().open_comment_props(0, 1);
+    h.run_steps(2);
+    h.state_mut().comment_props.as_mut().expect("open").edited.fill = Some([0.0, 0.0, 1.0]);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(fill_of(&h, 1), Some([0.0, 0.0, 1.0]));
+    // Make Current Properties Default carries the fill into the tool.
+    h.state_mut().make_comment_default(0, 1);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([0.0, 0.0, 1.0]));
 }
 
 #[test]
@@ -390,6 +696,35 @@ fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
 }
 
 #[test]
+fn inserted_text_snaps_to_the_gap_between_characters_on_the_baseline() {
+    let mut h = harness(|app| app.set_option("quick", "caret").unwrap());
+    // "The quick brown fox", Helvetica 14 pt from x = 20 on the baseline y = 150. With the
+    // standard-14 widths "The quick b" ends at 92.366 and "r" (333/1000 em) at 97.028, so a click
+    // in the right half of "r", above the baseline, puts the tip between "r" and "o".
+    click_pt(&mut h, (95.5, 155.0));
+    field(&h, "Text to insert").type_text("x");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let caret = comments(&h).into_iter().find(|a| a.subtype == "Caret").expect("a caret");
+    let [x0, y0, x1, y1] = caret.rect;
+    assert!(((x0 + x1) / 2.0 - 97.03).abs() < 0.3, "tip at the r|o gap: {:?}", caret.rect);
+    assert!((y1 - 150.0).abs() < 0.3, "tip on the baseline: {:?}", caret.rect);
+    assert!((y1 - y0 - 7.0).abs() < 0.3, "half the 14 pt em: {:?}", caret.rect);
+
+    // Away from the text the caret stays where the click was, at its default size.
+    h.state_mut().set_option("quick", "caret").unwrap();
+    click_pt(&mut h, (200.0, 60.0));
+    field(&h, "Text to insert").type_text("y");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let away = comments(&h).into_iter().find(|a| a.subtype == "Caret" && a.contents.as_deref() == Some("y")).expect("a second caret");
+    let [x0, y0, x1, y1] = away.rect;
+    assert!(((x0 + x1) / 2.0 - 200.0).abs() < 1.0 && (y1 - 60.0).abs() < 1.0 && (y1 - y0 - 8.0).abs() < 0.3, "{:?}", away.rect);
+}
+
+#[test]
 fn the_panel_filters_by_colour_and_checkmark() {
     let mut h = harness(|app| {
         app.set_option("panel", "comments").unwrap();
@@ -405,6 +740,7 @@ fn the_panel_filters_by_colour_and_checkmark() {
         color: Some([0.0, 0.47, 0.84]),
         opacity: None,
         width: None,
+        endings: None,
     });
     h.state_mut().apply_edit(printcraft_engine::Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: "Tester".into() });
     h.run_steps(2);
@@ -439,6 +775,7 @@ fn make_current_properties_default() {
         color: Some([0.0, 0.47, 0.84]),
         opacity: Some(0.5),
         width: Some(5.0),
+        endings: None,
     });
     h.run_steps(2);
     h.get_by_label("More").click();
@@ -447,12 +784,61 @@ fn make_current_properties_default() {
     h.run_steps(3);
     let st = h.state().comment_prefs.style(printcraft_ui_egui::comments::CommentTool::Rectangle);
     assert_eq!((st.color, st.opacity, st.width), ([0.0, 0.47, 0.84], 0.5, 5.0));
+    // The default survives a restart (#340): a fresh app reads the persisted settings and its
+    // next rectangle still takes the style.
+    let json = h.state().persist();
+    let mut fresh = PrintCraftApp::new();
+    fresh.restore(&json);
+    let st = fresh.comment_prefs.style(printcraft_ui_egui::comments::CommentTool::Rectangle);
+    assert_eq!((st.color, st.opacity, st.width), ([0.0, 0.47, 0.84], 0.5, 5.0), "the tool default persisted");
     // The next rectangle takes it.
     h.state_mut().set_option("quick", "square").unwrap();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
     let c = comments(&h);
     let last = c.iter().rfind(|a| a.subtype == "Square").unwrap();
     assert_eq!(last.color, Some([0.0, 0.47, 0.84]));
+}
+
+/// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
+#[test]
+fn an_arrows_default_does_not_restyle_lines() {
+    use printcraft_ui_egui::comments::CommentTool;
+
+    let mut h = harness(|app| {
+        app.set_option("panel", "comments").unwrap();
+        app.set_option("quick", "arrow").unwrap();
+    });
+    drag_pt(&mut h, (20.0, 40.0), (140.0, 80.0));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().apply_edit(printcraft_engine::Edit::StyleAnnotation {
+        page: 0,
+        index: 0,
+        color: Some([0.0, 0.47, 0.84]),
+        opacity: Some(0.5),
+        width: Some(6.0),
+        endings: None,
+    });
+    h.run_steps(2);
+    h.get_by_label("More").click();
+    h.run_steps(2);
+    h.get_by_label("Make Current Properties Default").click();
+    h.run_steps(3);
+    let arrow = h.state().comment_prefs.style(CommentTool::Arrow);
+    let line = h.state().comment_prefs.style(CommentTool::Line);
+    assert_eq!((arrow.color, arrow.opacity, arrow.width), ([0.0, 0.47, 0.84], 0.5, 6.0));
+    assert_eq!((line.color, line.opacity, line.width), ([0.89, 0.13, 0.13], 1.0, 2.0), "plain lines keep their own default");
+
+    h.state_mut().set_option("quick", "arrow").unwrap();
+    drag_pt(&mut h, (20.0, 100.0), (140.0, 140.0));
+    h.state_mut().set_option("quick", "line").unwrap();
+    drag_pt(&mut h, (160.0, 40.0), (260.0, 80.0));
+    let c = comments(&h);
+    let arrows = c.iter().filter(|a| a.subtype == "Line").collect::<Vec<_>>();
+    assert!(arrows.len() >= 3, "{c:?}");
+    let next_arrow = &arrows[1];
+    let plain = arrows.last().unwrap();
+    assert_eq!(next_arrow.color, Some([0.0, 0.47, 0.84]));
+    assert_eq!(plain.color, Some([0.89, 0.13, 0.13]));
 }
 
 #[test]
@@ -513,6 +899,52 @@ fn attaching_a_file_as_a_comment() {
     assert_eq!(s.quick_tool, QuickTool::Select);
 }
 
+/// Drag with the middle button (the mouse wheel) in small steps.
+fn middle_drag(h: &mut Harness<'static, PrintCraftApp>, from: Pos2, to: Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(button(from, true));
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    h.event(button(to, false));
+    h.run_steps(3);
+}
+
+#[test]
+fn a_middle_drag_with_a_drawing_tool_scrolls_instead_of_drawing() {
+    // egui's drag responses accept any button, so the drawing tools used to draw with the wheel.
+    let mut h = harness(|app| {
+        app.set_option("zoom", "400").unwrap();
+        app.set_option("quick", "ink").unwrap();
+    });
+    let from = at(&h, 150.0, 100.0);
+    let top = h.state().views[0].page_screen_rect(0).expect("page 1 on screen").top();
+    middle_drag(&mut h, from, from - egui::vec2(0.0, 120.0));
+    assert!(comments(&h).is_empty(), "{:?}", comments(&h));
+    let s = h.state();
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "scrolling never edits the PDF");
+    assert!(!s.views[0].middle_panning(), "releasing the wheel ends the pan");
+    let moved = s.views[0].page_screen_rect(0).expect("page 1 on screen").top();
+    if cfg!(target_os = "linux") {
+        // Linux latches auto-scroll instead of panning with the drag.
+        assert!(s.views[0].auto_scrolling());
+    } else {
+        assert!((moved - (top - 120.0)).abs() < 1.0, "the page follows the pointer: {top} -> {moved}");
+    }
+    // The tool still draws with the primary button afterwards.
+    if cfg!(target_os = "linux") {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+    }
+    drag_pt(&mut h, (60.0, 120.0), (200.0, 80.0));
+    let kinds: Vec<String> = comments(&h).into_iter().map(|a| a.subtype).collect();
+    assert_eq!(kinds, ["Ink"]);
+}
+
 #[test]
 fn erasing_part_of_a_drawing() {
     let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
@@ -539,6 +971,7 @@ fn hovering_a_comment_shows_its_author_and_text() {
     );
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("hover.pdf", None, pdf.into_bytes()).expect("opens");
         app.set_option("left", "closed").unwrap();
         // No Comments panel: the comment's text should only appear in the hover popup.
@@ -553,6 +986,11 @@ fn hovering_a_comment_shows_its_author_and_text() {
     h.run_steps(3);
     h.get_by_label_contains("Check this figure");
     h.get_by_label_contains("Ada");
+    // The tip is drawn above every window. A dialog must hide it, or the author floats over the dialog.
+    h.state_mut().set_option("dialog", "shortcuts").unwrap();
+    h.hover_at(p);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Check this figure").is_none(), "a dialog covers the page hover");
 }
 
 #[test]
@@ -597,4 +1035,44 @@ fn the_opacity_set_for_a_tool_goes_into_its_new_comments() {
     h.state_mut().set_option("quick", "strikeout").unwrap();
     h.run_steps(2);
     h.get_by_label("Opacity");
+}
+
+/// #225: comment tools open the Comments panel until the user closes it; then it stays closed,
+/// across restarts, until they open it again.
+#[test]
+fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
+    use printcraft_ui_egui::RightPanel;
+    let mut h = harness(|_| {});
+    assert_eq!(h.state().right, None);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments), "Acrobat opens Comments with the tools");
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert_eq!(h.state().right, None);
+    for tool in ["select", "comment.underline", "comment.note", "comment.highlight"] {
+        if tool == "select" {
+            h.state_mut().quick_tool = QuickTool::Select;
+        } else {
+            assert!(h.state_mut().execute(tool));
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().right, None, "{tool} reopened the closed Comments panel");
+    }
+    let mut again = PrintCraftApp::new();
+    again.restore(&h.state().persist());
+    assert!(again.comments_panel_closed, "the choice survives a restart");
+    // Opening it again from the rail lets the tools open it once more.
+    h.get_by_label("Comments").click();
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments));
+    assert!(!h.state().comments_panel_closed);
+    // What the rail and View menu call; "Bookmarks" labels two controls on screen.
+    h.state_mut().choose_right_panel(Some(RightPanel::Bookmarks));
+    h.state_mut().choose_right_panel(None);
+    h.run_steps(2);
+    assert!(!h.state().comments_panel_closed, "switching to and closing another panel isn't closing Comments");
+    assert!(h.state_mut().execute("comment.strikeout"));
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Comments));
 }

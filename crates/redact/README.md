@@ -33,6 +33,14 @@ A verification pass re-reads each redacted page and fails the operation if any g
 image is still under an area. Content that can't be decoded makes the operation fail rather than
 leave it unredacted.
 
+Structure cleanup resolves named MCIDs and indirect content references. Form content
+references are updated to the cleaned copy; unchanged sibling descriptions remain.
+
+A redacted page that inherits `/Resources` from the page tree gets them pinned (by reference;
+a direct inherited dictionary is made one shared object first) before it is rewritten. The parent's
+`/Resources` is then retired unless another page still inherits it, so it cannot keep a removed
+XObject reachable. Pages that aren't redacted are left untouched.
+
 ## Remove hidden information / Sanitize
 
 ```rust
@@ -48,6 +56,10 @@ and `/PieceInfo` private data. Both make the next save a full rewrite.
 
 `patterns` finds phone numbers, e-mail addresses, credit card numbers (Luhn-checked), US Social
 Security numbers and dates for Search & Redact.
+
+`codes` holds the redaction code sets (U.S. FOIA and U.S. Privacy Act exemptions):
+`CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.
+Custom code sets aren't supported yet.
 
 Not yet: pattern locales, struct-tree/alt-text cleanup, metadata and hidden-information
 sanitising (M8.4), re-encoding of DCT images (they are removed instead).

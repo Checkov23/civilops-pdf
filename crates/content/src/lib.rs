@@ -125,12 +125,19 @@ pub fn parse(data: &[u8]) -> Parsed {
                 start.get_or_insert(at);
                 operands.push(Object::Null);
             }
-            b"BI" => {
-                let (dict, img, end) = inline_image(data, lx.pos);
-                lx.pos = end;
-                out.ops.push(Op { op: b"BI".to_vec(), operands: Vec::new(), inline: Some((dict, img)), span: start.take().unwrap_or(at)..end });
-                operands.clear();
-            }
+            b"BI" => match inline_image(data, lx.pos) {
+                Ok((dict, img, end)) => {
+                    lx.pos = end;
+                    out.ops.push(Op { op: b"BI".to_vec(), operands: Vec::new(), inline: Some((dict, img)), span: start.take().unwrap_or(at)..end });
+                    operands.clear();
+                }
+                Err(end) => {
+                    out.skipped += end.saturating_sub(at);
+                    lx.pos = end;
+                    start = None;
+                    operands.clear();
+                }
+            },
             _ => {
                 let s = start.take().unwrap_or(at);
                 out.ops.push(Op { op: kw.to_vec(), operands: std::mem::take(&mut operands), inline: None, span: s..lx.pos });
@@ -141,8 +148,9 @@ pub fn parse(data: &[u8]) -> Parsed {
     out
 }
 
-/// Read an inline image starting after `BI`: (parameters, data, position after `EI`).
-fn inline_image(data: &[u8], pos: usize) -> (Dict, Vec<u8>, usize) {
+/// Read an inline image starting after `BI`: (parameters, data, position after `EI`). `Err` holds
+/// the position after the `EI` (or the end of the stream) of an image whose parameters can't be read.
+fn inline_image(data: &[u8], pos: usize) -> Result<(Dict, Vec<u8>, usize), usize> {
     let mut lx = Lexer::new(data, pos);
     let mut dict = Dict::new();
     loop {
@@ -150,17 +158,32 @@ fn inline_image(data: &[u8], pos: usize) -> (Dict, Vec<u8>, usize) {
         if lx.eat_keyword(b"ID") {
             break;
         }
-        let Ok(Object::Name(k)) = lx.object() else {
-            return (dict, Vec::new(), data.len());
+        let at = lx.pos;
+        let entry = match lx.object() {
+            Ok(Object::Name(k)) => lx.object().ok().map(|v| (k, v)),
+            _ => None,
         };
-        let Ok(v) = lx.object() else {
-            return (dict, Vec::new(), data.len());
+        let Some((k, v)) = entry else {
+            // A stream that ends inside the parameters is cut short, not unreadable: keep what was read.
+            if at >= data.len() {
+                return Ok((dict, Vec::new(), data.len()));
+            }
+            // Without an `EI` after it, the image runs to the end of the stream.
+            return Err(end_of_image(data, at).map_or(data.len(), |(_, end)| end));
         };
         dict.set(k, v);
     }
     // One whitespace byte separates ID from the data.
     let begin = (lx.pos + 1).min(data.len());
-    // The data ends at whitespace + `EI` + (whitespace or end). Search for that pattern.
+    Ok(match end_of_image(data, begin) {
+        Some((end_data, end)) => (dict, data[begin..end_data].to_vec(), end),
+        None => (dict, data[begin..].to_vec(), data.len()),
+    })
+}
+
+/// Where inline image data starting at `begin` ends: (end of the data, position after `EI`). The
+/// data ends at whitespace + `EI` + (whitespace, a delimiter or the end).
+fn end_of_image(data: &[u8], begin: usize) -> Option<(usize, usize)> {
     let mut i = begin;
     while i + 2 <= data.len() {
         if data[i] == b'E'
@@ -169,11 +192,11 @@ fn inline_image(data: &[u8], pos: usize) -> (Dict, Vec<u8>, usize) {
             && data.get(i + 2).is_none_or(|b| is_ws(*b) || is_delim(*b))
         {
             let end_data = if i > begin && is_ws(data[i - 1]) { i - 1 } else { i };
-            return (dict, data[begin..end_data].to_vec(), i + 2);
+            return Some((end_data, i + 2));
         }
         i += 1;
     }
-    (dict, data[begin..].to_vec(), data.len())
+    None
 }
 
 /// Write one operator (with a trailing newline).
@@ -206,6 +229,100 @@ pub fn serialize_ops(ops: &[Op]) -> Vec<u8> {
         write_op(op, &mut out);
     }
     out
+}
+
+/// A page's content streams joined into the one stream they are. Writers may split it between
+/// any two tokens (ISO 32000-2 §7.8.2), so an operator's operands can end one piece and its
+/// keyword start the next: parse the pieces joined ([`Pieces::parse`]) and map positions back
+/// with [`Pieces::piece_of`]. A newline separates the pieces so tokens never run together.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pieces {
+    data: Vec<u8>,
+    /// Where each piece ends in `data`, after its separator.
+    ends: Vec<usize>,
+}
+
+impl Pieces {
+    pub fn join<D: AsRef<[u8]>>(pieces: &[D]) -> Self {
+        let mut data = Vec::new();
+        let mut ends = Vec::with_capacity(pieces.len());
+        for p in pieces {
+            data.extend_from_slice(p.as_ref());
+            data.push(b'\n');
+            ends.push(data.len());
+        }
+        Pieces { data, ends }
+    }
+
+    /// The joined bytes (the spans of [`Pieces::parse`]'s operators index into them).
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// How many pieces there are.
+    pub fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ends.is_empty()
+    }
+
+    /// Parse the pieces as one stream.
+    pub fn parse(&self) -> Parsed {
+        parse(&self.data)
+    }
+
+    /// The piece holding joined position `at` (the last piece for positions past the end).
+    pub fn piece_of(&self, at: usize) -> usize {
+        self.ends.iter().position(|&e| at < e).unwrap_or(self.ends.len().saturating_sub(1))
+    }
+
+    /// The pieces an operator spans: (the one its first token is in, the one its keyword is in).
+    pub fn pieces_of(&self, op: &Op) -> (usize, usize) {
+        (self.piece_of(op.span.start), self.piece_of(op.span.end.saturating_sub(1)))
+    }
+
+    /// The joined range of piece `i`, without its separator.
+    fn range(&self, i: usize) -> std::ops::Range<usize> {
+        let start = match i.checked_sub(1) {
+            None => 0,
+            Some(p) => self.ends.get(p).copied().unwrap_or(self.data.len()),
+        };
+        let end = self.ends.get(i).map_or(self.data.len(), |e| e.saturating_sub(1)).max(start);
+        start..end
+    }
+
+    /// Rebuild every piece after replacing joined byte ranges: `edits` are (range, bytes) in
+    /// ascending, non-overlapping order. A replacement goes into the piece its range starts in,
+    /// and the rest of a range that runs on into later pieces is removed from them, so an
+    /// operator split across pieces is replaced or removed whole. Everything else is copied byte
+    /// for byte. Returns every piece's new bytes (unchanged pieces come back equal).
+    pub fn splice(&self, edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<u8>)>) -> Vec<Vec<u8>> {
+        let mut out: Vec<Vec<u8>> = (0..self.len()).map(|i| Vec::with_capacity(self.range(i).len())).collect();
+        let copy = |out: &mut Vec<Vec<u8>>, from: usize, to: usize| {
+            for (i, piece) in out.iter_mut().enumerate() {
+                let r = self.range(i);
+                let (a, b) = (from.max(r.start), to.min(r.end));
+                if a < b {
+                    piece.extend_from_slice(self.data.get(a..b).unwrap_or_default());
+                }
+            }
+        };
+        let mut at = 0;
+        for (range, bytes) in edits {
+            let start = range.start.clamp(at, self.data.len());
+            copy(&mut out, at, start);
+            if !bytes.is_empty()
+                && let Some(piece) = out.get_mut(self.piece_of(start))
+            {
+                piece.extend_from_slice(&bytes);
+            }
+            at = range.end.clamp(start, self.data.len());
+        }
+        copy(&mut out, at, self.data.len());
+        out
+    }
 }
 
 /// A number operand, written as an integer when it is one.

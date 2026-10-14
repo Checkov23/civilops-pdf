@@ -9,13 +9,16 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["jpeg", "tiff"] }
+printcraft-measure = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 printcraft-render = { workspace = true }
 printcraft-cos = { workspace = true }
 printcraft-organize = { workspace = true }
 printcraft-annot = { workspace = true }
 printcraft-forms = { workspace = true }
+printcraft-xfa = { workspace = true }
 printcraft-edit = { workspace = true }
+printcraft-audit = { workspace = true }
 printcraft-redact = { workspace = true }
 printcraft-print = { workspace = true }
 printcraft-xfdf = { workspace = true }
@@ -30,8 +33,14 @@ printcraft-export = { workspace = true }
 printcraft-fonts = { workspace = true }
 printcraft-create = { workspace = true }
 printcraft-model = { workspace = true }
+printcraft-geom = { workspace = true }
 thiserror = { workspace = true }
 png = "0.18"
+# Already in the graph (url and idna through webbrowser, icu_properties through boa): they show
+# the host of a document's link the way the browser reads it (links::display_host).
+url = "2.5"
+idna = "1.1"
+icu_properties = "2.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Already in the graph through lopdf; used only for the local UTC offset ("today").

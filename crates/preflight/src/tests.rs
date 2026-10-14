@@ -60,6 +60,39 @@ fn verify_reports_what_breaks_pdfa() {
     }
     assert!(issues.iter().find(|i| i.message.starts_with("The font")).is_some_and(|i| !i.fixable));
     assert!(clauses(&issues).contains(&"6.6.2.1"));
+    // Each problem is also worded separately from what the document calls things, so an interface
+    // can say it in another language; in English the two come to the same sentence.
+    for i in &issues {
+        assert_eq!(i.said(&in_english), i.message);
+        assert!(WORDINGS.contains(&i.pattern), "{:?} is not in WORDINGS", i.pattern);
+    }
+    let font = issues.iter().find(|i| i.pattern == "The font {} isn't embedded").unwrap();
+    assert_eq!(font.said(&|w: &str| format!("«{w}»")), "«The font {} isn't embedded»".replace("{}", "Helvetica"));
+}
+
+/// Every problem the rules can report is listed in `WORDINGS`, so an interface showing them in
+/// another language has something to translate. The wording is `verify`'s second argument, which is
+/// what this reads off the file; the sentences `convert` reports as fixed are not wordings.
+#[test]
+fn wordings_are_complete() {
+    let source = include_str!("lib.rs");
+    let mut said = Vec::new();
+    let mut rest = source;
+    while let Some(at) = rest.find("issue(\"") {
+        rest = &rest[at + 7..];
+        // Step over the clause, then take the wording that follows it.
+        let Some(end) = rest.find('"') else { break };
+        rest = &rest[end + 1..];
+        let Some(text) = rest.strip_prefix(", \"") else { continue };
+        let Some(end) = text.find('"') else { break };
+        said.push(&text[..end]);
+        rest = text;
+    }
+    assert!(said.len() >= 24, "the wordings are not being read off the file: {said:#?}");
+    let missing: Vec<&&str> = said.iter().filter(|word| !WORDINGS.contains(word)).collect();
+    assert!(missing.is_empty(), "add these to WORDINGS, and a translation of each to every interface: {missing:#?}");
+    let unsaid: Vec<&&str> = WORDINGS.iter().filter(|word| !said.contains(word)).collect();
+    assert!(unsaid.is_empty(), "WORDINGS lists problems the rules no longer report: {unsaid:#?}");
 }
 
 #[test]
@@ -99,4 +132,121 @@ fn embedded_files_differ_between_parts() {
     assert!(verify(&d3, Level::A3b).iter().any(|i| i.message.contains("AFRelationship")));
     let r = convert(&mut d3, Level::A3b).unwrap();
     assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+}
+
+/// A page that paints a DeviceCMYK image (as `doc_create` makes from a CMYK JPEG), with
+/// `intent` as the catalog's extra entries and `extra` as more objects (from object 6 on).
+fn cmyk_page(intent: &str, content: &str, extra: &[&str]) -> Document {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {intent} >>");
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut objs = vec![
+        catalog.as_str(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>",
+        stream.as_str(),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream",
+    ];
+    objs.extend_from_slice(extra);
+    build(&objs, "")
+}
+
+fn messages(issues: &[Issue]) -> Vec<&str> {
+    issues.iter().map(|i| i.message.as_str()).collect()
+}
+
+/// Issue #667: converting a CMYK-only document doesn't add an sRGB output intent (it would
+/// describe a colour space the document doesn't use); the CMYK output intent it needs is
+/// reported as not fixable instead.
+#[test]
+fn convert_does_not_give_cmyk_documents_an_srgb_output_intent() {
+    let mut doc = cmyk_page("", "q 200 0 0 200 0 0 cm /Im0 Do Q", &[]);
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(!r.fixed.iter().any(|f| f.contains("output intent")), "{:?}", r.fixed);
+    assert!(declared(&doc).output_intents.is_empty());
+    let left = messages(&r.remaining);
+    assert!(left.contains(&"Device colour is used, but there is no PDF/A output intent"), "{left:#?}");
+    assert!(left.contains(&"DeviceCMYK is used: it needs a CMYK output intent (not added automatically)"), "{left:#?}");
+    assert!(r.remaining.iter().all(|i| !i.fixable));
+}
+
+/// Issue #667: verify checks the output intent's colour space against the device colour the
+/// pages use, not only that an output intent exists.
+#[test]
+fn verify_reports_an_output_intent_that_does_not_match_device_colour() {
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (X) /DestOutputProfile 6 0 R >>]";
+    let profile = |n: u8| format!("<< /N {n} /Length 0 >>\nstream\n\nendstream");
+    let (rgb, cmyk) = (profile(3), profile(4));
+    let cmyk_msg = "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile";
+    let rgb_msg = "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile";
+
+    // CMYK content under an sRGB output intent (what convert used to write).
+    let issues = verify(&cmyk_page(intent, "/Im0 Do", &[&rgb]), Level::A2b);
+    assert!(messages(&issues).contains(&cmyk_msg), "{issues:#?}");
+    assert!(issues.iter().find(|i| i.message == cmyk_msg).is_some_and(|i| i.clause == "6.2.4.3" && !i.fixable));
+
+    // CMYK content under a CMYK output intent is fine; RGB and gray content beside it is not
+    // and is, respectively.
+    assert!(!messages(&verify(&cmyk_page(intent, "/Im0 Do 0 g", &[&cmyk]), Level::A2b)).iter().any(|m| m.contains("output intent")));
+    let issues = verify(&cmyk_page(intent, "/Im0 Do 1 0 0 rg", &[&cmyk]), Level::A2b);
+    assert!(messages(&issues).contains(&rgb_msg) && !messages(&issues).contains(&cmyk_msg), "{issues:#?}");
+
+    // DefaultCMYK in the page's resources draws DeviceCMYK in that space, which PDF/A accepts
+    // under any output intent.
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {intent} >>");
+    let doc = build(
+        &[
+            catalog.as_str(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ColorSpace << /DefaultCMYK [/ICCBased 7 0 R] >> /XObject << /Im0 5 0 R >> >> >>",
+            "<< /Length 7 >>\nstream\n/Im0 Do\nendstream",
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream",
+            rgb.as_str(),
+            cmyk.as_str(),
+        ],
+        "",
+    );
+    assert!(!messages(&verify(&doc, Level::A2b)).contains(&cmyk_msg), "DefaultCMYK covers DeviceCMYK");
+
+    // Without /N, the ICC header's colour space decides.
+    let mut header = vec![b' '; 128];
+    header[16..20].copy_from_slice(b"CMYK");
+    let header = String::from_utf8(header).unwrap();
+    let headed = format!("<< /Length 128 >>\nstream\n{header}\nendstream");
+    assert!(!messages(&verify(&cmyk_page(intent, "/Im0 Do", &[&headed]), Level::A2b)).contains(&cmyk_msg));
+}
+
+/// Issue #1334: a colour operator is found whichever of the six PDF whitespace characters
+/// separates the tokens, not only after a space or a line feed.
+#[test]
+fn device_colour_is_found_after_any_whitespace() {
+    let page = |content: &[u8]| {
+        let content = String::from_utf8(content.to_vec()).unwrap();
+        let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>",
+                stream.as_str(),
+            ],
+            "",
+        )
+    };
+    let cmyk_msg = "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)";
+    for separator in [b" ".as_slice(), b"\n", b"\r", b"\t", b"\x0C", b"\0"] {
+        let cmyk: &[&[u8]] = &[b"0", b"0", b"0", b"1", b"k", b"10", b"10", b"50", b"50", b"re", b"f"];
+        let mut doc = page(&cmyk.join(separator));
+        assert!(messages(&verify(&doc, Level::A2b)).contains(&cmyk_msg), "separator {separator:?}");
+        let r = convert(&mut doc, Level::A2b).unwrap();
+        assert!(declared(&doc).output_intents.is_empty(), "separator {separator:?}");
+        assert!(messages(&r.remaining).contains(&cmyk_msg), "separator {separator:?}");
+
+        // Gray and RGB still get the sRGB output intent.
+        for colour in [[b"0".as_slice(), b"g"].as_slice(), &[b"1", b"0", b"0", b"rg"]] {
+            let mut doc = page(&colour.join(separator));
+            let r = convert(&mut doc, Level::A2b).unwrap();
+            assert!(r.fixed.iter().any(|f| f.contains("output intent")), "separator {separator:?}: {:?}", r.fixed);
+            assert_eq!(declared(&doc).output_intents, ["sRGB IEC61966-2.1"], "separator {separator:?}");
+        }
+    }
 }

@@ -42,6 +42,16 @@ fn point() -> Value {
     json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] in points from the top-left of the displayed page." })
 }
 
+fn measure_points() -> Value {
+    json!({"type":"array","items":point(),"minItems":1,"maxItems":2048})
+}
+fn measure_schema() -> Value {
+    schema(
+        json!({"doc":doc(),"page":{"type":"integer","minimum":1},"points":measure_points(),"label":{"type":"string","maxLength":512},"author":{"type":"string","maxLength":512}}),
+        &["doc", "page", "points"],
+    )
+}
+
 fn color() -> Value {
     json!({ "type": "string", "description": "#RRGGBB or a name: yellow, red, orange, green, blue, purple, pink, black, gray, white." })
 }
@@ -108,6 +118,17 @@ pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
     vec![
+        t("doc_batch", "Process files and folders", "Run convert, ocr and/or optimize over files and folders, one file at a time. recursive defaults to false. Preserve paths relative to each selected folder inside out_dir; duplicate inputs run once. Skip unsupported files, links and the output subtree. Existing outputs receive numbered names and are never replaced. Continue after per-file errors unless stop_on_error is true. Return completed/failed/skipped counts and per-file results. Discovery is bounded to 10000 entries and 64 folder levels. Convert must be first; each step can appear once. OCR uses installed models. Optimize uses Reduce File Size settings, optionally overriding target ppi (threshold 1.5 times ppi) and JPEG quality; a larger candidate keeps the original bytes. Sources and open documents are unchanged.")
+            .with(schema(json!({
+                "paths": {"type":"array","items":{"type":"string"},"minItems":1,"maxItems":1000},
+                "out_dir": {"type":"string"},
+                "steps": {"type":"array","items":{"type":"string","enum":["convert","ocr","optimize"]},"minItems":1,"maxItems":3,"uniqueItems":true},
+                "recursive": {"type":"boolean"}, "stop_on_error": {"type":"boolean"},
+                "ppi": {"type":"number","minimum":9,"maximum":1600},
+                "quality": {"type":"integer","minimum":1,"maximum":100},
+                "dpi": {"type":"number","minimum":72,"maximum":600},
+                "language": {"type":"string"}, "skip_text_pages": {"type":"boolean"}
+            }), &["paths","out_dir","steps"])),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),
@@ -122,26 +143,50 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_save",
             "Save a document",
-            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic.",
+            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
         )
         .destructive()
         .cmd("file.save")
         .with(schema(
-            json!({ "doc": doc(), "path": { "type": "string", "description": "Save as this file. Omit to save in place." }, "full": { "type": "boolean", "description": "Force a full rewrite (or, with false, an incremental update)." } }),
+            json!({
+                "doc": doc(),
+                "path": { "type": "string", "description": "Save as this file. Omit to save in place." },
+                "full": { "type": "boolean", "description": "Force a full rewrite (or, with false, an incremental update)." },
+                "flatten_fill_sign": { "type": "boolean", "description": "Bake Fill & Sign marks into the page before writing. Default false." }
+            }),
             &["doc"],
         )),
-        t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords. Undoable.")
+        t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords; an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value. Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600).")
             .ro()
-            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "dpi": { "type": "number", "minimum": 1, "maximum": 600 } }), &["doc", "page"])),
-        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order.")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "dpi": { "type": "number", "minimum": 1, "maximum": 600 },
+                "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (index from text_paragraphs). Does not modify the document." }
+            }), &["doc", "page"])),
+        t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
+            .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
+        t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Clipping and vertical text are refused. A bad/stale reference refuses the entire move.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},
+                "objects":{"type":"array","minItems":1,"maxItems":1000,"uniqueItems":true,"items":{
+                    "type":"object","properties":{"kind":{"type":"string","enum":["added","text","image"]},"index":{"type":"integer","minimum":1}},"required":["kind","index"],"additionalProperties":false}},
+                "offset":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
+                "generation":{"type":"integer","minimum":0,"description":"Use generation returned by object_list to reject a stale selection."}}), &["doc","page","objects","offset"])),
+        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab.")
             .ro()
-            .with(schema(json!({ "doc": doc(), "pages": pages("to extract (default: all)") }), &["doc"])),
-        t("text_find", "Find text", "Find a phrase (case-insensitive, whitespace-normalised) and return each match with its page and line rectangles in points (origin top-left).")
+            .cmd("edit.column_select")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to extract (default: all)"),
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Column select: [x0, y0, x1, y1] in points from the top-left of the displayed page; a glyph counts when its centre is inside." }
+                }),
+                &["doc"],
+            )),
+        t("text_find", "Find text", "Find a phrase (case-insensitive, whitespace-normalised) and return matches in page order with page and line rectangles in points (origin top-left). Reads growing batches, looking one match past the limit for a continuation. Failed pages do not discard readable matches: warnings contains up to 100 {page, error, error_truncated} entries (errors capped at 1024 UTF-8 bytes), warning_count counts failed pages, and warnings_truncated reports a capped list. complete is false after a page failure or when more matches exist; next is present only for a match-limit continuation.")
             .ro()
             .cmd("edit.find")
-            .with(schema(json!({ "doc": doc(), "query": { "type": "string", "minLength": 1 }, "limit": { "type": "integer", "minimum": 1, "description": "Maximum matches (default 500)." } }), &["doc", "query"])),
+            .with(schema(json!({ "doc": doc(), "query": { "type": "string", "minLength": 1 }, "limit": { "type": "integer", "minimum": 1, "description": "Maximum matches (default 500). When another match exists, next holds start_page and skip to continue. complete is false for either additional matches or failed pages; an exhausted search with warnings has no next." },
+                "start_page": { "type": "integer", "minimum": 1, "description": "Page to start searching from (default 1)." },
+                "skip": { "type": "integer", "minimum": 0, "description": "Matches to pass over on start_page before returning any (default 0)." } }), &["doc", "query"])),
         t("page_rotate", "Rotate pages", "Rotate pages by a multiple of 90 degrees (positive is clockwise): the listed pages (default all), filtered like Acrobat's Rotate Pages by subset (all, even, odd page numbers) and orientation (all, landscape, portrait). Undoable.")
             .cmd("page.rotate")
             .with(schema(
@@ -151,6 +196,18 @@ pub fn tools() -> Vec<ToolDef> {
                     "orientation": { "type": "string", "enum": ["all", "landscape", "portrait"] },
                 }),
                 &["doc", "degrees"],
+            )),
+        t("page_enhance_camera", "Enhance camera image", "Straighten a photographed document (Scan & OCR ▸ Enhance ▸ Camera image): the part of the page inside the four corners (x1, y1, … x4, y4 in top-left-origin points, any order, a convex quadrilateral; when omitted, the document's edges are found automatically, or an error says they could not be) is warped to an upright rectangle that replaces what the page shows, at the page picture's own resolution (at most 600 dpi). mode is how it looks: original, colour (default), greyscale or bw (black and white, stored losslessly). level (0–100, default 0) then cleans the photo up: even lighting so the paper turns white (casts, shadows, dark edges), more contrast, and from 60 no isolated specks; colour ink stays colour. For bw the level is the threshold (higher keeps fainter strokes black). The page's comments, links and bookmarks stay. Undoable.")
+            .cmd("ocr.enhance_camera")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "page": { "type": "integer", "minimum": 1 },
+                    "corners": { "type": "array", "items": { "type": "number" }, "minItems": 8, "maxItems": 8 },
+                    "level": { "type": "integer", "minimum": 0, "maximum": 100 },
+                    "mode": { "type": "string", "enum": ["original", "colour", "greyscale", "bw"] },
+                }),
+                &["doc", "page"],
             )),
         t("page_delete", "Delete pages", "Delete pages. Undoable until saved.")
             .destructive()
@@ -175,26 +232,53 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "pages": pages("to extract"), "out": save_out.clone(), "open": open.clone(), "separate": { "type": "boolean" }, "out_dir": { "type": "string" }, "delete": { "type": "boolean" } }),
                 &["doc", "pages"],
             )),
-        t("doc_combine", "Combine files", "Combine PDFs, in order, into one (bookmarks are kept under one entry per file). pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages.")
+        t("doc_combine", "Combine files", "Combine files, in order, into one PDF (bookmarks are kept under one entry per file). Images (PNG, JPEG, TIFF, GIF, BMP, JPEG 2000) and .txt files are made into PDFs first. pages optionally chooses each file's pages, in step with paths: a range such as \"1-3, 6\" or null for all pages. passwords, also in step with paths, opens encrypted files (the open password, or the permissions password where a file's security doesn't allow copying pages; null for none). The result is not encrypted. Passwords are never echoed back. groups, also in step with paths, splits a file around others: entries with the same number (they must name the same path) are one file, copied once, so it keeps one bookmark at its first page, its links and its form fields; null for a file of its own. A group uses its first entry's password. When two files' forms name the same field, field_conflicts says what happens: \"rename\" (the default) keeps the fields separate by renaming the later one (Text1 becomes Text1-1) and the result lists renamed_fields as [[old, new], …] — scripts that refer to the old name are not rewritten; \"merge\" makes them one field, as before.")
             .cmd("page.combine")
             .with(schema(
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
                     "pages": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "passwords": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "groups": { "type": "array", "items": { "type": ["integer", "null"], "minimum": 0 } },
+                    "field_conflicts": { "type": "string", "enum": ["rename", "merge"] },
                     "out": save_out,
                     "open": open,
                 }),
                 &["paths"],
             )),
-        t("doc_split", "Split a document", "Split into several files written to out_dir: every N pages, before given pages, at top-level bookmarks (bookmarks: true; files named after them), or by file size (max_mb). Files are <name>-partK.pdf.")
+        t("doc_create_multiple", "Create PDF from multiple files", "Convert several files (PDFs, PNG/JPEG/JPEG 2000/TIFF/GIF/BMP images, .txt files) to PDF in one run. mode \"combine\" (default) joins them, in order, into one PDF with a bookmark per file; pages optionally chooses each file's pages, in step with paths (a range such as \"1-3, 6\" or null). mode \"separate\" writes one PDF per file into out_dir (files that are already PDFs are skipped; existing files are never overwritten) and reports each file's result.")
+            .cmd("create.multiple")
+            .with(schema(
+                json!({
+                    "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "mode": { "type": "string", "enum": ["combine", "separate"] },
+                    "pages": { "type": "array", "items": { "type": ["string", "null"] } },
+                    "out": save_out.clone(),
+                    "open": open.clone(),
+                    "out_dir": { "type": "string", "description": "Folder for mode \"separate\"." },
+                }),
+                &["paths"],
+            )),
+        t("doc_split", "Split a document", "Split into several files written to out_dir: every N pages, before given pages, at top-level bookmarks (bookmarks: true; files named after them, repeated titles get -2, -3), or by file size (max_mb). Files are <name>-partK.pdf.")
             .cmd("page.split")
             .with(schema(
                 json!({ "doc": doc(), "every": { "type": "integer", "minimum": 1 }, "before": pages("that start a new part"), "bookmarks": { "type": "boolean" }, "max_mb": { "type": "number", "exclusiveMinimum": 0 }, "out_dir": { "type": "string" } }),
                 &["doc", "out_dir"],
             )),
-        t("bookmark_list", "List bookmarks", "The bookmark tree with each bookmark's path, title, target page and open state.")
-            .ro()
-            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
+            "bookmark_list",
+            "List bookmarks",
+            "The bookmarks in outline order, one page at a time: each with its path (1-based, as the other bookmark tools take it), title, target page and open state, and its children on the same page. next is the offset of the following page, or null at the end. Bookmarks nested deeper than 33 levels are not listed.",
+        )
+        .ro()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "offset": { "type": "integer", "minimum": 0, "description": "Where the page starts, counted from 0 (the previous page's next)" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Bookmarks in the page (default 100)" }
+            }),
+            &["doc"],
+        )),
         t("bookmark_add", "Add a bookmark", "Add a bookmark that goes to a page, under a parent bookmark (or at the top level), at a position. Undoable.").with(schema(
             json!({ "doc": doc(), "title": { "type": "string", "minLength": 1 }, "page": { "type": "integer", "minimum": 1 }, "parent": path("Parent bookmark (omit for the top level)"), "position": { "type": "integer", "minimum": 1, "description": "1-based position among the parent's children (default: last)." } }),
             &["doc", "title", "page"],
@@ -210,6 +294,12 @@ pub fn tools() -> Vec<ToolDef> {
         )),
         t("bookmark_set_page", "Set a bookmark's page", "Point a bookmark at another page. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": path("The bookmark"), "page": { "type": "integer", "minimum": 1 } }), &["doc", "path", "page"])),
+        t(
+            "bookmark_from_structure",
+            "New bookmarks from structure",
+            "Make bookmarks from the document's tagged headings (H, H1-H6), nested by level under a new first bookmark titled \"Untitled\". Fails if the document has no tagged headings. Returns the first page of the bookmark tree (see bookmark_list). Undoable.",
+        )
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("page_number", "Number pages", "Label a range of pages (e.g. i, ii, iii for front matter, or A-1, A-2 for an appendix). Later pages keep their labels. Undoable.").with(schema(
             json!({
                 "doc": doc(),
@@ -221,13 +311,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "from", "to"],
         )),
-        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page and rect (top-left-origin points), read-only and required flags.")
+        t("form_fields", "List form fields", "Every interactive form field: name, type (text, checkbox, radio, combo, list, button, signature), value, options, page, rect (top-left-origin points) and rotation (0, 90, 180 or 270 degrees counterclockwise), read-only and required flags.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(
             "form_fill",
             "Fill in form fields",
-            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes, an array of strings for multi-select lists. Appearances are regenerated so every viewer shows the values.",
+            "Set several fields at once (one undo step). values maps field names (from form_fields) to: a string for text fields, combo boxes and radio groups (an option), true/false for check boxes, an array of strings for multi-select lists. Appearances are regenerated so every viewer shows the values. A value whose characters the field's font can't draw (Chinese in a Helvetica field) is still saved; `warnings` in the result names the field and character: CivilOps PDF draws `?` there and asks other viewers to redraw the field from its value.",
         )
         .with(schema(json!({ "doc": doc(), "values": { "type": "object", "description": "Field name → value." } }), &["doc", "values"])),
         t("form_reset", "Clear form", "Reset fields to their default values: all of them, or only those listed. Undoable.")
@@ -269,17 +359,19 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "path", "at"],
             )),
-        t("form_set_image", "Set an image field's picture", "Show an image file (PNG, JPEG, TIFF, GIF or BMP) in an image field or button, scaled to fit and centred (what clicking an image field does). Undoable.")
+        t("form_set_image", "Set an image field's picture", "Show an image file (PNG, JPEG, TIFF, GIF or BMP) in an image field or button, scaled to fit and centred (what clicking an image field does). On an XFA form the picture is kept in its data too (base64, as Designer saves it) and the form shows it from there. Undoable.")
             .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "path": { "type": "string" } }), &["doc", "field", "path"])),
         t(
             "form_set_props",
             "Field properties",
-            "Change a field's properties (General and Options tabs): name (renames it), tooltip, read_only, required, multiline, max_length (0 = no limit), options (combo/list items), font_size (0 = auto), rect (position), format, validate, calculate (Acrobat's Format/Validate/Calculate tabs, run natively: values are checked, formatted and recalculated as in Acrobat). Options tab: align (left, center, right), default (the value Reset form restores; for check boxes and radio buttons their on state, \"\" for off), flags { scroll, rich_text, password, file_select, spell_check, comb (needs max_length), sort, editable, multi_select, commit_immediately }, check_style (check boxes and radio buttons: check, circle, cross, diamond, square, star). Only the given ones change. Undoable.",
+            "Change field properties: give field for one field, or fields for a list of unique field names (1–1000). A bulk change is atomic and one Undo step; an invalid or locked field leaves every field unchanged. Only the given properties change, and partial appearance changes preserve each field's other colours and font. name (rename), rect (position) and rotation require a single field. General and Options: tooltip, read_only, required, multiline, max_length (0 = no limit), options (combo/list items), font_size (0 = auto), format, validate, calculate (Acrobat's native AF rules). Options: align (left, center, right), default (Reset form's value; check boxes/radio buttons use their on state, \"\" for off), flags { scroll, rich_text, password, file_select, spell_check, comb (needs max_length), sort, editable, multi_select, commit_immediately }, check_style (check boxes/radio buttons: check, circle, cross, diamond, square, star). rotation is 0, 90, 180 or 270 degrees counterclockwise and swaps width/height when the axis changes. Undoable.",
         )
-        .with(schema(
+        .with({
+            let mut input = schema(
             json!({
                 "doc": doc(),
                 "field": { "type": "string", "description": "The field's current name." },
+                "fields": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 1000, "uniqueItems": true, "description": "Apply the same changes to these fields in one atomic edit. Use either field or fields." },
                 "name": { "type": "string" },
                 "tooltip": { "type": "string" },
                 "read_only": { "type": "boolean" },
@@ -294,22 +386,26 @@ pub fn tools() -> Vec<ToolDef> {
                 "flags": { "type": "object", "additionalProperties": { "type": "boolean" } },
                 "font_size": { "type": "number", "minimum": 0 },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Move/resize: points from the top-left of the displayed page." },
-                "appearance": { "type": "object", "description": "Appearance tab: border, fill, text_color (#RRGGBB, a name or \"none\"), width (1 thin, 2 medium, 3 thick), style (solid, dashed, beveled, inset, underline), font (helvetica, times, courier)." },
+                "rotation": { "type": "integer", "enum": [0, 90, 180, 270], "description": "Widget rotation in degrees, counterclockwise. Changing between horizontal and vertical swaps the rectangle around its center." },
+                "appearance": { "type": "object", "description": "Appearance tab: border, fill, text_color (#RRGGBB, a name or \"none\"), width (0–12 points; 1 thin, 2 medium, 3 thick), style (solid, dashed, beveled, inset, underline), font (helvetica, times, courier)." },
                 "format": { "description": "Format tab: {\"type\": \"number\", \"decimals\": 2, \"currency\": \"$\", \"separator\": 0-4, \"negative\": 0-3}, {\"type\": \"percent\"}, {\"type\": \"date\"|\"time\", \"pattern\": \"mm/dd/yyyy\"}, {\"type\": \"zip\"|\"zip4\"|\"phone\"|\"ssn\"}, {\"type\": \"mask\", \"mask\": \"AA-9999\"}, or \"none\"." },
                 "validate": { "description": "Validate tab: {\"min\": 0, \"max\": 100} (either may be left out) or \"none\"." },
                 "calculate": { "description": "Calculate tab: {\"op\": \"sum\"|\"product\"|\"average\"|\"min\"|\"max\", \"fields\": [\"a\", \"b\"]}, {\"notation\": \"Price * Qty\"} (simplified field notation), or \"none\"." },
             }),
-            &["doc", "field"],
-        )),
+            &["doc"],
+        );
+            input["oneOf"] = json!([{ "required": ["field"] }, { "required": ["fields"] }]);
+            input
+        }),
         t("form_tab_order", "Set the tab order", "Set the tab order of pages (default all): row (top to bottom, left to right), column, structure, or annotations (unspecified). Or order tabs manually: `field` with `move` earlier|later moves that field one place on its page. Returns the resulting order of fields. Undoable.")
             .with(schema(
                 json!({ "doc": doc(), "order": { "type": "string", "enum": ["row", "column", "structure", "annotations"] }, "pages": pages("to set (default: all)"), "field": { "type": "string" }, "move": { "type": "string", "enum": ["earlier", "later"] } }),
                 &["doc"],
             )),
-        t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). what: all (default), comments, fields.")
+        t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). For an XFA form, .xml is its data alone (rooted at the form's root data node, as Acrobat exports it) and .xdp an XML Data Package holding the whole datasets. what: all (default), comments, fields.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "what": { "type": "string", "enum": ["all", "comments", "fields"] } }), &["doc", "path"])),
-        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content). Comments with the same name are replaced; values go through the form's formats and validation. Undoable.")
+        t("doc_import_data", "Import comments or form data", "Import comments and/or field values from an XFDF, FDF, XML, CSV or tab-delimited text file (detected from its content). Comments with the same name are replaced; values go through the form's formats and validation. For an XFA form, an XDP, datasets or data XML file replaces the form's data: a laid-out form is laid out again from it (rows included) and its calculations run. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
         t("form_delete_field", "Delete a field", "Delete a form field and all its widgets. Undoable.")
             .destructive()
@@ -317,7 +413,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "redact_mark",
             "Mark for redaction",
-            "Mark content for redaction (nothing is removed until redact_apply). One of: rect [x0, y0, x1, y1] (points from the top-left of the displayed page) with page; find (text, every match); pattern (phone, email, credit-card, ssn, date: every match, Acrobat's Search & Redact patterns); whole_pages: true. find, pattern and whole_pages work on pages (default all). overlay: text shown on the box once applied; fill: box colour (default black). Undoable.",
+            "Mark content for redaction (nothing is removed until redact_apply). One of: rect [x0, y0, x1, y1] (points from the top-left of the displayed page) with page; find (text, every match); words (a list of words or phrases, every match of each; the result's matched_words says how many marks each made); pattern (phone, email, credit-card, ssn, date: every match, Acrobat's Search & Redact patterns); whole_pages: true. find and words accept case_sensitive and whole_words (both default false). find, words, pattern and whole_pages work on pages (default all). overlay: text shown on the box once applied, or code_set (foia: U.S. FOIA (b)(1)(A)…(b)(9); privacy-act: U.S. Privacy Act (d)(5), (j)(1)…(k)(7)) with codes, shown as \"(b)(6), (b)(7)(C)\"; fill: box colour (default black). Undoable.",
         )
         .with(schema(
             json!({
@@ -325,10 +421,15 @@ pub fn tools() -> Vec<ToolDef> {
                 "page": { "type": "integer", "minimum": 1 },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "find": { "type": "string", "minLength": 1 },
+                "words": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "maxItems": 1000 },
+                "case_sensitive": { "type": "boolean", "description": "Match letter case for find or words (default false)." },
+                "whole_words": { "type": "boolean", "description": "Match whole words for find or words (default false)." },
                 "pattern": { "type": "string", "enum": ["phone", "email", "credit-card", "ssn", "date"] },
                 "whole_pages": { "type": "boolean" },
                 "pages": pages("to search or mark (default: all)"),
                 "overlay": { "type": "string" },
+                "code_set": { "type": "string", "enum": ["foia", "privacy-act"] },
+                "codes": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Redaction codes from code_set, e.g. [\"(b)(6)\"]." },
                 "fill": { "type": "string", "description": "#RRGGBB or a colour name." },
                 "author": { "type": "string" },
             }),
@@ -364,11 +465,21 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_audit_redactions",
+            "Audit faux redactions",
+            "Find faux redactions: opaque filled rectangles painted over text that is still extractable, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a rectangle counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged). Each finding reports the 1-based page, the kind (covered-text or unapplied-mark), the rectangle, and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("printers", "List printers", "The printers the system's print spooler knows (CUPS on macOS and Linux), with the default marked.").ro().with(schema(json!({}), &[])),
+        t("printer_options", "List printer options", "A printer driver's own job options (CUPS: from its PPD), such as the paper tray, paper type or finishing: key, label, group, default and choices. Pass chosen values to doc_print as options. Empty on Windows, where the driver's preferences window holds them.")
+            .ro()
+            .with(schema(json!({ "printer": { "type": "string" } }), &["printer"])),
         t(
             "doc_print",
             "Print",
-            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even; reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, order, border, auto_rotate), booklet (booklet_subset both/front/back, binding left/right), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid/A3/A4/A5. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale.",
+            "Print with Acrobat's Print dialog options, or save the print-ready PDF. pages: a range such as \"1-3, 6, 9-\" (page labels allowed; default all); subset odd/even; reverse. layout: fit (default), actual, shrink, custom (scale %), multiple (per_sheet 2/4/6/9/16, order, border, auto_rotate; cut-stack order arranges single-sided sheets for cutting into piles and stacking left to right, top to bottom, keeping sheet order within each pile; duplex must be off), booklet (booklet_subset both/front/back, binding left/right), poster (scale %, overlap pt, cut_marks). orientation auto/portrait/landscape; comments_forms document / document-and-markups (default) / document-and-stamps / form-fields-only; paper Letter/Legal/Tabloid, ARCH A/B/C/D/E1/E, ANSI C/D/E, or A0/A1/A2/A3/A4/A5 (short names or full preset labels); use layout actual for 100% in the print-ready PDF; printer drivers may still substitute paper or scale. Then path (save) or printer (a name or \"default\") with copies, collate, duplex off/long-edge/short-edge, grayscale, and options (driver options from printer_options, CUPS).",
         )
         .with(schema(
             json!({
@@ -379,7 +490,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "layout": { "type": "string", "enum": ["fit", "actual", "shrink", "custom", "multiple", "booklet", "poster"] },
                 "scale": { "type": "number", "exclusiveMinimum": 0 },
                 "per_sheet": { "type": "integer", "minimum": 1, "maximum": 256 },
-                "order": { "type": "string", "enum": ["horizontal", "horizontal-reversed", "vertical", "vertical-reversed"] },
+                "order": { "type": "string", "enum": ["horizontal", "horizontal-reversed", "vertical", "vertical-reversed", "cut-stack"] },
                 "border": { "type": "boolean" },
                 "auto_rotate": { "type": "boolean" },
                 "booklet_subset": { "type": "string", "enum": ["both", "front", "back"] },
@@ -395,6 +506,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "collate": { "type": "boolean" },
                 "duplex": { "type": "string", "enum": ["off", "long-edge", "short-edge"] },
                 "grayscale": { "type": "boolean" },
+                "options": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Printer driver options from printer_options: key → choice value." },
             }),
             &["doc"],
         )),
@@ -404,7 +516,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_add_text",
             "Add text to a page",
-            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name), align left/center/right. It stays editable with content_update. Undoable.",
+            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name), align left/center/right. Text must be Western European (WinAnsi) characters; others are refused. It stays editable with content_update. Undoable.",
         )
         .cmd("edit.text")
         .with(schema(
@@ -449,6 +561,11 @@ pub fn tools() -> Vec<ToolDef> {
         t("link_list", "List links", "Every link: page, 1-based index (for link_edit/link_delete), rect (points from the top-left of the page), and where it goes (url or to_page).")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("link_open", "Open a linked PDF", "Follow a local GoToR link in CivilOps PDF: open the referenced PDF as a new document, respecting --root. page and index use link_list numbering. Named destinations are reported but not applied. Absolute file specifications require allow_absolute: true after reviewing the target; relative links need no opt-in.")
+            .with(schema(
+                json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 }, "password": { "type": "string", "description": "Optional password for the linked PDF." }, "allow_absolute": { "type": "boolean", "description": "Explicitly allow an absolute local GoToR target (default false). Existing validation and --root confinement still apply." } }),
+                &["doc", "page", "index"],
+            )),
         t("link_add", "Add a link", "Add a link over rect on page that opens url or goes to to_page. Appearance: visible (rectangle), color, width 1-3, highlight none/invert/outline/inset. Undoable.")
             .cmd("edit.link")
             .with(schema(
@@ -475,10 +592,26 @@ pub fn tools() -> Vec<ToolDef> {
         t("links_from_urls", "Create links from URLs", "Find web addresses (http://, https://, www.) in the text of every page and make them clickable links. Returns the URLs. Undoable.")
             .cmd("edit.links_from_urls")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
-        t("links_remove", "Remove all links", "Remove every link in the document. Undoable.")
+        t("links_remove", "Remove all links", "Remove every link in the document (or on the given pages). Undoable.")
             .destructive()
             .cmd("edit.remove_links")
-            .with(schema(json!({ "doc": doc() }), &["doc"])),
+            .with(schema(json!({ "doc": doc(), "pages": pages("whose links to remove (default: all)") }), &["doc"])),
+        t("measure_distance", "Measure distance", "Add an undoable two-point distance annotation using the scale of the first point's viewport.")
+            .cmd("measure.distance").with(measure_schema()),
+        t("measure_perimeter", "Measure perimeter", "Add an undoable connected-line length annotation. To include a closing edge, repeat the first point at the end.")
+            .cmd("measure.perimeter").with(measure_schema()),
+        t("measure_area", "Measure area", "Add an undoable area annotation from a simple polygon. The last edge closes automatically.")
+            .cmd("measure.area").with(measure_schema()),
+        t("measure_info", "Read a measurement", "Calculate a live distance, perimeter or area, deltas, angle and scale without adding an annotation. Incomplete paths are allowed.")
+            .ro().cmd("measure.info").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"points":measure_points(),"type":{"type":"string","enum":["distance","perimeter","area"]}}), &["doc","page","points"])),
+        t("measure_list", "List measurements", "Saved measurement annotations with calculated values, scale and vertices in display coordinates. Measurements with unsupported imported formats (compound or fractional units, non-rectilinear scales) or invalid geometry are listed under unsupported with a reason.")
+            .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc"])),
+        t("measure_scale", "Set or read a measurement scale", "Read the scale at a point, or add a rectangular viewport using units_per_point or two calibration points and their real-world distance. Existing measurements retain their original scales. Undoable.")
+            .cmd("measure.scale").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"rect":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"name":{"type":"string"},"unit":{"type":"string"},"precision":{"type":"integer","minimum":0,"maximum":6},"units_per_point":{"type":"number","exclusiveMinimum":0},"points":measure_points(),"distance":{"type":"number","exclusiveMinimum":0}}), &["doc","page"])),
+        t("measure_snap", "Snap a measurement vertex", "Snap a point to vector paths, endpoints, midpoints or intersections. Coordinates and tolerance are in display points. Bounded extraction reports truncated geometry.")
+            .ro().cmd("measure.snap").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"tolerance":{"type":"number","minimum":0,"maximum":10000},"endpoints":{"type":"boolean"},"midpoints":{"type":"boolean"},"intersections":{"type":"boolean"},"paths":{"type":"boolean"}}), &["doc","page","at"])),
+        t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
+            .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),
         t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status and replies.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1, "description": "Only this page." } }), &["doc"])),
@@ -487,8 +620,8 @@ pub fn tools() -> Vec<ToolDef> {
             "Add a comment",
             "Add a comment as Acrobat's commenting tools do. Geometry is in points with the origin at the top-left of the displayed page, y down (as in page_render images at 72 dpi and text_find rects). \
              note: `at` [x, y] (icon top-left). stamp: `at` [x, y] (its centre) and `stamp`: approved, completed, confidential, draft, final, for comment, for public release, information only, not approved, not for public release, preliminary results, void, accepted, initial here, rejected, sign here, witness; dynamic: true for the dynamic approved/confidential/received/reviewed/revised stamps with a By … at … line. highlight/underline/strikeout/squiggly: `find` (text on the page to mark; every match with all: true) or `quads`. \
-             rectangle/oval/textbox: `rect` [x0, y0, x1, y1]. line/arrow: `from`, `to`. ink: `strokes` [[[x, y], …], …]. \
-             polygon/cloud/polyline (connected lines): `points` [[x, y], …]. callout: `rect` (its text box), `to` (the point the arrow touches), optional `knee`. caret (inserted text): `at`, the insertion point on the baseline. replace (Replace Text): `find` or `quads` like highlight, `contents` the replacement. attachment: `path` (the file), `at`, optional `icon` (PushPin, Paperclip, Graph, Tag). Undoable.",
+             rectangle/oval/textbox: `rect` [x0, y0, x1, y1]. line/arrow: `from`, `to`. Optional `endings` (two names: start, end) for a line, arrow or polyline, or one name for a callout: None, Square, Circle, Diamond, OpenArrow, ClosedArrow, Butt, ROpenArrow, RClosedArrow, Slash. An arrow without endings is None then OpenArrow. ink: `strokes` [[[x, y], …], …]. \
+             polygon/cloud/polyline (connected lines): `points` [[x, y], …]. callout: `rect` (its text box), `to` (the point the arrow touches), optional `knee`. caret (inserted text): `at`, the insertion point on the baseline. replace (Replace Text): `find` or `quads` like highlight, `contents` the replacement. attachment: `path` (the file), `at`, optional `icon` (PushPin, Paperclip, Graph, Tag). Undoable. Text a text box, callout or stamp draws in the standard fonts that they can't draw (Chinese, Greek) is saved as typed and drawn as `?`; `warnings` in the result says so.",
         )
         .with(schema(
             json!({
@@ -515,6 +648,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "fill": color(),
                 "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
                 "width": { "type": "number", "minimum": 0, "description": "Line width in points." },
+                "endings": { "type": "array", "items": { "type": "string", "enum": ["None", "Square", "Circle", "Diamond", "OpenArrow", "ClosedArrow", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, "minItems": 1, "maxItems": 2, "description": "Line endings. Two names (start, end) for a line, arrow or polyline; one name for a callout." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
             }),
             &["doc", "page", "type"],
@@ -544,16 +678,20 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["name", "password", "path"],
         )),
+        t("sign_windows_ids", "List Windows store digital IDs", "Windows: signing identities in the Current User Personal certificate store (certificate details and the windows: reference sign_document takes). Private keys remain in CNG; Windows may ask permission to use them. `unusable` lists the store's other certificates with why they can't sign (no private key, an unsupported key type, a key CNG can't open).")
+            .ro()
+            .cmd("sign.digital")
+            .with(schema(json!({}), &[])),
         t("sign_keychain_ids", "List Keychain digital IDs", "macOS: the signing identities in the user's keychains (certificate details and the keychain: reference sign_document takes). The private keys stay in the Keychain, which may ask the user to allow their use.")
             .ro()
             .cmd("sign.digital")
             .with(schema(json!({}), &[])),
-        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
+        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. graphic shows a picture where the signer's name would be large (Acrobat: Configure Signature Appearance): {\"image\": path} (PNG or JPEG), {\"text\": name} (typed in the Fill & Sign script font) or {\"strokes\": [[[x, y], …], …]} (y up, the drawing pad 1 wide); it needs a visible signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
             .cmd("sign.digital")
             .with(schema(
                 json!({
                     "doc": doc(),
-                    "id": { "type": "string", "description": "Path of the digital ID (.p12 / .pfx)." },
+                    "id": { "type": "string", "description": "Digital ID file (.p12 / .pfx), keychain: reference on macOS, or windows: reference on Windows." },
                     "password": { "type": "string" },
                     "field": { "type": "string" },
                     "page": { "type": "integer", "minimum": 1 },
@@ -562,6 +700,17 @@ pub fn tools() -> Vec<ToolDef> {
                     "location": { "type": "string" },
                     "contact": { "type": "string" },
                     "certify": { "type": "string", "enum": ["no_changes", "form_fill", "comments"] },
+                    "graphic": {
+                        "type": "object",
+                        "description": "Exactly one of image, text or strokes.",
+                        "properties": {
+                            "image": { "type": "string", "description": "A PNG or JPEG file." },
+                            "text": { "type": "string", "description": "Typed in the script font." },
+                            "strokes": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } } },
+                        },
+                        "minProperties": 1,
+                        "maxProperties": 1,
+                    },
                     "out": { "type": "string", "description": "Where to save the signed document." },
                 }),
                 &["doc", "id", "out"],
@@ -581,39 +730,55 @@ pub fn tools() -> Vec<ToolDef> {
         t("comments_hide", "Hide all comments", "Hide or show every comment on the page (fields and links still draw). A view setting: the file doesn't change.")
             .cmd("comment.hide_all")
             .with(schema(json!({ "doc": doc(), "hidden": { "type": "boolean", "description": "Default true." } }), &["doc"])),
+        t("view_reading_colors", "Set reading colours", "Set the document's reading colours (Acrobat's Replace Document Colors, in the Reading Options): solid text and line-art paints are remapped for readability and the page clears to the background colour in page_render. A view setting: the file doesn't change. mode is one of: off, black-on-white, white-on-black, yellow-on-black, green-on-black, or custom (which takes text and background as #RRGGBB). only_black maps only near-black paints (default false) and line_art also maps line-art paints (default true); both override the mode's preset. A flag that differs from the mode's preset default makes the returned mode read custom, because the resulting params no longer match any preset. Returns the resulting setting.")
+            .cmd("a11y.reading_options")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "mode": { "type": "string", "enum": ["off", "black-on-white", "white-on-black", "yellow-on-black", "green-on-black", "custom"] },
+                    "text": { "type": "string", "description": "With mode custom: the text colour, #RRGGBB." },
+                    "background": { "type": "string", "description": "With mode custom: the background colour, #RRGGBB." },
+                    "only_black": { "type": "boolean", "description": "Map only near-black paints. Default false." },
+                    "line_art": { "type": "boolean", "description": "Also map line-art paints. Default true." },
+                }),
+                &["doc", "mode"],
+            )),
         t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
             .cmd("comment.summarize")
             .with(schema(
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, rectangle (rectangle/oval/text box) or position (`move` [dx, dy] in points). One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, fill (rectangle/oval/polygon; \"none\" removes it), rectangle (rectangle/oval/text box/stamp) or position (`move` [dx, dy] in points). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
                 "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
                 "width": { "type": "number", "minimum": 0 },
+                "fill": { "type": "string", "description": "Interior colour of a rectangle, oval or polygon: #RRGGBB, a colour name, or \"none\" for no fill." },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),
             })),
             &["doc"],
         )),
+        t("comment_image_preview", "Preview image signature layers", "Return a PNG of the page without the selected image signature/initials (layer=background, default), or its embedded image with alpha (layer=image). Includes the displayed rectangle, document rotation, image_rotation (how far clockwise the image is shown turned) and annotation opacity. Cache these layers for live placement/resizing; commit once with comment_edit. Does not change the document or undo history.")
+            .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
         t(
             "doc_protect",
             "Protect with passwords",
-            "Encrypt the document (applied by the next doc_save, a full rewrite). open_password is needed to open it; permissions_password is needed to change security and lifts the restrictions given by printing/changes/copy. Passwords are never echoed back. Undoable.",
+            "Encrypt the document (applied by the next doc_save, a full rewrite). open_password is needed to open it. permissions_password is needed to change security and lifts the restrictions given by printing/changes/copy/accessibility; those restrictions (and their defaults) apply only when permissions_password is given. With open_password alone the document is encrypted and everything stays allowed, so passing a restriction without permissions_password is an error. Passwords are never echoed back. Undoable.",
         )
         .cmd("protect.password")
         .with(schema(
             json!({
                 "doc": doc(),
-                "open_password": { "type": "string", "minLength": 1 },
-                "permissions_password": { "type": "string", "minLength": 1 },
-                "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Default high." },
-                "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Default none." },
-                "copy": { "type": "boolean", "description": "Allow copying text and images (default false)." },
-                "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (default true)." },
+                "open_password": { "type": "string", "minLength": 1, "description": "Required to open the document. On its own it restricts nothing." },
+                "permissions_password": { "type": "string", "minLength": 1, "description": "Required to change security; enables printing/changes/copy/accessibility and their defaults." },
+                "printing": { "type": "string", "enum": ["none", "low", "high"], "description": "Needs permissions_password. Default high." },
+                "changes": { "type": "string", "enum": ["none", "pages", "fill-sign", "comment-fill-sign", "any-except-extract"], "description": "Needs permissions_password. Default none." },
+                "copy": { "type": "boolean", "description": "Allow copying text and images (needs permissions_password; default false)." },
+                "accessibility": { "type": "boolean", "description": "Allow screen readers to read the text (needs permissions_password; default true)." },
                 "compatibility": { "type": "string", "enum": ["aes-256", "aes-128", "rc4-128", "rc4-40"], "description": "Default aes-256 (Acrobat X and later)." },
                 "encrypt_metadata": { "type": "boolean", "description": "Default true." },
             }),
@@ -665,7 +830,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
-        t("doc_watermark", "Add watermark", "Add a watermark to pages: text, or a picture from `file` (an image, or page `file_page` of a PDF) at `scale` of the page (default 0.5); rotated (degrees counter-clockwise, default 45), semi-transparent (opacity 0–1, default 0.5), text fitted to the page unless font_size is given, on top unless behind: true. replace: true swaps out existing ones. Undoable.")
+        t("doc_watermark", "Add watermark", "Add a watermark to pages: text, or a picture from `file` (an image, or page `file_page` of a PDF) at `scale` of the page (default 0.5); rotated (degrees counter-clockwise, default 45), semi-transparent (opacity 0–1, default 0.5), text fitted to the page unless font_size is given, on top unless behind: true; moved from the page centre by `offset_x` (right) and `offset_y` (up) points (default 0). replace: true swaps out existing ones. Undoable.")
             .cmd("edit.watermark")
             .with(schema(
                 json!({
@@ -680,6 +845,8 @@ pub fn tools() -> Vec<ToolDef> {
                     "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
                     "rotation": { "type": "number" },
                     "behind": { "type": "boolean" },
+                    "offset_x": { "type": "number", "description": "Points right of the page centre (negative: left)." },
+                    "offset_y": { "type": "number", "description": "Points above the page centre (negative: below)." },
                     "replace": { "type": "boolean" },
                 }),
                 &["doc"],
@@ -693,7 +860,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background CivilOps PDF (or a compatible tool) added. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background"] } }), &["doc", "kind"])),
-        t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. Includes unsaved edits.")
+        t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. A page too large for the renderer at that resolution is drawn at the most it allows, listed in `lower_dpi` ({page, dpi}). Includes unsaved edits.")
             .cmd("export.image")
             .with(schema(
                 json!({
@@ -706,7 +873,12 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "folder"],
             )),
-        t("accessibility_check", "Check for accessibility", "Run the Accessibility Checker's full check (32 rules in 7 categories: document, page_content, forms, alternate_text, tables, lists, headings). Each rule is passed, failed (with findings and pages), manual (needs a person) or skipped. Colour contrast is off unless all is true; rules (ids such as tagged-pdf, figures-alt-text) or categories narrow the check; pages limit the page rules.")
+        t("accessibility_autotag_preview", "Preview automatic tags", "Propose paragraph and heading tags for visible text blocks on one page. Returns page bounds, tentative roles and reasons. Does not change the PDF or claim accessibility compliance. Images, tables, lists, annotations and existing structure require separate review.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
+        t("accessibility_autotag_apply", "Automatically tag text-only PDF", "Write marked content, a Document structure element, paragraph tags and a parent tree for every text object in an untagged, text-only PDF. Refuses graphics, images, annotations, forms, existing tags and malformed streams before changing anything. Review all resulting roles; this does not certify accessibility. Undoable.")
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("accessibility_check", "Check for accessibility", "Run the Accessibility Checker's full check (32 rules in 7 categories: document, page_content, forms, alternate_text, tables, lists, headings). Each rule is passed, failed (with findings and pages), manual (needs a person) or skipped. Findings on locatable figures, annotations and form widgets include bbox_user_space in PDF coordinates. Colour contrast is off unless all is true; rules (ids such as tagged-pdf, figures-alt-text) or categories narrow the check; pages limit the page rules.")
             .ro()
             .cmd("a11y.check")
             .with(schema(
@@ -733,6 +905,34 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "path"],
             )),
+        t("accessibility_review_record", "Accessibility review record", "Compare the same accessibility rules on two open versions of a PDF and write a JSON record to path. Includes document SHA-256 hashes, before/after rule statuses and finding counts, changed rules, and rules still needing review. Does not change either PDF or claim accessibility compliance. Open the original and edited copies as separate documents.")
+            .destructive()
+            .with(schema(
+                json!({
+                    "before": doc(),
+                    "after": doc(),
+                    "path": { "type": "string" },
+                    "all": { "type": "boolean", "description": "Include rules that are off by default (colour contrast)." },
+                }),
+                &["before", "after", "path"],
+            )),
+        t("accessibility_review_save", "Save accessibility review decisions", "Write a local JSON sidecar for an open PDF with rule-level human review decisions. The sidecar records the PDF SHA-256; replacing one tied to different bytes requires replace: true. Does not change the PDF or assert compliance.")
+            .destructive()
+            .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "decisions": { "type": "array", "items": { "type": "object", "properties": { "rule": { "type": "string" }, "decision": { "type": "string", "enum": ["accepted", "needs_work", "skipped"] }, "page": { "type": "integer", "minimum": 1 }, "note": { "type": "string" } }, "required": ["rule", "decision"], "additionalProperties": false } }, "replace": { "type": "boolean" } }), &["doc", "path", "decisions"])),
+        t("accessibility_review_load", "Open accessibility review decisions", "Read a local review sidecar only when its recorded SHA-256 matches the open PDF. Returns the decisions without changing the PDF.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
+        t("accessibility_review_html", "Accessibility review summary", "Compare two open versions of a PDF and write a self-contained HTML summary of the same evidence as accessibility_review_record: document hashes, outcome counts, rule changes, and rules still requiring review. Does not change either PDF or claim accessibility compliance.")
+            .destructive()
+            .with(schema(
+                json!({
+                    "before": doc(),
+                    "after": doc(),
+                    "path": { "type": "string" },
+                    "all": { "type": "boolean", "description": "Include rules that are off by default (colour contrast)." },
+                }),
+                &["before", "after", "path"],
+            )),
         t("accessibility_fix", "Fix an accessibility problem", "Apply the checker's automatic fix for a rule: primary-language (value: the language, e.g. en-US), title (value: the title; default the current title or file name; also shows it in the title bar) or tab-order (every page tabs in structure order). Returns the rule's new status. Undoable.")
             .with(schema(json!({ "doc": doc(), "rule": { "type": "string", "enum": ["primary-language", "title", "tab-order"] }, "value": { "type": "string" } }), &["doc", "rule"])),
         t("accessibility_figures", "List figures", "The tagged figures (Figure elements, through the role map) in document order: figure number, page, alternate text and where the figure is drawn (top-left-origin points).")
@@ -742,10 +942,29 @@ pub fn tools() -> Vec<ToolDef> {
         t("accessibility_set_alt", "Set alternate text", "Set a figure's alternate text (alt; empty or omitted clears it), or mark it decorative (decorative: true: its content becomes an artifact and the figure leaves the tags). figure is a number from accessibility_figures. Returns the figures. Undoable.")
             .cmd("a11y.alt_text")
             .with(schema(json!({ "doc": doc(), "figure": { "type": "integer", "minimum": 1 }, "alt": { "type": "string" }, "decorative": { "type": "boolean" } }), &["doc", "figure"])),
+        t("accessibility_tags", "List structure tags", "List reachable indirect structure tags in document order with PDF object number, generation, nearest indirect parent, depth, page, type, title, actual text, alternate text and language. Inline tag dictionaries have no stable object reference and are not listed.")
+            .ro()
+            .cmd("a11y.tags")
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("accessibility_set_tag_property", "Edit tag property", "Set or clear one property of a reachable indirect structure tag. Use object and generation from accessibility_tags. Properties: type, title, actual_text, alternate_text, language. Empty or omitted value clears text properties; type requires a nonempty PDF name. Undoable.")
+            .with(schema(json!({
+                "doc": doc(), "object": { "type": "integer", "minimum": 1 },
+                "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "property": { "type": "string", "enum": ["type", "title", "actual_text", "alternate_text", "language"] },
+                "value": { "type": "string" },
+            }), &["doc", "object", "generation", "property"])),
+        t("accessibility_move_tag", "Move structure tag", "Move a reachable indirect structure tag before or after a direct sibling in their parent's /K array, changing tagged reading order without changing page appearance. Use object and generation values from accessibility_tags. Rejects distinct parents, duplicate references and positions that are already current. Undoable.")
+            .with(schema(json!({
+                "doc": doc(), "object": { "type": "integer", "minimum": 1 },
+                "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "anchor": { "type": "integer", "minimum": 1 },
+                "anchor_generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                "placement": { "type": "string", "enum": ["before", "after"] },
+            }), &["doc", "object", "generation", "anchor", "anchor_generation", "placement"])),
         t("form_merge_data", "Merge data files into spreadsheet", "Collect the field values of form data files (FDF, XFDF) or filled-in PDF forms into one CSV file at path: a column per field name, a row per file. Returns the row and column counts.")
             .cmd("form.merge_data")
             .with(schema(json!({ "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "path": { "type": "string" } }), &["paths", "path"])),
-        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts. Field changes and resetForm are applied as one undoable step; returns the script's alerts, console output, requests (print, page, url, submit) and error.")
+        t("js_run", "Run JavaScript", "Run Acrobat JavaScript in the document, as the JavaScript console does (or as push button `field`'s Mouse Up script when field is given; on a laid-out XFA form, `field` runs that button's XFA click script instead, JavaScript or FormCalc, which can add and remove rows and show or hide subforms). The form object model is available: this/getField, event, app, util, console, display, color, and the document-level scripts. Field changes and resetForm are applied as one undoable step; returns the script's alerts, console output, requests (print, page, url, submit) and error.")
             .cmd("tools.js_console")
             .with(schema(
                 json!({ "doc": doc(), "script": { "type": "string" }, "field": { "type": "string", "description": "Run as this button's Mouse Up event." } }),
@@ -764,13 +983,16 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "field": { "type": "string" }, "event": { "type": "string", "enum": ["keystroke", "format", "validate", "calculate", "mouse_up"] }, "script": { "type": "string" } }),
                 &["doc", "field", "event"],
             )),
-        t("doc_export_office", "Export to Word, HTML or RTF", "Export a PDF ▸ Word (.docx), HTML (.html, one file with images inline) or RTF (.rtf), chosen by path's extension: paragraphs in reading order, headings from larger text, bold and italic, images where they fall, a page break between pages.")
+        t("doc_export_office", "Export to Word, PowerPoint, HTML or RTF", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline) or RTF (.rtf), chosen by path's extension: text, headings, bold and italic. Word uses borderless inferred tables and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited.")
             .cmd("export.docx")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
         t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b or 3b rules the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
             .ro()
             .cmd("standards.pdfa")
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"], "description": "Default 2b." } }), &["doc"])),
+        t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
+            .ro()
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("pdfa_convert", "Save as PDF/A", "Standards ▸ Save as PDF/A: fix what can be fixed for PDF/A-2b or 3b (XMP identification and metadata, an sRGB output intent, forbidden actions and JavaScript, annotation print flags, image interpolation, encryption). Returns what was fixed and what remains (e.g. fonts that aren't embedded). Undoable; save the document to keep it.")
             .cmd("standards.pdfa")
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"] } }), &["doc"])),
@@ -826,11 +1048,11 @@ pub fn tools() -> Vec<ToolDef> {
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
                     "language": { "type": "string", "description": "Document language, a code from ocr_status (default its default_language: German when Windows reads it)." },
-                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true). false also reads pictures on such pages, without adding their text again." },
                 }),
                 &["doc"],
             )),
-        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name (pages that already have text are left alone). Returns, per file, the output path, word count and skipped pages, or the error.")
+        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name (pages that already have text are left alone unless skip_text_pages is false, as in ocr_recognize). Returns, per file, the output path, word count and skipped pages, or the error.")
             .cmd("ocr.recognize_batch")
             .with(schema(
                 json!({
@@ -838,6 +1060,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "folder": { "type": "string" },
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
                     "language": { "type": "string", "description": "A code from ocr_status." },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); see ocr_recognize." },
                 }),
                 &["paths", "folder"],
             )),
@@ -862,7 +1085,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "fill_sign_add",
             "Fill & Sign: type text or place a mark",
-            "Fill in a form that has no fields, as Acrobat's Fill & Sign does: type text (`text`, 10 pt), place a check, cross, dot or line, today's date, or a typed signature or initials (`text` drawn in a script font as filled outlines; at is its left edge, centred vertically), at `at` [x, y] in points from the top-left of the page (the text's top-left; a mark's centre). Creates movable, undoable annotations.",
+            "Fill in a form that has no fields, as Acrobat's Fill & Sign does: type text (`text`, default 10 pt; `font_size` 4–300 pt), place a check, cross, dot or line, today's date (in Preferences ▸ Date format, see fill_sign_date_format, or `format`; `font_size` also applies), or a signature or initials (either `text` drawn in a script font, or `path` to a local PNG/JPEG image up to 4 MiB and 32 megapixels, scaled down to 4 megapixels, preserving transparency; with `scan: true`, `path` is instead a photo of a signature on paper, within the same limits: the signature is found, and the paper, shadows and table around it are removed, with `sensitivity` 0–100, default 50, picking up fainter ink when higher). `at` [x, y] is in points from the top-left of the page: text's top-left, mark's centre, signature's left edge centred vertically. Image signatures fit within 150 pt wide and 32 pt tall (24 pt for initials). Creates movable, undoable annotations. Typed text the standard fonts can't draw is saved and drawn as `?` (`warnings` in the result says so); a typed signature neither the script font nor its fallback can draw is refused (pass `path` instead).",
         )
         .cmd("sign.fill.text")
         .with(schema(
@@ -872,14 +1095,22 @@ pub fn tools() -> Vec<ToolDef> {
                 "type": { "type": "string", "enum": ["text", "check", "cross", "dot", "line", "date", "signature", "initials"] },
                 "at": point(),
                 "text": { "type": "string", "minLength": 1 },
+                "font_size": { "type": "number", "minimum": 4, "maximum": 300, "description": "For type text or date (default 10 pt)." },
+                "path": { "type": "string", "description": "PNG or JPEG for signature/initials; pass either path or text." },
+                "scan": { "type": "boolean", "description": "With path: scan a photo of a signature on paper (default false)." },
+                "sensitivity": { "type": "integer", "minimum": 0, "maximum": 100, "description": "With scan: how faint ink may be, 0–100 (default 50)." },
+                "format": { "type": "string", "description": "For type date: this pattern instead of the date-format preference, e.g. \"dd.mm.yyyy\"." },
+                "language": { "type": "string", "description": "For type date: month and weekday names in this language code (see fill_sign_date_format) instead of the preference." },
                 "author": { "type": "string" },
             }),
             &["doc", "page", "type", "at"],
         )),
+        t("fill_sign_date_format", "Date format for Fill & Sign", "Preferences ▸ Date format: the pattern Fill & Sign dates use (default m/d/yyyy). Set it with `format` (Acrobat date codes yyyy yy mmmm mmm mm m dddd ddd dd d, other runs of y, m or d are refused; H h M s t are time letters and need \\ before them; \\ shows the next character as is), or read it. `language` sets the language of month and weekday names (a code from `languages`, or `auto` to follow the app's interface language; English headless). Returns the format, the language, today in them, `unwritable` (characters of today's date that Fill & Sign can't write into a PDF yet, Western European only; fill_sign_add refuses such a date), the ready-made presets and the languages.")
+            .with(schema(json!({ "format": { "type": "string", "minLength": 1, "maxLength": 64 }, "language": { "type": "string" } }), &[])),
         t(
             "doc_create",
             "Create a PDF",
-            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly). Save it with doc_save and a path.",
+            "Create a new, unsaved document and return it like doc_open: `blank` (pages, width, height in points; default 1 US Letter page), `images` (paths of PNG, JPEG, TIFF (every page), GIF or BMP files, one page each at the image's resolution) or `text` (a .txt path, or `text` directly; Western European (WinAnsi) characters only, others are refused). Save it with doc_save and a path.",
         )
         .with(schema(
             json!({
@@ -895,7 +1126,7 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["from"],
         )),
-        t("doc_reduce", "Reduce file size", "Write a smaller copy of the document to `path` with Acrobat's Reduce File Size choices: images above 225 ppi downsampled to 150 ppi and JPEG-compressed (medium quality), thumbnails dropped, identical fonts and images merged, unused objects dropped, compressed object streams. The open document is unchanged.")
+        t("doc_reduce", "Reduce file size", "Write a smaller copy of the document to `path` with Acrobat's Reduce File Size choices: images above 225 ppi downsampled to 150 ppi and JPEG-compressed (medium quality), thumbnails dropped, identical fonts and images merged, unused objects dropped, compressed object streams. If the copy wouldn't be smaller, nothing is written and `written` is false. The open document is unchanged.")
             .cmd("optimize.reduce")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
         t("doc_initial_view", "Initial view", "Read or change how the document opens (Document Properties ▸ Initial View) and its reading options: navigation (page, bookmarks, pages, attachments, layers), layout (default, single, continuous, two_up, two_up_continuous, two_up_cover, two_up_continuous_cover), magnification (default, actual, fit_page, fit_width, fit_height, fit_visible, or a percentage), page, window options (fit_window, center_window, full_screen, display_title), interface options (hide_menubar, hide_toolbar, hide_window_ui), language and binding (left, right). Only the given ones change; returns the result. Undoable.").with(schema(
@@ -925,11 +1156,15 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
-        t("page_images", "List page images", "The images a page draws (Edit a PDF): number, box (top-left-origin points), pixel size and resource name.")
+        t("image_hit", "Hit test page artwork", "List image/Form numbers whose placement and all clipping paths contain point [x,y] in top-left-origin points. Bezier curves, even-odd/nonzero fill and holes are respected. Read only.")
+            .ro()
+            .cmd("edit.edit_text")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"point":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}}), &["doc","page","point"])),
+        t("page_images", "List page images", "The raster images and grouped Form artwork a page draws (Edit a PDF): number, full placement rect and visible_rect after page/path clipping (top-left-origin points; null if fully hidden), kind (image/form), pixel size ([0,0] for forms) and resource name. Forms include nested graphics and are edited as a whole. Numbers count forms and images together in drawing order, so a page with forms numbers its images differently than before forms were listed: always take numbers from a fresh page_images call.")
             .ro()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
-        t("image_edit", "Edit an image", "Change one of a page's images (number from page_images): action move (rect: new box in top-left-origin points), rotate (quarters clockwise, default 1), flip_horizontal, flip_vertical, replace (path: an image file, drawn in the same place) or delete. Undoable.")
+        t("image_edit", "Edit an image", "Change one of a page's images (number from page_images): action move (rect: new full placement box in top-left-origin points, based on page_images.rect), rotate (quarters clockwise, default 1), flip_horizontal, flip_vertical, replace (path: an image file, drawn in the same place) or delete. Undoable. The selected image crop transforms with its pixels, isolating shared path scopes while retaining neighboring painting. Text-outline clips return a clear error. Rotation/flip use the visible centre. Form artwork supports move/resize/rotate/flip/delete as a group; replace and image_save only support raster images.")
             .cmd("edit.edit_text")
             .with(schema(
                 json!({
@@ -943,19 +1178,34 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "image", "action"],
             )),
-        t("image_save", "Save image as", "Write one of a page's images to path: JPEG images unchanged, others as PNG (the extension is added when missing).")
+        t("image_save", "Save image as", "Write one of a page's raster images (number from page_images; forms are refused) to path: JPEG images unchanged, others as PNG (the extension is added when missing).")
             .destructive()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "image": { "type": "integer", "minimum": 1 }, "path": { "type": "string" } }), &["doc", "page", "image", "path"])),
-        t("text_paragraphs", "List paragraphs", "The paragraphs on a page (lines grouped by font, size, alignment and spacing): number, text, its line numbers, box (top-left-origin points), font and size. Use the number with text_edit's paragraph.")
+        t("text_font_files", "List installed document fonts", "Discover openly licensed, embeddable TrueType/OpenType files on request. Optional directories (at most 16) restrict the scan; with --root, only that root is scanned by default and supplied folders must stay inside it. The scan skips symlinks, collections and invalid/licence-restricted fonts, with depth, entry and byte budgets. Select a returned path with text_font_import.")
+            .ro().cmd("edit.edit_text")
+            .with(schema(json!({"directories":{"type":"array","items":{"type":"string"},"maxItems":16}}), &[])),
+        t("text_font_import", "Load document font", "Load an explicitly selected, openly licensed full TrueType/OpenType face into a page. The program's family, embedding permissions and licence declaration are validated. Completes source subsets of the same face without replacing existing glyphs. Returns a font resource usable with text_edit.font_resource. Undoable; respects root confinement. No system-interface fallback is exported.")
+            .cmd("edit.edit_text")
+            .with(schema(json!({"doc":doc(), "page":{"type":"integer","minimum":1}, "path":{"type":"string"}}), &["doc","page","path"])),
+        t("text_fonts", "List document fonts", "List validated embedded source faces and approved full preview faces for a page. Full registered resources can be selected by text_edit.font_resource; preview_only faces are not PDF resource names.")
+            .ro().cmd("edit.edit_text")
+            .with(schema(json!({"doc":doc(), "page":{"type":"integer","minimum":1}}), &["doc","page"])),
+        t("text_paragraphs", "List paragraphs", "The paragraphs on a page (adjacent source runs grouped into aligned visual rows, including mixed fonts, sizes and colours): number, text, editor_text (visual rows separated by newlines), rows and source line numbers, box (top-left-origin points), font and size. Use the number with text_edit's paragraph.")
             .ro()
             .cmd("edit.edit_text")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc", "page"])),
-        t("text_edit", "Edit text", "Replace the text of one paragraph (paragraph, from text_paragraphs: rewrapped to the paragraph's width with its line spacing) or one line (line, from text_lines) in place, keeping position, size and colour. For a paragraph, also change its formatting: font (helvetica, times, courier) with bold/italic, size (points), color (#rrggbb), align (left, center, right, justify), underline, line_spacing (× size), char_spacing (points) and scale (horizontal, percent), or move it (dx, dy in points; up is +dy) and rewrap it to a new width (points); text may then be omitted. Its own font is reused when it can show every character; otherwise the line is set in Helvetica (the result shows the font used). Text that no available font can show is refused. Undoable.")
+        t("text_edit_layout", "Measure text draft", "Measure a paragraph draft using the same PDF rewrite as Apply, without changing the document. Returns source_rect, draft_rect (top-left-origin points), overflow, and the embedded sfnt source faces available to the inline editor. Text defaults to the unchanged paragraph. Optional size, width, font_resource and disjoint UTF-8 ranges preview formatting changes.")
+            .ro()
+            .cmd("edit.edit_text")
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "paragraph": { "type": "integer", "minimum": 1 }, "text": { "type": "string" }, "size": { "type": "number" }, "width": { "type": "number" }, "font_resource":{"type":"string"}, "ranges":{"type":"array","maxItems":1024,"items":{"type":"object"}} }), &["doc", "page", "paragraph"])),
+        t("text_edit", "Edit text", "Replace the text of one paragraph (paragraph, from text_paragraphs: rewrapped to the paragraph's width with its line spacing) or one line (line, from text_lines) in place, keeping position, size and colour. For a mixed-style region, editor_text supplies visual row breaks; surviving text keeps its source-run styles and inserted text inherits the surrounding run. For a paragraph, also change its formatting: font (helvetica, times, courier) with bold/italic, size (points), color (#rrggbb), align (left, center, right, justify), underline, line_spacing (× size), char_spacing (points) and scale (horizontal, percent), or move it (dx, dy in points; up is +dy) and rewrap it to a new width (points); text may then be omitted. Its own font is reused when it can show every character and no font/weight change is requested; otherwise it uses a standard font matching the source style or, for Japanese and other text no standard font can show (Cyrillic, Greek), real Mincho/Gothic fallback outlines matching the requested/source family and available weight, from a face that has every character (the result shows the font used). Missing Japanese weights use Regular, not synthetic bold; the small web build has only Gothic Regular. Paragraph bold may be set without font to keep the source family. Text that no available font can show is refused. Undoable.")
             .cmd("edit.edit_text")
             .with(schema(
                 json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "line": { "type": "integer", "minimum": 1 },
                     "paragraph": { "type": "integer", "minimum": 1 },
+                    "font_resource": { "type": "string", "description": "Explicit source/full page font resource from text_fonts or text_font_import." },
+                    "ranges": { "type": "array", "maxItems": 1024, "items": { "type": "object", "properties": {"range":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2},"font":{"type":"string","enum":["helvetica","times","courier"]},"bold":{"type":"boolean"},"italic":{"type":"boolean"},"font_resource":{"type":"string"},"size":{"type":"number","exclusiveMinimum":0},"color":{"type":"string"},"underline":{"type":"boolean"},"char_spacing":{"type":"number"},"scale":{"type":"number"}},"required":["range"]}, "description":"Disjoint UTF-8 byte ranges in replacement text; unspecified source formatting survives." },
                     "text": { "type": "string" },
                     "font": { "type": "string", "enum": ["helvetica", "times", "courier"] },
                     "bold": { "type": "boolean" },
@@ -976,7 +1226,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("doc_open_revision", "Open a revision", "Open saved revision `revision` (1 = the oldest) of a document as a new, unsaved document, to see the file as it was then.")
             .with(schema(json!({ "doc": doc(), "revision": { "type": "integer", "minimum": 1 } }), &["doc", "revision"])),
-        t("doc_optimize", "Optimize PDF", "Write an optimized copy to `path` (Acrobat's PDF Optimizer). color / gray: { downsample, ppi, above_ppi, compression: jpeg|zip|retain, quality 1–100 } (defaults: downsample to 150 ppi above 225, JPEG 60). Images are measured where pages draw them and replaced only when smaller. discard_*: thumbnails (default true), alternate_images (true), tags, print_settings; flate_unencoded (true); remove_invalid_links and remove_unreferenced_dests (true). discard: Remove Hidden Information categories (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data). Signed documents are refused. The open document is unchanged.")
+        t("doc_optimize", "Optimize PDF", "Write an optimized copy to `path` (Acrobat's PDF Optimizer). color / gray: { downsample, ppi, above_ppi, compression: jpeg|zip|retain, quality 1–100 } (defaults: downsample to 150 ppi above 225, JPEG 60). Images are measured where pages draw them and replaced only when smaller. discard_*: thumbnails (default true), alternate_images (true), tags, print_settings; flate_unencoded (true); remove_invalid_links and remove_unreferenced_dests (true); images and forms the pages list but never draw are always dropped (unused_xobjects). discard: Remove Hidden Information categories (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data). Signed documents are refused. The open document is unchanged.")
             .cmd("optimize.advanced")
             .with(schema(
                 json!({
@@ -1002,10 +1252,10 @@ pub fn tools() -> Vec<ToolDef> {
         t("edit_redo", "Redo", "Redo the last undone edit of a document.").cmd("edit.redo").with(schema(json!({ "doc": doc() }), &["doc"])),
         t("command_list", "List commands", "Every registered CivilOps PDF command with its menu, shortcut, whether it is enabled now, and the tool that automates it.")
             .ro()
-            .with(schema(json!({ "doc": doc() }), &[])),
+            .with(schema(json!({ "doc": doc(), "filter":{"type":"string"}, "enabled_only":{"type":"boolean"} }), &[])),
         // CivilOps PDF: measuring.
-        t("measure_scale", "Scale", "Read or set the drawing scale of pages (default all), stored as a PDF viewport so other viewers measure with it too. ratio: 1:n in metres for a page at its true paper size (250 for 1:250). calibrate: { from: [x, y], to: [x, y] (top-left-origin points), length: the real distance, unit (default m) }. remove: true takes the scale off. update (default true) recomputes the measurements made on those pages. Without ratio, calibrate or remove it only reports: each page's scale and its viewports (a viewport whose unit is blank, as AutoCAD writes them, gives no scale). Undoable.")
-            .cmd("measure.scale")
+        t("plan_scale", "Scale", "Read or set the drawing scale of pages (default all), stored as a PDF viewport so other viewers measure with it too. ratio: 1:n in metres for a page at its true paper size (250 for 1:250). calibrate: { from: [x, y], to: [x, y] (top-left-origin points), length: the real distance, unit (default m) }. remove: true takes the scale off. update (default true) recomputes the measurements made on those pages. Without ratio, calibrate or remove it only reports: each page's scale and its viewports (a viewport whose unit is blank, as AutoCAD writes them, gives no scale). Undoable.")
+            .cmd("plan.scale")
             .with(schema(
                 json!({
                     "doc": doc(),
@@ -1026,8 +1276,8 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
-        t("measure_add", "Measure", "Measure on a page with its scale (or ratio, 1:n in metres): kind length (two points for a distance, more for connected lines) or area (a polygon of three or more points). points: [[x, y], …] in top-left-origin points. The measurement is a comment that shows its value (German number format, 12,34 m / 1.234,56 m²) and keeps its scale. Returns value (metres or square metres) and text. Optional color (#RRGGBB or a name), width (points), author. Undoable.")
-            .cmd("measure.length")
+        t("plan_measure", "Measure", "Measure on a page with its scale (or ratio, 1:n in metres): kind length (two points for a distance, more for connected lines) or area (a polygon of three or more points). points: [[x, y], …] in top-left-origin points. The measurement is a comment that shows its value (German number format, 12,34 m / 1.234,56 m²) and keeps its scale. Returns value (metres or square metres) and text. Optional color (#RRGGBB or a name), width (points), author. Undoable.")
+            .cmd("plan.length")
             .with(schema(
                 json!({
                     "doc": doc(),
@@ -1074,10 +1324,18 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "objects", "action"],
             )),
-        t("measure_list", "List measurements", "The measurements on a page (or all pages): page, index (as in comment_list), kind, value (metres or square metres), text, scale and points (top-left-origin points), with the totals of all lengths and all areas.")
+        t("plan_measure_list", "List measurements", "The measurements on a page (or all pages): page, index (as in comment_list), kind, value (metres or square metres), text, scale and points (top-left-origin points), with the totals of all lengths and all areas.")
             .ro()
-            .cmd("measure.length")
+            .cmd("plan.length")
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 } }), &["doc"])),
+        t("command_run", "Run a command", "Run a registry command through its headless tool. Pass that tool's arguments in params (see command_list). Unknown params are ignored with warnings; path confinement still applies.")
+            .destructive().with(schema(json!({"id":{"type":"string"},"params":{"type":"object"}}), &["id"])),
+        t("command_batch", "Run several commands", "Run steps in order (at most 1000). Returns completed/failed counts and per-step ok/result/error; stop_on_error defaults to true.")
+            .destructive().with(schema(json!({"steps":{"type":"array","items":schema(json!({"id":{"type":"string"},"params":{"type":"object"}}), &["id"])},"stop_on_error":{"type":"boolean"}}), &["steps"])),
+        t("doc_inspect", "Inspect open documents", "With doc, return doc_info; otherwise return information for every open document (empty documents array when none are open).")
+            .ro().with(schema(json!({"doc":doc()}), &[])),
+        t("render_preview", "Render a preview", "Render a PNG bounded by max_side (default 1024), without changing or saving the document. Page defaults to 1; doc may be omitted when exactly one document is open.")
+            .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"max_side":{"type":"integer","minimum":1,"maximum":4096}}), &[])),
     ]
 }
 

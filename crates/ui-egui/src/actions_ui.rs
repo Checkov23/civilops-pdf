@@ -28,6 +28,36 @@ pub struct RunProgress {
     pub message: Option<String>,
 }
 
+/// Keep each desktop result, including when input basenames repeat or an earlier run already
+/// used the name. The search is bounded and never falls back to an occupied destination.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_result(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    use std::io::{Error, ErrorKind};
+    let source = std::path::Path::new(name);
+    let filename = source.file_name().ok_or_else(|| Error::from(ErrorKind::InvalidInput))?;
+    let stem = source.file_stem().unwrap_or(filename).to_string_lossy();
+    for number in 1..=10_000 {
+        let path = if number == 1 {
+            dir.join(filename)
+        } else {
+            let suffix = match source.extension() {
+                Some(ext) => format!("{stem} ({number}).{}", ext.to_string_lossy()),
+                None => format!("{stem} ({number})"),
+            };
+            dir.join(suffix)
+        };
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                crate::editing::write_atomically(&path.to_string_lossy(), bytes)?;
+                return Ok(path);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Error::from(ErrorKind::AlreadyExists))
+}
+
 impl PrintCraftApp {
     /// Built-in actions, then the user's.
     pub fn all_actions(&self) -> Vec<Action> {
@@ -40,19 +70,34 @@ impl PrintCraftApp {
     /// folder override in tests), in the background.
     pub fn run_action_on(&mut self, action: Action, files: Vec<(String, Vec<u8>)>) {
         if self.action_run.is_some() {
-            self.notify("An action is already running");
+            self.notify_tr("An action is already running");
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let dir = match &self.export_dir_override {
-            Some(d) => Some(std::path::PathBuf::from(d)),
-            None => rfd::FileDialog::new().set_title("Choose a folder for the results").pick_folder(),
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        let Some(dir) = dir else { return };
+        match self.export_dir_override.clone() {
+            Some(d) => self.run_action_into(action, files, d.into()),
+            None => {
+                let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the results").to_string());
+                self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| app.run_action_into(action, files, dir));
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.run_action_into(action, files);
+    }
+
+    /// [`Self::run_action_on`] once the folder for the results is known.
+    fn run_action_into(&mut self, action: Action, files: Vec<(String, Vec<u8>)>, #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf) {
+        // Another run may have started while the folder picker was open.
+        if self.action_run.is_some() {
+            self.notify_tr("An action is already running");
+            return;
+        }
         let progress = Arc::new(Mutex::new(RunProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
+        // The summary is written on the worker thread: draw it in the UI's language.
+        let lang = crate::i18n::current();
         let work = move || {
+            crate::i18n::set_current(lang);
             let (mut ok, mut failed) = (0, Vec::new());
             for (i, (name, bytes)) in files.into_iter().enumerate() {
                 if let Ok(mut s) = p.lock() {
@@ -60,19 +105,21 @@ impl PrintCraftApp {
                 }
                 let r = printcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), |_, _| {}).and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
-                    crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
+                    write_result(&dir, &name, &r.bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
                     crate::editing::download(&name, &r.bytes)?;
                     Ok(())
                 });
                 match r {
                     Ok(()) => ok += 1,
-                    Err(e) => failed.push(format!("{name}: {e}")),
+                    Err(e) => failed.push(format!("{name}: {}", e)),
                 }
             }
-            let mut msg = format!("{}: {ok} file{} done", action.name, if ok == 1 { "" } else { "s" });
+            let done =
+                if ok == 1 { crate::i18n::fmt(tl!("1 file done"), &[]) } else { crate::i18n::fmt(tl!("{n} files done"), &[("n", &ok.to_string())]) };
+            let mut msg = format!("{}: {done}", action.name);
             if !failed.is_empty() {
-                msg.push_str(&format!("; failed: {}", failed.join("; ")));
+                msg.push_str(&crate::i18n::fmt(tl!("; failed: {list}"), &[("list", &failed.join("; "))]));
             }
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
@@ -101,7 +148,10 @@ impl PrintCraftApp {
                 self.notify(m);
             }
             Some(Err((done, total))) => {
-                let m = format!("Running action… file {} of {}", (done + 1).min(total.max(1)), total.max(1));
+                let m = crate::i18n::fmt(
+                    tl!("Running action… file {d} of {t}"),
+                    &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+                );
                 if self.toast.as_ref().is_none_or(|t| t.0 != m) {
                     self.notify(m);
                 }
@@ -118,24 +168,27 @@ impl PrintCraftApp {
         let Some(action) = self.wizard.selected.as_ref().and_then(|n| self.all_actions().into_iter().find(|a| &a.name == n)) else { return };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let paths = match &self.action_files_override {
-                Some(p) => p.iter().map(std::path::PathBuf::from).collect(),
-                None => rfd::FileDialog::new()
-                    .set_title(format!("Files for {}", action.name))
-                    .add_filter("PDF", &["pdf"])
-                    .pick_files()
-                    .unwrap_or_default(),
-            };
-            let mut files = Vec::new();
-            for p in paths {
-                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                match std::fs::read(&p) {
-                    Ok(b) => files.push((name, b)),
-                    Err(e) => return self.notify(format!("Couldn't read {name}: {e}")),
+            let title = crate::i18n::fmt(tl!("Files for {name}"), &[("name", &action.name)]);
+            let run = move |app: &mut Self, paths: Vec<std::path::PathBuf>| {
+                let mut files = Vec::new();
+                for p in paths {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    match std::fs::read(&p) {
+                        Ok(b) => files.push((name, b)),
+                        Err(e) => return app.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+                    }
                 }
-            }
-            if !files.is_empty() {
-                self.run_action_on(action, files);
+                if !files.is_empty() {
+                    // Asks for the results folder: a second picker, now that this one has closed.
+                    app.run_action_on(action, files);
+                }
+            };
+            match self.action_files_override.clone() {
+                Some(p) => run(self, p.into_iter().map(std::path::PathBuf::from).collect()),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter("PDF", &["pdf"]);
+                    self.ask(crate::pickers::Ask::Files(dialog), None, run);
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -181,7 +234,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bo
     if app.wizard.editing.is_some() {
         return edit_body(ui, app, t);
     }
-    ui.label(egui::RichText::new("Action Wizard").font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!("Action Wizard")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let actions = app.all_actions();
     if app.wizard.selected.as_ref().is_none_or(|s| !actions.iter().any(|a| &a.name == s)) {
@@ -195,7 +248,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bo
                 ui.set_min_height(260.0);
                 for a in &actions {
                     let on = app.wizard.selected.as_deref() == Some(a.name.as_str());
-                    if ui.selectable_label(on, &a.name).clicked() {
+                    let name = if a.builtin { tl!(&a.name) } else { &a.name };
+                    if ui.selectable_label(on, name).clicked() {
                         app.wizard.selected = Some(a.name.clone());
                     }
                 }
@@ -203,15 +257,17 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bo
         });
         ui.vertical(|ui| {
             let Some(a) = actions.iter().find(|a| app.wizard.selected.as_deref() == Some(a.name.as_str())) else { return };
-            ui.label(egui::RichText::new(&a.name).font(theme::semibold(15.0)));
+            let name = if a.builtin { tl!(&a.name) } else { &a.name };
+            ui.label(egui::RichText::new(name).font(theme::semibold(15.0)));
             if !a.description.is_empty() {
-                ui.label(egui::RichText::new(&a.description).color(t.text_muted));
+                let description = if a.builtin { tl!(&a.description) } else { &a.description };
+                ui.label(egui::RichText::new(description).color(t.text_muted));
             }
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Steps").font(theme::semibold(13.0)));
+            ui.label(egui::RichText::new(tl!("Steps")).font(theme::semibold(13.0)));
             for (i, s) in a.steps.iter().enumerate() {
                 let arg = s.arg().filter(|x| !x.is_empty()).map(|x| format!(": {x}")).unwrap_or_default();
-                ui.label(format!("{}. {}{arg}", i + 1, s.label()));
+                ui.label(format!("{}. {}{arg}", i + 1, tl!(s.label())));
             }
         });
     });
@@ -219,25 +275,25 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bo
     let selected_custom = app.wizard.selected.as_ref().and_then(|n| app.custom_actions.iter().position(|a| &a.name == n));
     let mut close = false;
     ui.horizontal(|ui| {
-        if ui.button("New Action…").clicked() {
+        if ui.button(tl!("New Action…")).clicked() {
             app.wizard.editing = Some((None, Action { name: String::new(), description: String::new(), steps: Vec::new(), builtin: false }));
         }
         if let Some(i) = selected_custom {
-            if ui.button("Edit…").clicked() {
+            if ui.button(tl!("Edit…")).clicked() {
                 let a = app.custom_actions[i].clone();
                 app.wizard.editing = Some((Some(a.name.clone()), a));
             }
-            if ui.button("Delete").clicked() {
+            if ui.button(tl!("Delete")).clicked() {
                 app.custom_actions.remove(i);
                 app.wizard.selected = None;
             }
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, "Start", true).clicked() {
+            if widgets::pill_button(ui, tl_ctx!("action wizard", "Start"), true).clicked() {
                 close = true;
                 app.start_selected_action();
             }
-            if widgets::pill_button(ui, "Close", false).clicked() {
+            if widgets::pill_button(ui, tl!("Close"), false).clicked() {
                 close = true;
             }
         });
@@ -247,33 +303,33 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bo
 
 fn edit_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     let Some((original, a)) = app.wizard.editing.as_mut() else { return false };
-    ui.label(egui::RichText::new(if original.is_some() { "Edit Action" } else { "New Action" }).font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(if original.is_some() { tl!("Edit Action") } else { tl!("New Action") }).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     egui::Grid::new("action-edit").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label("Action name:");
-        ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(320.0).id_salt("action-name"));
+        ui.label(tl!("Action name:"));
+        ui.add(crate::widgets::line(&mut a.name).desired_width(320.0).id_salt("action-name"));
         ui.end_row();
-        ui.label("Description:");
-        ui.add(egui::TextEdit::singleline(&mut a.description).desired_width(320.0).id_salt("action-description"));
+        ui.label(tl!("Description:"));
+        ui.add(crate::widgets::line(&mut a.description).desired_width(320.0).id_salt("action-description"));
         ui.end_row();
     });
     ui.add_space(6.0);
-    ui.label(egui::RichText::new("Steps").font(theme::semibold(13.0)));
+    ui.label(egui::RichText::new(tl!("Steps")).font(theme::semibold(13.0)));
     let mut remove = None;
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         if a.steps.is_empty() {
-            ui.label(egui::RichText::new("Add the steps this action runs, in order.").color(t.text_muted));
+            ui.label(egui::RichText::new(tl!("Add the steps this action runs, in order.")).color(t.text_muted));
         }
         for (i, s) in a.steps.iter_mut().enumerate() {
             ui.push_id(i, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!("{}. {}", i + 1, s.label()));
+                    ui.label(format!("{}. {}", i + 1, tl!(s.label())));
                     if let Some(arg) = s.arg_mut() {
-                        ui.add(egui::TextEdit::singleline(arg).desired_width(220.0));
+                        ui.add(crate::widgets::line(arg).desired_width(220.0));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Remove").clicked() {
+                        if ui.button(tl!("Remove")).clicked() {
                             remove = Some(i);
                         }
                     });
@@ -287,12 +343,12 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     let all = Step::all();
     let add = &mut app.wizard.add;
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("action-add-step").selected_text(all[(*add).min(all.len() - 1)].label()).width(240.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("action-add-step").selected_text(tl!(all[(*add).min(all.len() - 1)].label())).width(240.0).show_ui(ui, |ui| {
             for (i, s) in all.iter().enumerate() {
-                ui.selectable_value(add, i, s.label());
+                ui.selectable_value(add, i, tl!(s.label()));
             }
         });
-        if ui.button("Add Step").clicked() {
+        if ui.button(tl!("Add Step")).clicked() {
             a.steps.push(all[(*add).min(all.len() - 1)].clone());
         }
     });
@@ -301,16 +357,16 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     let taken =
         builtin().iter().any(|b| b.name == name) || app.custom_actions.iter().any(|c| c.name == name && original.as_deref() != Some(name.as_str()));
     if taken {
-        ui.label(egui::RichText::new("An action with this name already exists.").small().color(t.text_muted));
+        ui.label(egui::RichText::new(tl!("An action with this name already exists.")).small().color(t.text_muted));
     }
     let (mut done, mut cancel) = (false, false);
     let ok = !name.is_empty() && !taken && !a.steps.is_empty();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, "Save", true)).inner.clicked() {
+            if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Save"), true)).inner.clicked() {
                 done = true;
             }
-            if widgets::pill_button(ui, "Cancel", false).clicked() {
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 cancel = true;
             }
         });

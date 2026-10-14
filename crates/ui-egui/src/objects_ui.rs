@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
-use printcraft_engine::{Edit, ObjectChange, ObjectKind, PageObject};
+use printcraft_engine::{Edit, ObjectChange, PageObject, PlanObjectKind as ObjectKind};
 use printcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -363,7 +363,7 @@ pub(crate) fn paint_selection(
     view: &DocView,
     pointer: Option<Pos2>,
 ) {
-    let ov = &view.objects;
+    let ov = &view.plan_objects;
     let selected = ov.selection(page);
     let shift = painter.ctx().input(|i| i.modifiers.shift);
     let moving = ov.drag.filter(|d| d.page == page && d.action != Action::Marquee).and_then(|d| pointer.map(|p| drag_transform(&d, p, shift)));
@@ -448,7 +448,7 @@ pub(crate) fn input(
 ) -> bool {
     let tol = TOLERANCE / zoom(xf);
     let shift_held = ui.input(|i| i.modifiers.shift);
-    let selected = view.objects.selection(page);
+    let selected = view.plan_objects.selection(page);
     // As in CAD, a line within reach wins over an area it runs under or over; else the topmost
     // object there.
     let hit = |p: Pos2| -> Option<usize> {
@@ -462,10 +462,10 @@ pub(crate) fn input(
     let bounds = screen_bounds(xf, info, page, objects, &selected);
 
     // A drag in progress: finish it on release.
-    if let Some(d) = view.objects.drag.filter(|d| d.page == page) {
+    if let Some(d) = view.plan_objects.drag.filter(|d| d.page == page) {
         let p = ui.input(|i| i.pointer.interact_pos()).unwrap_or(d.start);
         if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
-            view.objects.drag = None;
+            view.plan_objects.drag = None;
             let moved = (p - d.start).length() > 1.0;
             match d.action {
                 Action::Marquee => {
@@ -479,7 +479,7 @@ pub(crate) fn input(
                             sel.push(i);
                         }
                     }
-                    view.objects.selected = (!sel.is_empty()).then_some((page, sel));
+                    view.plan_objects.selected = (!sel.is_empty()).then_some((page, sel));
                 }
                 Action::Move if moved && !selected.is_empty() => {
                     let (a, b) = (to_user(xf, info, page, d.start), to_user(xf, info, page, p));
@@ -507,12 +507,12 @@ pub(crate) fn input(
     // Keys act on the selection (Ctrl+A, selecting everything, is read by the app).
     if !ui.ctx().egui_wants_keyboard_input() && !selected.is_empty() {
         if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
-            view.objects.selected = None;
+            view.plan_objects.selected = None;
             view.pending_edit = Some(Edit::EditObjects { page, objects: selected, change: ObjectChange::Delete });
             return true;
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            view.objects.selected = None;
+            view.plan_objects.selected = None;
             return true;
         }
         // Arrow keys nudge by one screen pixel (Shift: ten), in the page as shown.
@@ -548,7 +548,7 @@ pub(crate) fn input(
         && let Some(o) = ui.input(|i| i.pointer.press_origin())
         && let (Some(g), Some(b)) = (on_grip(Some(o)), bounds)
     {
-        view.objects.drag = Some(Drag { page, start: o, action: Action::Grip(g), bounds: b });
+        view.plan_objects.drag = Some(Drag { page, start: o, action: Action::Grip(g), bounds: b });
         return true;
     }
     if let Some(g) = on_grip(pointer) {
@@ -573,7 +573,7 @@ pub(crate) fn input(
         // As in CAD: dragging the selection moves it; a drag anywhere else selects with a box (a
         // dense plan has hardly an empty spot, and an object never moves by accident).
         let action = if hit(o).is_some_and(|h| selected.contains(&h)) { Action::Move } else { Action::Marquee };
-        view.objects.drag = Some(Drag { page, start: o, action, bounds: bounds.unwrap_or(Rect::NOTHING) });
+        view.plan_objects.drag = Some(Drag { page, start: o, action, bounds: bounds.unwrap_or(Rect::NOTHING) });
         return true;
     }
     // Double-click: the whole polyline, or the hatch of a loose piece (Shift adds it).
@@ -590,7 +590,7 @@ pub(crate) fn input(
                 sel.push(i);
             }
         }
-        view.objects.selected = Some((page, sel));
+        view.plan_objects.selected = Some((page, sel));
         return true;
     }
     if resp.clicked() || resp.secondary_clicked() {
@@ -603,13 +603,13 @@ pub(crate) fn input(
                     }
                     None => sel.push(h),
                 }
-                view.objects.selected = (!sel.is_empty()).then_some((page, sel));
+                view.plan_objects.selected = (!sel.is_empty()).then_some((page, sel));
             }
             Some(h) if resp.secondary_clicked() && selected.contains(&h) => {}
-            Some(h) => view.objects.selected = Some((page, vec![h])),
+            Some(h) => view.plan_objects.selected = Some((page, vec![h])),
             None => {
                 if !shift_held {
-                    view.objects.selected = None;
+                    view.plan_objects.selected = None;
                 }
                 return false;
             }
@@ -687,15 +687,15 @@ fn sticky_menu(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::U
 /// The floating toolbar above the selection: line (colour, width, style), fill, opacity, turn
 /// and flip, explode, delete.
 pub(crate) fn toolbar(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -> Option<Edit> {
-    let (page, sel) = view.objects.selected.clone()?;
-    if view.objects.drag.is_some() {
+    let (page, sel) = view.plan_objects.selected.clone()?;
+    if view.plan_objects.drag.is_some() {
         return None;
     }
     let xf = view.page_xform(page)?;
-    let objects = view.objects.cache.get(&page).map(|(_, o)| o.clone())?;
+    let objects = view.plan_objects.cache.get(&page).map(|(_, o)| o.clone())?;
     let chosen: Vec<&PageObject> = sel.iter().filter_map(|i| objects.get(*i)).collect();
     if chosen.is_empty() {
-        view.objects.selected = None;
+        view.plan_objects.selected = None;
         return None;
     }
     let ub = user_bounds(&objects, &sel)?;
@@ -713,7 +713,7 @@ pub(crate) fn toolbar(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let mut change = None;
     let mut select_similar = false;
     let mut turn: Option<Affine> = None;
-    let mut custom = view.objects.custom;
+    let mut custom = view.plan_objects.custom;
     egui::Area::new(egui::Id::new(("object-toolbar", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(8, 5)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -735,7 +735,7 @@ pub(crate) fn toolbar(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                         ui.separator();
                         ui.label(egui::RichText::new("Line width").small());
                         for mm in WIDTHS_MM {
-                            let label = format!("{} mm", printcraft_engine::measure::format_number(mm, 2));
+                            let label = format!("{} mm", printcraft_engine::plan_measure::format_number(mm, 2));
                             if ui.button(label).clicked() {
                                 change = Some(ObjectChange::Width(mm * 72.0 / 25.4));
                                 ui.close();
@@ -796,9 +796,9 @@ pub(crate) fn toolbar(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             });
         });
     });
-    view.objects.custom = custom;
+    view.plan_objects.custom = custom;
     if select_similar {
-        view.objects.selected = Some((page, similar(&objects, &sel)));
+        view.plan_objects.selected = Some((page, similar(&objects, &sel)));
         return None;
     }
     if let Some(m) = turn {
@@ -806,7 +806,7 @@ pub(crate) fn toolbar(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     }
     let change = change?;
     if matches!(change, ObjectChange::Delete | ObjectChange::Explode) {
-        view.objects.selected = None;
+        view.plan_objects.selected = None;
     }
     Some(Edit::EditObjects { page, objects: sel, change })
 }

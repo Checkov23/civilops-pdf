@@ -1,6 +1,7 @@
 //! The command registry drives menus, shortcuts and the palette: every registered command must
 //! be implemented, disabled commands must say why, and every surface must reach the same action.
 
+use egui::os::OperatingSystem;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -35,6 +36,7 @@ fn fixture(n: usize) -> Vec<u8> {
 fn harness() -> Harness<'static, PrintCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
         app
     });
@@ -51,14 +53,17 @@ const PICKERS: &[&str] = &[
     "file.save_as",
     "create.file",
     "create.images",
+    "create.multiple",
     "page.replace",
     "create.clipboard",
     "a11y.report",
     "ocr.recognize_batch",
     "form.merge_data",
     "export.docx",
+    "export.pptx",
     "export.html",
     "export.rtf",
+    "measure.export",
 ];
 
 #[test]
@@ -68,8 +73,22 @@ fn every_registered_command_is_implemented() {
             continue;
         }
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
             app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        } else if spec.id == "protect.unlock" {
+            // Only a permissions password: opens restricted, and can be unlocked.
+            let mut doc = printcraft_cos::Document::open(std::sync::Arc::new(fixture(3))).unwrap();
+            doc.set_encryption(&printcraft_cos::NewEncryption {
+                algorithm: printcraft_cos::Algorithm::Aes256,
+                user_password: "",
+                owner_password: "owner",
+                permissions: 0b0100,
+                encrypt_metadata: true,
+                seed: [5; 32],
+            })
+            .unwrap();
+            app.open_bytes("restricted.pdf", None, printcraft_cos::write_full(&doc, &Default::default()).unwrap()).unwrap();
         } else {
             app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
         }
@@ -126,6 +145,10 @@ fn every_registered_command_is_implemented() {
             let p = printcraft_engine::Protection { open_password: Some("pw".into()), ..Default::default() };
             app.apply_edit(printcraft_engine::Edit::Protect(p));
         }
+        // The cover toggle needs two-page view first (it is disabled elsewhere).
+        if spec.id == "view.layout.cover" {
+            app.set_option("layout", "two-up").unwrap();
+        }
         let dir = std::env::temp_dir().join(format!("printcraft-cmd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         app.save_override = Some(dir.join("out.pdf").to_string_lossy().into_owned());
@@ -136,12 +159,49 @@ fn every_registered_command_is_implemented() {
 #[test]
 fn disabled_commands_explain_themselves() {
     let mut app = PrintCraftApp::new();
+    app.set_option("language", "en").unwrap();
     assert!(!app.execute("file.save"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Open a document first"));
     app.open_bytes("doc.pdf", None, fixture(2)).unwrap();
     assert!(!app.execute("edit.undo"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Nothing to undo"));
+    // View state counts too: the cover page exists only in two-page view.
+    assert!(!app.execute("view.layout.cover"));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to show the cover page"));
     assert!(!app.execute("no.such.command"));
+}
+
+#[test]
+fn a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it() {
+    let dir = std::env::temp_dir().join(format!("printcraft-tool-open-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("picked.pdf");
+    std::fs::write(&path, fixture(2)).unwrap();
+    let pick = path.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.pick_override = Some(vec![pick]);
+        app
+    });
+    h.run_steps(2);
+    h.state_mut().run_command("export.text");
+    assert!(h.state().toast.as_ref().is_none_or(|t| t.0 != "Open a document first"));
+    h.run_steps(3);
+    assert!(h.state().active.is_some(), "the picked file is open");
+    assert!(matches!(h.state().dialog, Some(Dialog::Export(_))), "and the tool runs on it: {:?}", h.state().dialog);
+    // Cancelled: nothing opens and nothing runs.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.pick_override = Some(Vec::new());
+        app
+    });
+    h.run_steps(2);
+    h.state_mut().run_command("export.text");
+    h.run_steps(3);
+    assert!(h.state().active.is_none() && h.state().dialog.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -177,6 +237,22 @@ fn the_palette_lists_commands_with_shortcuts_and_runs_them() {
 }
 
 #[test]
+fn palette_arrow_keys_select_results_and_enter_runs_the_selection() {
+    let mut h = harness();
+    h.state_mut().set_option("palette", "rotate pages").unwrap();
+    h.run_steps(2);
+    h.get_by_label("Rotate pages clockwise");
+    h.get_by_label("Rotate pages counterclockwise");
+    h.key_press(Key::ArrowDown);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    let app = h.state();
+    assert!(!app.palette_open);
+    assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages[0].rotation, 270);
+}
+
+#[test]
 fn the_pages_menu_comes_from_the_registry() {
     let mut h = harness();
     h.get_by_label("Menu").click();
@@ -190,13 +266,199 @@ fn the_pages_menu_comes_from_the_registry() {
 }
 
 #[test]
+fn the_open_recent_menu_lists_files_and_opens_one() {
+    let dir = std::env::temp_dir().join(format!("printcraft-recent-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("recent.pdf");
+    std::fs::write(&path, fixture(2)).unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let path = path.clone();
+        move |_cc| {
+            let mut app = PrintCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+            app.recent.push(printcraft_ui_egui::RecentFile { name: "recent.pdf".into(), path, pages: 2, size: 0 });
+            app
+        }
+    });
+    h.run_steps(4);
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label("Open Recent ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label_contains("recent.pdf").click();
+    h.run_steps(4);
+    let app = h.state();
+    assert_eq!(app.views.len(), 2, "the recent file opened in a new tab");
+    let active = app.active.unwrap();
+    assert_eq!(app.session.get(app.views[active].id).and_then(|d| d.path.as_deref()), Some(path.as_str()), "the active tab is the recent file");
+}
+
+#[test]
+fn the_open_recent_menu_is_disabled_while_the_list_is_empty() {
+    let mut h = harness();
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    assert!(
+        h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(),
+        "Open Recent is disabled while no file has been opened"
+    );
+}
+
+fn recent_file(name: &str) -> printcraft_ui_egui::RecentFile {
+    printcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 }
+}
+
+#[test]
+fn clear_recent_files_at_the_foot_of_open_recent_empties_the_list() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+        app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label("Open Recent ⏵").hover();
+    h.run_steps(3);
+    h.get_by_label("Clear Recent Files").click();
+    h.run_steps(3);
+    assert!(h.state().recent.is_empty(), "the list is empty");
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("File ⏵").hover();
+    h.run_steps(3);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "and Open Recent is disabled");
+}
+
+#[test]
+fn clear_recent_files_runs_from_the_palette_and_is_saved() {
+    let mut app = PrintCraftApp::new();
+    app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
+    assert!(app.execute("file.clear_recent"));
+    assert!(app.recent.is_empty());
+    let mut restarted = PrintCraftApp::new();
+    restarted.recent.push(recent_file("stale.pdf"));
+    restarted.restore(&app.persist());
+    assert!(restarted.recent.is_empty(), "the empty list is what's saved");
+    app.execute("file.clear_recent");
+    assert!(app.toast.as_ref().is_some_and(|(m, _)| m.contains("No recent files")), "nothing to clear is said, not silent");
+}
+
+#[test]
 fn the_shortcuts_dialog_lists_the_real_bindings() {
     let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Nix);
     h.state_mut().execute("help.shortcuts");
     h.run_steps(3);
-    let mac = cfg!(target_os = "macos");
-    h.get_by_label(if mac { "⇧⌘S" } else { "Ctrl+Shift+S" });
+    h.get_by_label("Ctrl+Shift+S");
     h.get_by_label("Save as");
+    // The keys the document view handles itself are written for the platform too, and Fit
+    // visible (a registered command) is listed once.
+    h.get_by_label("Ctrl+1");
+    h.get_by_label("Ctrl+3");
+    h.get_by_label("Ctrl+G / Ctrl+Shift+G");
+    h.get_by_label("← / →, Ctrl+← / Ctrl+→");
+    h.get_by_label("Zoom in / out (also pinch or Ctrl-scroll)");
+    assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.run_steps(2);
+    h.get_by_label("⇧⌘S");
+    h.get_by_label("⌘1");
+    h.get_by_label("Zoom in / out (also pinch or ⌘-scroll)");
+}
+
+#[test]
+fn localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings() {
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Windows);
+    h.state_mut().set_option("language", "de").unwrap();
+    h.state_mut().execute("help.shortcuts");
+    h.run_steps(3);
+    h.get_by_label("Strg+Umschalt+S");
+    h.state_mut().set_option("language", "en").unwrap();
+    h.run_steps(2);
+    h.get_by_label("Ctrl+Shift+S");
+    h.state_mut().set_option("language", "de").unwrap();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.run_steps(2);
+    h.get_by_label("⇧⌘S");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    h.ctx.set_os(OperatingSystem::Windows);
+    h.key_press_modifiers(Modifiers::CTRL | Modifiers::COMMAND, Key::K);
+    h.run_steps(3);
+    assert!(h.state().palette_open, "the localized Strg+K display still binds Ctrl+K");
+    // Searching by the stable command id still works in a translated interface.
+    h.state_mut().set_option("palette", "view.read_mode").unwrap();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().mode, printcraft_ui_egui::Mode::Read);
+    assert!(!h.state().palette_open);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert!(!doc.dirty);
+}
+
+/// Menu ▸ View open, with egui told the app runs on `os`.
+fn view_menu(os: OperatingSystem) -> Harness<'static, PrintCraftApp> {
+    let mut h = harness();
+    h.ctx.set_os(os);
+    h.get_by_label("Menu").click();
+    h.run_steps(2);
+    h.get_by_label("View ⏵").hover();
+    h.run_steps(3);
+    h
+}
+
+#[test]
+fn view_menu_and_tooltips_write_shortcuts_for_the_platform() {
+    // On Linux, View ▸ Zoom and Page navigation showed ⌘1, ⌘[ … (hard-coded) while the
+    // registered items under them showed Ctrl+K; tooltips showed ⌘ too.
+    let h = view_menu(OperatingSystem::Nix);
+    h.get_by_label("Actual size Ctrl+1");
+    h.get_by_label("Zoom to page level Ctrl+0");
+    h.get_by_label("Rotate view counterclockwise Ctrl+Shift+−");
+    h.get_by_label("Previous view Ctrl+[");
+    h.get_by_label("Find tools and commands… Ctrl+K");
+    h.get_by_label("Zoom in (Ctrl++)");
+    h.get_by_label("Print (Ctrl+P)");
+    assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
+    assert_eq!(h.query_all_by_label_contains("Fit visible").count(), 1, "View lists Fit visible once");
+    h.get_by_label("Fit visible Ctrl+3");
+
+    let h = view_menu(OperatingSystem::Mac);
+    h.get_by_label("Actual size ⌘1");
+    h.get_by_label("Fit visible ⌘3");
+    h.get_by_label("Rotate view clockwise (⇧⌘+)");
+    assert_eq!(h.query_all_by_label_contains("Ctrl+").count(), 0, "no Ctrl+ on macOS");
+}
+
+#[test]
+fn the_top_bar_save_button_names_its_shortcut_not_a_milestone() {
+    // #962: on Windows the Save button's tooltip and accessibility name read "Save (M4)",
+    // an internal milestone tag, while Print and Document properties named their shortcuts.
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Windows);
+    h.run_steps(2);
+    h.get_by_label("Save (Ctrl+S)");
+    h.get_by_label("Print (Ctrl+P)");
+    assert_eq!(h.query_all_by_label_contains("(M4)").count(), 0, "no milestone tag in the top bar");
+    assert_eq!(h.query_all_by_label_contains("⌘").count(), 0, "no ⌘ outside macOS");
+
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.run_steps(2);
+    h.get_by_label("Save (⌘S)");
 }
 
 #[test]
@@ -223,4 +485,102 @@ fn the_about_dialog_shows_the_running_version() {
     h.run_steps(3);
     // CivilOps PDF shows its own version (the crates keep PrintCraft's).
     h.get_by_label_contains(&format!("Version {}", printcraft_engine::links::VERSION));
+}
+
+#[test]
+fn command_w_closes_empty_macos_window_but_not_an_empty_windows_window() {
+    for (os, should_close) in [(OperatingSystem::Mac, true), (OperatingSystem::Windows, false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_cc| PrintCraftApp::new());
+        h.ctx.set_os(os);
+        h.run_steps(4);
+        assert!(h.state().views.is_empty());
+        h.event(egui::Event::Key { key: Key::W, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+        h.step();
+        let closes = h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+        assert_eq!(closes, should_close, "{os:?}: only an empty macOS window should close");
+    }
+}
+
+#[test]
+fn command_w_still_closes_the_document_tab_on_macos() {
+    let mut h = harness();
+    h.ctx.set_os(OperatingSystem::Mac);
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.run_steps(2);
+    assert!(h.state().views.is_empty(), "⌘W closes the clean document tab");
+}
+
+fn palette_ime_output_requests_interrupt(h: &Harness<'_, PrintCraftApp>, phase: &str) -> bool {
+    assert!(h.state().palette_open, "palette closed during {phase}");
+    let ime = h.output().platform_output.ime.as_ref().expect("focused palette advertises IME");
+    eprintln!("{phase}: query={:?}; should_interrupt_composition={}", h.state().palette_query, ime.should_interrupt_composition);
+    ime.should_interrupt_composition
+}
+
+fn palette_ime_output_is_uninterrupted(h: &Harness<'_, PrintCraftApp>, phase: &str) {
+    assert!(!palette_ime_output_requests_interrupt(h, phase), "palette interrupted composition during {phase}");
+}
+
+#[test]
+fn palette_ime_idle_frames_and_reopen_do_not_interrupt_composition() {
+    let mut h = harness();
+    for opening in 0..2 {
+        h.state_mut().run_command("view.palette");
+        h.run_steps(3);
+        for frame in 0..3 {
+            h.step();
+            palette_ime_output_is_uninterrupted(&h, &format!("opening {opening}, idle {frame}"));
+        }
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(!h.state().palette_open);
+    }
+}
+
+#[test]
+fn palette_ime_chinese_preedit_commit_and_cancel_remain_uninterrupted() {
+    let mut h = harness();
+    let mut interruptions = Vec::new();
+    h.state_mut().run_command("view.palette");
+    h.run_steps(3);
+    for preedit in ["ni", "nih"] {
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: preedit.into(), active_range_chars: Some(0..preedit.chars().count()) }));
+        h.step();
+        interruptions.push(palette_ime_output_requests_interrupt(&h, preedit));
+        h.step();
+        interruptions.push(palette_ime_output_requests_interrupt(&h, "preedit idle"));
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("你".into())));
+    h.step();
+    assert_eq!(h.state().palette_query, "你");
+    interruptions.push(palette_ime_output_requests_interrupt(&h, "Chinese commit"));
+    h.run_steps(2);
+    assert_eq!(h.state().palette_query, "你");
+    interruptions.push(palette_ime_output_requests_interrupt(&h, "committed idle"));
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "hao".into(), active_range_chars: Some(0..3) }));
+    h.step();
+    interruptions.push(palette_ime_output_requests_interrupt(&h, "second preedit"));
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+    h.step();
+    assert_eq!(h.state().palette_query, "你");
+    interruptions.push(palette_ime_output_requests_interrupt(&h, "cancel preedit"));
+    assert!(interruptions.iter().all(|interrupt| !interrupt), "composition interrupted: {interruptions:?}");
+}
+
+#[test]
+fn palette_ime_outside_click_closes_without_running_a_command() {
+    let mut h = harness();
+    h.state_mut().set_option("palette", "rotate pages clockwise").unwrap();
+    h.run_steps(3);
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(20.0, 850.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
+    assert!(!h.state().palette_open);
+    assert!(h.state().palette_query.is_empty());
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages[0].rotation, 0);
 }

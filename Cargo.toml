@@ -5,43 +5,51 @@ exclude = ["vendor"]
 default-members = ["crates/*", "apps/printcraft", "apps/printcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.7.1"
 edition = "2024"
 license = "MIT"
-rust-version = "1.90"
+rust-version = "1.95"
 repository = "https://github.com/Checkov23/civilops-pdf"
 
 [workspace.dependencies]
+# Shared frontend components; engines remain independent of egui.
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
+# Shared system spooler; document composition remains in printcraft-print.
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "d991bf6792f8ade99c51358bf3c1d902c8cd96b5" }
 # internal
-printcraft-geom = { path = "crates/geom", version = "0.2.0" }
-printcraft-filters = { path = "crates/filters", version = "0.2.0" }
-printcraft-cos = { path = "crates/cos", version = "0.2.0" }
-printcraft-crypt = { path = "crates/crypt", version = "0.2.0" }
-printcraft-organize = { path = "crates/organize", version = "0.2.0" }
-printcraft-annot = { path = "crates/annot", version = "0.2.0" }
-printcraft-fonts = { path = "crates/fonts", version = "0.2.0" }
-printcraft-model = { path = "crates/model", version = "0.2.0" }
-printcraft-content = { path = "crates/content", version = "0.2.0" }
-printcraft-redact = { path = "crates/redact", version = "0.2.0" }
-printcraft-print = { path = "crates/print", version = "0.2.0" }
-printcraft-xfdf = { path = "crates/xfdf", version = "0.2.0" }
-printcraft-sign = { path = "crates/sign", version = "0.2.0" }
-printcraft-optimize = { path = "crates/optimize", version = "0.2.0" }
-printcraft-a11y = { path = "crates/a11y", version = "0.2.0" }
-printcraft-ocr = { path = "crates/ocr", version = "0.2.0" }
-printcraft-js = { path = "crates/js", version = "0.2.0" }
-printcraft-compare = { path = "crates/compare", version = "0.2.0" }
-printcraft-preflight = { path = "crates/preflight", version = "0.2.0" }
-printcraft-export = { path = "crates/export", version = "0.2.0" }
-printcraft-edit = { path = "crates/edit", version = "0.2.0" }
-printcraft-create = { path = "crates/create", version = "0.2.0" }
-printcraft-forms = { path = "crates/forms", version = "0.2.0" }
-printcraft-render = { path = "crates/render", version = "0.2.0" }
-printcraft-engine = { path = "crates/engine", version = "0.2.0" }
-printcraft-ui-egui = { path = "crates/ui-egui", version = "0.2.0" }
+printcraft-geom = { path = "crates/geom", version = "0.7.0" }
+printcraft-filters = { path = "crates/filters", version = "0.7.0" }
+printcraft-cos = { path = "crates/cos", version = "0.7.0" }
+printcraft-crypt = { path = "crates/crypt", version = "0.7.0" }
+printcraft-organize = { path = "crates/organize", version = "0.7.0" }
+printcraft-measure = { path = "crates/measure", version = "0.7.0" }
+printcraft-annot = { path = "crates/annot", version = "0.7.0" }
+printcraft-audit = { path = "crates/audit", version = "0.7.0" }
+printcraft-fonts = { path = "crates/fonts", version = "0.7.0" }
+printcraft-model = { path = "crates/model", version = "0.7.0" }
+printcraft-content = { path = "crates/content", version = "0.7.0" }
+printcraft-redact = { path = "crates/redact", version = "0.7.0" }
+printcraft-print = { path = "crates/print", version = "0.7.0" }
+printcraft-xfdf = { path = "crates/xfdf", version = "0.7.0" }
+printcraft-sign = { path = "crates/sign", version = "0.7.0" }
+printcraft-optimize = { path = "crates/optimize", version = "0.7.0" }
+printcraft-a11y = { path = "crates/a11y", version = "0.7.0" }
+printcraft-ocr = { path = "crates/ocr", version = "0.7.0" }
+printcraft-js = { path = "crates/js", version = "0.7.0" }
+printcraft-compare = { path = "crates/compare", version = "0.7.0" }
+printcraft-preflight = { path = "crates/preflight", version = "0.7.0" }
+printcraft-export = { path = "crates/export", version = "0.7.0" }
+printcraft-edit = { path = "crates/edit", version = "0.7.0" }
+printcraft-create = { path = "crates/create", version = "0.7.0" }
+printcraft-forms = { path = "crates/forms", version = "0.7.0" }
+printcraft-xfa = { path = "crates/xfa", version = "0.7.0" }
+printcraft-render = { path = "crates/render", version = "0.7.0" }
+printcraft-engine = { path = "crates/engine", version = "0.7.0" }
+printcraft-platform = { path = "crates/platform", version = "0.7.0" }
+printcraft-ui-egui = { path = "crates/ui-egui", version = "0.7.0" }
 # CivilOps PDF: installer and self-update (Velopack), like CivilOps CAD.
 civilops-aktualisierung = { path = "crates/aktualisierung" }
-printcraft-automation = { path = "crates/automation", version = "0.2.0", default-features = false }
+printcraft-automation = { path = "crates/automation", version = "0.7.0", default-features = false }
 
 # pdf
 hayro = "0.7.1"
@@ -74,13 +82,24 @@ unsafe_code = "forbid"
 dbg_macro = "warn"
 todo = "warn"
 
+# `"*"` matches every non-workspace package: crates.io dependencies and the
+# vendored crates under `vendor/` (excluded from the workspace). Our own crates
+# keep full debug info. Dependencies keep only line tables, so backtraces still
+# show file and line, but debug info for the whole dependency graph stays out of
+# every test binary (each UI test binary had a 500-600 MB PDB on Windows, #454).
 [profile.dev.package."*"]
 opt-level = 2
+debug = "line-tables-only"
 
 [profile.dev]
 opt-level = 1
 # CivilOps PDF: line tables only (debug builds and tests take a fraction of the disk).
 debug = "line-tables-only"
+
+[profile.low-disk]
+inherits = "dev"
+debug = "line-tables-only"
+incremental = false
 
 [profile.release]
 lto = "thin"
@@ -93,5 +112,7 @@ hayro = { path = "vendor/hayro" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
+winit = { path = "vendor/winit" }
+egui-wgpu = { path = "vendor/egui-wgpu" }
 # CivilOps PDF: egui with an interface translator (vendor/egui, see vendor/README.md).
 egui = { path = "vendor/egui" }

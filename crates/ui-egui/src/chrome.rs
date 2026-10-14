@@ -2,15 +2,39 @@
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
-use crate::canvas::{Fit, PageLayout};
-use crate::theme::{self, ThemeKind, Tokens};
-use crate::{Dialog, Mode, PrintCraftApp, PropsTab, RightPanel, icons, widgets};
+use crate::canvas::{DocView, Fit, PageLayout};
+use crate::theme::{self, ThemePreference, Tokens};
+use crate::{Dialog, Mode, PrintCraftApp, PropsTab, RightPanel, icons, widgets, window_controls};
+
+/// Height of the tab strip when it doubles as the macOS title bar (#789). AppKit draws the traffic
+/// lights itself, centred in the standard 28 pt title-bar band at the top of the window, and moving
+/// them takes AppKit calls the workspace forbids (`unsafe`). So on macOS the strip is that band:
+/// the lights sit vertically centred in it, and the controls beside them shrink to fit, as in
+/// WordCraft (storytold/wordcraft#255).
+pub const MAC_TITLE_BAR: f32 = 28.0;
+/// The traffic lights as AppKit lays them out: button diameter, centre-to-centre pitch and the
+/// first button's left edge (8–10 pt depending on the macOS version; the larger value keeps the
+/// gap after them from shrinking).
+const MAC_LIGHT: f32 = 12.0;
+const MAC_LIGHT_PITCH: f32 = 20.0;
+const MAC_LIGHTS_LEFT: f32 = 10.0;
+/// Where the strip's content starts to the right of the traffic lights: the end of the three
+/// lights plus the same gap the lights keep from the top of the window.
+pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+/// The strip and its controls everywhere else.
+const TAB_STRIP: f32 = 38.0;
+const TAB_HEIGHT: f32 = 30.0;
+const STRIP_BUTTON: f32 = 28.0;
 
 pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let left = if cfg!(target_os = "macos") && app.integrated_titlebar { 80 } else { 8 };
+    // macOS: the strip is the 28 pt title bar, so the traffic lights are centred in it; tabs and
+    // buttons shrink to keep a margin above and below.
+    let mac = cfg!(target_os = "macos") && app.integrated_titlebar;
+    let left = if mac { MAC_CONTENT_LEFT as i8 } else { 8 };
+    let (tab_h, button) = if mac { (MAC_TITLE_BAR - 2.0, 24.0) } else { (TAB_HEIGHT, STRIP_BUTTON) };
     egui::Panel::top("tab_strip")
-        .exact_size(38.0)
+        .exact_size(if mac { MAC_TITLE_BAR } else { TAB_STRIP })
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
@@ -22,8 +46,22 @@ pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
+            // GNOME on Wayland: the strip is the header bar, with the window buttons at its ends.
+            let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+            let controls = app
+                .window_controls
+                .clone()
+                .filter(|_| app.draws_window_frame() && !fullscreen)
+                .unwrap_or_else(|| window_controls::Layout { left: Vec::new(), right: Vec::new() });
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
+                if !controls.left.is_empty() {
+                    ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        window_controls::buttons(ui, &controls.left);
+                    });
+                    ui.add_space(window_controls::SIDE_GAP - 4.0);
+                }
                 // CivilOps PDF: File, Edit, Pages, View and Help across the strip, as a menu bar.
                 if app.civilops_layout {
                     // Plain menu buttons: egui's MenuBar would take the whole row and push the tabs out.
@@ -35,36 +73,179 @@ pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(10.0), Stroke::new(1.0, t.divider));
                     ui.add_space(8.0);
                 }
-                if icons::button(ui, "house", 28.0, app.active.is_none(), "Home").clicked() {
+                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
                     app.active = None;
+                    app.combine_tab.focused = false;
                 }
-                let mut close = None;
-                for i in 0..app.views.len() {
-                    let Some(doc) = app.session.get(app.views[i].id) else { continue };
-                    let (name, dirty) = (doc.display_name(), doc.dirty);
-                    if tab(ui, &t, &name, dirty, app.active == Some(i), &mut close, i).clicked() {
-                        app.active = Some(i);
+                // Keep the two icon buttons and the gaps around them outside the scrolling tabs.
+                let controls_width = 2.0 * button + 16.0 + window_controls::width(&controls.right);
+                // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
+                let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
+                let mut tabs_width = (ui.available_width() - controls_width - open_width).max(0.0);
+                // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
+                // their narrowest; then arrows either side say so and step through them.
+                let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
+                for v in &app.views {
+                    if let Some(doc) = app.session.get(v.id) {
+                        natural.push(tab_natural_width(ui, &t, &doc.display_name()));
                     }
                 }
-                if let Some(i) = close {
-                    app.request_close_tab(i);
+                if app.combine_tab.open {
+                    natural.push(tab_natural_width(ui, &t, tl!("Combine files")));
+                }
+                let gap = ui.spacing().item_spacing.x;
+                let overflow = tabs_overflow(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                if overflow {
+                    tabs_width = (tabs_width - 2.0 * (TAB_ARROW + gap)).max(0.0);
+                }
+                let cap = tab_cap(&natural, tabs_width, gap, TAB_MIN_WIDTH);
+                // Where the tabs were scrolled to last frame, and how far they can go.
+                let scroll_id = ui.id().with("tab_scroll");
+                let (offset, max_offset) = ui.data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
+                let mut scroll_to = None;
+                if overflow && arrow(ui, "chevron-left", offset > 0.5, tl!("Scroll tabs left")) {
+                    scroll_to = Some((offset - (TAB_MIN_WIDTH + gap)).max(0.0));
+                }
+                let state = (app.active, app.views.len(), app.combine_showing());
+                let changed = ui.data_mut(|data| {
+                    let id = ui.id().with("active_tab");
+                    let changed = data.get_temp::<(Option<usize>, usize, bool)>(id) != Some(state);
+                    data.insert_temp(id, state);
+                    changed
+                });
+                let mut action = None;
+                let mut close = None;
+                ui.scope(|ui| {
+                    ui.style_mut().always_scroll_the_only_direction = true;
+                    let mut area = egui::ScrollArea::horizontal().id_salt("document_tabs").max_width(tabs_width).auto_shrink([true, true]);
+                    if let Some(x) = ui.data_mut(|d| d.remove_temp::<f32>(scroll_id.with("to"))) {
+                        area = area.horizontal_scroll_offset(x);
+                    }
+                    let out = area.show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            for i in 0..app.views.len() {
+                                let Some(doc) = app.session.get(app.views[i].id) else { continue };
+                                let (name, dirty) = (doc.display_name(), doc.dirty);
+                                // A tab showing the document's title names its file on hover.
+                                let file = (name != doc.name).then_some(doc.name.as_str());
+                                let response = tab(
+                                    ui,
+                                    ui.id().with(("document-tab", app.views[i].id)),
+                                    &t,
+                                    "file-text",
+                                    &name,
+                                    file,
+                                    dirty,
+                                    app.active == Some(i),
+                                    &mut close,
+                                    i,
+                                    cap,
+                                    tab_h,
+                                );
+                                if changed && app.active == Some(i) && !app.combine_showing() {
+                                    response.scroll_to_me(Some(Align::Center));
+                                }
+                                let id = app.views[i].id;
+                                let reveal = cfg!(not(target_arch = "wasm32")) && doc.path.is_some();
+                                response.context_menu(|ui| {
+                                    if ui.button(tl!("Close Tab")).clicked() {
+                                        action = Some(crate::tab_context::Action::Close(id));
+                                        ui.close();
+                                    }
+                                    if ui.add_enabled(!app.closed_tabs.is_empty(), egui::Button::new(tl!("Reopen Closed Tab"))).clicked() {
+                                        action = Some(crate::tab_context::Action::Reopen);
+                                        ui.close();
+                                    }
+                                    let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+                                    if ui.add_enabled(reveal, egui::Button::new(label)).clicked() {
+                                        action = Some(crate::tab_context::Action::Reveal(id));
+                                        ui.close();
+                                    }
+                                });
+                                if response.clicked() {
+                                    app.active = Some(i);
+                                }
+                            }
+                            if let Some(i) = close
+                                && let Some(view) = app.views.get(i)
+                            {
+                                action.get_or_insert(crate::tab_context::Action::Close(view.id));
+                            }
+                            if let Some(action) = action {
+                                app.tab_action(action);
+                            }
+                            if app.combine_tab.open {
+                                // After the document tabs; its index can't clash with theirs.
+                                let mut close = None;
+                                let response = tab(
+                                    ui,
+                                    ui.id().with("combine-tab"),
+                                    &t,
+                                    "files",
+                                    tl!("Combine files"),
+                                    None,
+                                    false,
+                                    app.combine_showing(),
+                                    &mut close,
+                                    usize::MAX,
+                                    cap,
+                                    tab_h,
+                                );
+                                if changed && app.combine_showing() {
+                                    response.scroll_to_me(Some(Align::Center));
+                                }
+                                if response.clicked() {
+                                    app.open_combine_tab();
+                                }
+                                if close.is_some() {
+                                    app.close_combine_tab();
+                                }
+                            }
+                        });
+                    });
+                    let max = (out.content_size.x - out.inner_rect.width()).max(0.0);
+                    ui.data_mut(|d| d.insert_temp(scroll_id, (out.state.offset.x, max)));
+                });
+                if overflow && arrow(ui, "chevron-right", offset < max_offset - 0.5, tl!("Scroll tabs right")) {
+                    scroll_to = Some((offset + TAB_MIN_WIDTH + gap).min(max_offset));
+                }
+                if let Some(x) = scroll_to {
+                    ui.data_mut(|d| d.insert_temp(scroll_id.with("to"), x));
+                    ui.ctx().request_repaint();
                 }
                 ui.add_space(4.0);
-                if widgets::ghost_button(ui, "plus", "Open").on_hover_text("Open a PDF (⌘O)").clicked() {
+                let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
+                if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
                     app.open_dialog();
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let (icon, next, tip) = match app.theme {
-                        ThemeKind::Light => ("moon", ThemeKind::Dark, "Dark gray theme"),
-                        ThemeKind::Dark => ("sun", ThemeKind::Light, "Light theme"),
-                    };
-                    if icons::button(ui, icon, 28.0, false, tip).clicked() {
-                        let ctx = ui.ctx().clone();
-                        // A chosen theme replaces "Use system setting", which would switch it back.
-                        app.follow_system_theme = false;
-                        app.set_theme(&ctx, next);
+                    if !controls.right.is_empty() {
+                        // Laid out left to right inside the right-to-left run, so they read in
+                        // the desktop's order.
+                        let size = egui::vec2(window_controls::width(&controls.right) - window_controls::SIDE_GAP, window_controls::BUTTON);
+                        ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            window_controls::buttons(ui, &controls.right);
+                        });
+                        ui.add_space(window_controls::SIDE_GAP - 4.0);
                     }
-                    if icons::button(ui, "circle-help", 28.0, false, "Keyboard shortcuts").clicked() {
+                    let (icon, label) = match app.theme_preference {
+                        ThemePreference::System => ("monitor", tl!("Use system setting")),
+                        ThemePreference::Light => ("sun", tl!("Light gray")),
+                        ThemePreference::Dark => ("moon", tl!("Dark gray")),
+                    };
+                    let tip = format!("{}: {label}", tl!("Display theme"));
+                    let response = icons::button(ui, icon, button, false, &tip);
+                    // A click cycles System, Light, Dark; a right-click opens the menu.
+                    if response.clicked() {
+                        app.execute(match app.theme_preference {
+                            ThemePreference::System => "view.theme.light",
+                            ThemePreference::Light => "view.theme.dark",
+                            ThemePreference::Dark => "view.theme.system",
+                        });
+                    }
+                    egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
+                    if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
                 });
@@ -72,44 +253,159 @@ pub fn tab_strip(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
         });
 }
 
-fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, close: &mut Option<usize>, index: usize) -> egui::Response {
-    let font = theme::regular(13.0);
-    let label: String = if name.chars().count() > 28 { format!("{}…", name.chars().take(27).collect::<String>()) } else { name.to_string() };
-    let text_w = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), font.clone(), t.text).size().x);
-    let (rect, resp) = ui.allocate_exact_size(vec2(text_w + 64.0, 30.0), Sense::click());
-    let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, &a11y));
-    let bg = if active {
-        t.chrome
-    } else if resp.hovered() {
-        t.hover
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
-    icons::paint(
-        ui,
-        Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(16.0, 16.0)),
-        "file-text",
-        15.0,
-        if active { t.accent } else { t.text_muted },
-    );
-    ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
-    let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
-    let x = ui.interact(x_rect, ui.id().with(("tabclose", index)), Sense::click());
-    if x.hovered() {
-        ui.painter().rect_filled(x_rect, CornerRadius::same(4), t.pressed);
+/// Both theme entry points use the same choices and command path.
+fn theme_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
+    for (preference, command, label) in [
+        (ThemePreference::System, "view.theme.system", "Use system setting"),
+        (ThemePreference::Light, "view.theme.light", "Light gray"),
+        (ThemePreference::Dark, "view.theme.dark", "Dark gray"),
+    ] {
+        if ui.add(widgets::radio(app.theme_preference == preference, tl!(label))).clicked() {
+            app.execute(command);
+            ui.close();
+        }
     }
+    ui.separator();
+    if ui.button(tl!("Appearance settings…")).clicked() {
+        app.dialog = Some(Dialog::Preferences);
+        ui.close();
+    }
+}
+
+/// The right-click menu on the title bar's theme button.
+fn appearance_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
+    if ui.button(tl!("Appearance settings…")).clicked() {
+        app.dialog = Some(Dialog::Preferences);
+        ui.close();
+    }
+}
+
+/// A tab's chrome around its name: the icon on the left, the close button on the right.
+const TAB_CHROME: f32 = 64.0;
+/// The narrowest a tab shrinks to before the strip scrolls: room for most of a name.
+const TAB_MIN_WIDTH: f32 = 180.0;
+/// The arrows either side of tabs that don't fit.
+const TAB_ARROW: f32 = 24.0;
+
+/// Whether tabs of `natural` widths, `gap` apart, are wider than `budget` even at `min` each.
+fn tabs_overflow(natural: &[f32], budget: f32, gap: f32, min: f32) -> bool {
+    let narrowest: f32 = natural.iter().map(|w| w.min(min)).sum();
+    narrowest + gap * natural.len().saturating_sub(1) as f32 > budget
+}
+
+/// A scroll arrow beside the tabs; dimmed (and inert) at its end. True when clicked.
+fn arrow(ui: &mut egui::Ui, icon: &str, enabled: bool, tip: &str) -> bool {
+    ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, TAB_ARROW, false, tip)).inner.clicked()
+}
+
+/// A tab name, at most 28 characters (longer names end in "…").
+fn tab_name(name: &str) -> String {
+    if name.chars().count() > 28 { format!("{}…", name.chars().take(27).collect::<String>()) } else { name.to_string() }
+}
+
+/// The width a tab takes when nothing has to shrink.
+fn tab_natural_width(ui: &egui::Ui, t: &Tokens, name: &str) -> f32 {
+    let label = crate::bidi::visual(&tab_name(name)).into_owned();
+    ui.fonts_mut(|f| f.layout_no_wrap(label, theme::regular(13.0), t.text).size().x) + TAB_CHROME
+}
+
+/// The widest any tab may be so that tabs of `natural` widths, `gap` apart, fit in `budget`:
+/// narrow tabs keep their width and the rest share what is left equally (as browsers do).
+/// `None` when every tab fits as it is; never below `min` (then the strip scrolls).
+fn tab_cap(natural: &[f32], budget: f32, gap: f32, min: f32) -> Option<f32> {
+    let n = natural.len();
+    if n == 0 {
+        return None;
+    }
+    let mut left = budget - gap * (n - 1) as f32;
+    if natural.iter().sum::<f32>() <= left {
+        return None;
+    }
+    let mut sorted = natural.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    for (k, w) in sorted.iter().enumerate() {
+        let share = left / (n - k) as f32;
+        if *w > share {
+            return Some(share.max(min));
+        }
+        left -= w;
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tab(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    t: &Tokens,
+    icon: &str,
+    name: &str,
+    file: Option<&str>,
+    dirty: bool,
+    active: bool,
+    close: &mut Option<usize>,
+    index: usize,
+    cap: Option<f32>,
+    height: f32,
+) -> egui::Response {
+    let font = theme::regular(13.0);
+    let mut label = tab_name(name);
+    // A shrunk tab shows as much of its name as fits (the tooltip has all of it).
+    if let Some(cap) = cap {
+        let room = (cap - TAB_CHROME).max(0.0);
+        label = ui.fonts_mut(|f| {
+            crate::panels::ellipsized_prefix(&label, |s| f.layout_no_wrap(crate::bidi::visual(s).into_owned(), font.clone(), t.text).size().x <= room)
+        });
+    }
+    // Painted text only: the accessibility name below keeps the logical order.
+    let label = crate::bidi::visual(&label).into_owned();
+    let text_w = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), font.clone(), t.text).size().x);
+    let width = cap.map_or(text_w + TAB_CHROME, |cap| (text_w + TAB_CHROME).min(cap));
+    // Full strip height so the active tab sits on the mode bar instead of floating in the title bar.
+    let height = ui.available_height().max(height);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
+    let resp = craft_ui::tabs::Tab::new(id, &a11y, active).focus_stroke(Stroke::new(1.0, t.accent)).show_at(ui, rect, |ui, resp| {
+        let press = theme::Press::track(ui, resp);
+        let bg = if active {
+            press.fill(t.chrome, t.chrome.lerp_to_gamma(t.hover, 0.65), t.hover)
+        } else {
+            press.fill(Color32::TRANSPARENT, t.hover, t.pressed)
+        };
+        if bg.a() > 0 {
+            ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
+        }
+        icons::paint(
+            ui,
+            Rect::from_min_size(rect.min + vec2(6.0, (height - 16.0) / 2.0), vec2(16.0, 16.0)),
+            icon,
+            15.0,
+            if active { t.accent } else { t.text_muted },
+        );
+        ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
+    });
+    let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
+    let x = ui.interact(x_rect, id.with("close"), Sense::click());
+    let x_press = theme::Press::track(ui, &x);
+    x_press.wash(ui, x_rect, 4, false);
     // Unsaved changes: a dot where the close button sits, until the tab is hovered.
     if dirty && !resp.hovered() && !x.hovered() {
         ui.painter().circle_filled(x_rect.center(), 4.0, if active { t.text } else { t.text_muted });
     } else if active || resp.hovered() || x.hovered() {
-        icons::paint(ui, x_rect, "x", 13.0, t.text_muted);
+        icons::paint(ui, x_rect.translate(x_press.offset()), "x", 13.0, t.text_muted);
     }
-    if x.clicked() {
+    if theme::hand(x).clicked() {
         *close = Some(index);
     }
-    resp.on_hover_text(if dirty { format!("{name} — unsaved changes") } else { name.to_string() })
+    let shown = match file {
+        Some(file) => std::borrow::Cow::Owned(format!("{}\n{}", crate::bidi::visual(name), crate::bidi::visual(file))),
+        None => crate::bidi::visual(name),
+    };
+    theme::hand(resp).on_hover_text(if dirty {
+        crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", shown.as_ref())])
+    } else {
+        shown.into_owned()
+    })
 }
 
 pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
@@ -127,33 +423,29 @@ pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                 for (mode, label) in
                     [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
                 {
-                    if widgets::mode_tab(ui, label, app.mode == mode).clicked() {
-                        app.mode = mode;
-                        app.left_open = true;
-                        app.left = match mode {
-                            Mode::Edit => crate::LeftPanel::Tool("edit"),
-                            Mode::Convert => crate::LeftPanel::Tool("export"),
-                            Mode::Sign => crate::LeftPanel::Tool("fill_sign"),
-                            _ => crate::LeftPanel::AllTools,
-                        };
+                    if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
+                        app.switch_mode(mode, true);
                     }
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
                     ui.add_enabled_ui(has_doc, |ui| {
-                        if icons::button(ui, "printer", 32.0, false, "Print (⌘P)").clicked() {
+                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Print ({key})"), "print.dialog");
+                        if icons::button(ui, "printer", 32.0, false, &tip).clicked() {
                             app.run_command("print.dialog");
                         }
-                        if icons::button(ui, "save", 32.0, false, "Save (M4)").clicked() {
+                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Save ({key})"), "file.save");
+                        if icons::button(ui, "save", 32.0, false, &tip).clicked() {
                             app.run_command("file.save");
                         }
-                        if icons::button(ui, "info", 32.0, false, "Document properties (⌘D)").clicked() {
+                        let tip = crate::commands::command_tip(ui.ctx(), tl!("Document properties ({key})"), "file.properties");
+                        if icons::button(ui, "info", 32.0, false, &tip).clicked() {
                             app.dialog = Some(Dialog::Properties(PropsTab::Description));
                         }
                     });
                     ui.add_space(8.0);
-                    if widgets::search_box(ui, "Find tools and commands", 260.0).clicked() {
+                    if widgets::search_box(ui, tl!("Find tools and commands"), 260.0).clicked() {
                         app.palette_open = true;
                     }
                 });
@@ -162,8 +454,7 @@ pub fn mode_bar(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
 }
 
 fn main_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
-    let language = app.language;
-    let resp = widgets::ghost_button(ui, "panel-left", language.tr("Menu"));
+    let resp = widgets::ghost_button(ui, "panel-left", tl!("Menu"));
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(230.0);
         menus(app, ui);
@@ -173,103 +464,83 @@ fn main_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
 /// File, Edit, Pages, View and Help: inside the Menu popup, or across the tab strip in the
 /// CivilOps layout.
 fn menus(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
-    let language = app.language;
-    ui.menu_button(language.tr("File"), |ui| crate::commands::registry_menu(app, ui, "File"));
-    ui.menu_button(language.tr("Edit"), |ui| crate::commands::registry_menu(app, ui, "Edit"));
-    ui.menu_button(language.tr("Pages"), |ui| crate::commands::registry_menu(app, ui, "Pages"));
-    ui.menu_button(language.tr("View"), |ui| view_menu(app, ui));
-    ui.menu_button(language.tr("Help"), |ui| crate::commands::registry_menu(app, ui, "Help"));
+    ui.menu_button(tl!("File"), |ui| crate::commands::registry_menu(app, ui, "File"));
+    ui.menu_button(tl!("Edit"), |ui| crate::commands::registry_menu(app, ui, "Edit"));
+    ui.menu_button(tl!("Pages"), |ui| crate::commands::registry_menu(app, ui, "Pages"));
+    ui.menu_button(tl!("View"), |ui| view_menu(app, ui));
+    ui.menu_button(tl!("Help"), |ui| crate::commands::registry_menu(app, ui, "Help"));
 }
 
 fn view_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
-    let language = app.language;
     let t = Tokens::get(ui.ctx());
     if let Some(i) = app.active {
         let v = &mut app.views[i];
-        ui.label(egui::RichText::new("Zoom").color(t.text_faint).small());
-        if widgets::menu_item(ui, language.tr("Actual size"), "⌘1").clicked() {
+        let ctx = ui.ctx().clone();
+        let key = |s| crate::commands::shortcut_label(&ctx, s);
+        use crate::commands::{ACTUAL_SIZE, FIT_WIDTH, NEXT_VIEW, PAGE_LEVEL, PREV_VIEW, ROTATE_CCW, ROTATE_CW, ZOOM_IN, ZOOM_OUT};
+        ui.label(egui::RichText::new(tl!("Zoom")).color(t.text_faint).small());
+        if widgets::menu_item(ui, tl!("Actual size"), &key(ACTUAL_SIZE)).clicked() {
             v.set_zoom(1.0);
         }
-        if widgets::menu_item(ui, language.tr("Zoom to page level"), "⌘0").clicked() {
+        if widgets::menu_item(ui, tl!("Zoom to page level"), &key(PAGE_LEVEL)).clicked() {
             v.fit = Fit::Page;
         }
-        if widgets::menu_item(ui, language.tr("Fit to width"), "⌘2").clicked() {
+        if widgets::menu_item(ui, tl!("Fit to width"), &key(FIT_WIDTH)).clicked() {
             v.fit = Fit::Width;
         }
-        if widgets::menu_item(ui, "Fit to height", "").clicked() {
+        if widgets::menu_item(ui, tl!("Fit to height"), "").clicked() {
             v.fit = Fit::Height;
             v.goto = Some((v.current, 0.0));
         }
-        if widgets::menu_item(ui, "Fit visible", "⌘3").clicked() {
+        if widgets::menu_item(ui, tl!("Fit visible"), &crate::commands::command_shortcut_label(&ctx, "view.fit_visible")).clicked() {
             ui.close();
             app.execute("view.fit_visible");
             return;
         }
-        if widgets::menu_item(ui, "Zoom in", "⌘+").clicked() {
+        if widgets::menu_item(ui, tl!("Zoom in"), &key(ZOOM_IN)).clicked() {
             v.zoom_step(true);
         }
-        if widgets::menu_item(ui, "Zoom out", "⌘−").clicked() {
+        if widgets::menu_item(ui, tl!("Zoom out"), &key(ZOOM_OUT)).clicked() {
             v.zoom_step(false);
         }
-        if widgets::menu_item(ui, "Rotate view clockwise", "⇧⌘+").clicked() {
+        if widgets::menu_item(ui, tl!("Rotate view clockwise"), &key(ROTATE_CW)).clicked() {
             v.rotate_view(true);
         }
-        if widgets::menu_item(ui, "Rotate view counterclockwise", "⇧⌘−").clicked() {
+        if widgets::menu_item(ui, tl!("Rotate view counterclockwise"), &key(ROTATE_CCW)).clicked() {
             v.rotate_view(false);
         }
         ui.separator();
-        ui.label(egui::RichText::new("Page navigation").color(t.text_faint).small());
-        if ui.add_enabled(!v.back.is_empty(), egui::Button::new("Previous view").shortcut_text("⌘[")).clicked() {
+        ui.label(egui::RichText::new(tl!("Page navigation")).color(t.text_faint).small());
+        if ui.add_enabled(!v.back.is_empty(), egui::Button::new(tl!("Previous view")).shortcut_text(key(PREV_VIEW))).clicked() {
             v.view_history(false);
         }
-        if ui.add_enabled(!v.forward.is_empty(), egui::Button::new("Next view").shortcut_text("⌘]")).clicked() {
+        if ui.add_enabled(!v.forward.is_empty(), egui::Button::new(tl!("Next view")).shortcut_text(key(NEXT_VIEW))).clicked() {
             v.view_history(true);
         }
         ui.separator();
-        ui.label(egui::RichText::new("Page display").color(t.text_faint).small());
-        for (l, label) in
-            [(PageLayout::Continuous, "Continuous scrolling"), (PageLayout::TwoUp, "Two-page view"), (PageLayout::Single, "Single page")]
-        {
-            if ui.radio(v.layout == l, label).clicked() {
-                v.layout = l;
-                v.goto = Some((v.current, 0.0));
-            }
-        }
-        if ui.add_enabled(v.layout == PageLayout::TwoUp, egui::Checkbox::new(&mut v.cover, "Show cover page in two-page view")).changed() {
-            v.goto = Some((v.current, 0.0));
+        if let Some(id) = page_display_menu(ui, &app.views[i]) {
+            app.execute(id);
         }
         ui.separator();
     }
     crate::commands::registry_menu(app, ui, "View");
-    ui.menu_button(language.tr("Display theme"), |ui| {
-        let ctx = ui.ctx().clone();
-        if ui.radio(app.follow_system_theme, "Use system setting").clicked() {
-            app.follow_system_theme = true;
-        }
-        if ui.radio(!app.follow_system_theme && app.theme == ThemeKind::Light, "Light gray").clicked() {
-            app.follow_system_theme = false;
-            app.set_theme(&ctx, ThemeKind::Light);
-        }
-        if ui.radio(!app.follow_system_theme && app.theme == ThemeKind::Dark, "Dark gray").clicked() {
-            app.follow_system_theme = false;
-            app.set_theme(&ctx, ThemeKind::Dark);
-        }
-    });
-    ui.menu_button(language.tr("Side panels"), |ui| {
+    ui.menu_button(tl!("Display theme"), |ui| theme_menu(app, ui));
+    ui.menu_button(tl!("Side panels"), |ui| {
         for (p, label) in [
-            (RightPanel::Comments, "Comments"),
-            (RightPanel::Bookmarks, "Bookmarks"),
-            (RightPanel::Pages, "Pages"),
-            (RightPanel::Fields, "Fields"),
-            (RightPanel::Layers, "Layers"),
-            (RightPanel::Attachments, "Attachments"),
-            (RightPanel::Signatures, "Signatures"),
-            (RightPanel::Accessibility, "Accessibility Checker"),
-            (RightPanel::Search, "Search"),
-            (RightPanel::Compare, "Compare"),
+            (RightPanel::Comments, tl!("Comments")),
+            (RightPanel::Bookmarks, tl!("Bookmarks")),
+            (RightPanel::Pages, tl!("Pages")),
+            (RightPanel::Fields, tl!("Fields")),
+            (RightPanel::Layers, tl!("Layers")),
+            (RightPanel::Attachments, tl!("Attachments")),
+            (RightPanel::Signatures, tl!("Signatures")),
+            (RightPanel::Accessibility, tl!("Accessibility Checker")),
+            (RightPanel::Tags, tl!("Tags")),
+            (RightPanel::Search, tl!("Search")),
+            (RightPanel::Compare, tl!("Compare")),
         ] {
-            if ui.radio(app.right == Some(p), label).clicked() {
-                app.right = Some(p);
+            if ui.add(widgets::radio(app.right == Some(p), tl!(label))).clicked() {
+                app.choose_right_panel(Some(p));
             }
         }
     });
@@ -297,14 +568,14 @@ pub fn right_rail(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             let mut rail_button = |ui: &mut egui::Ui, panel: RightPanel, icon: &str, tip: &str, has: bool| {
-                let selected = app.right == Some(panel);
-                let r = icons::button(ui, icon, 34.0, selected, tip);
+                let selected = app.right == Some(panel) && (app.mode == Mode::Read || app.docking.exposed(crate::docking::Panel::Inspector));
+                let r = icons::button(ui, icon, 34.0, selected, tl!(tip));
                 if has && !selected {
                     let c = r.rect.right_top() + vec2(-8.0, 8.0);
                     ui.painter().circle_filled(c, 3.0, t.accent);
                 }
                 if r.clicked() {
-                    app.right = if selected { None } else { Some(panel) };
+                    app.choose_right_panel(if selected { None } else { Some(panel) });
                 }
             };
             rail_button(ui, RightPanel::Comments, "message-square-text", "Comments", has_comments);
@@ -317,31 +588,49 @@ pub fn right_rail(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
             if has_check {
                 rail_button(ui, RightPanel::Accessibility, "accessibility", "Accessibility Checker", false);
             }
+            rail_button(ui, RightPanel::Tags, "tag", "Tags", false);
 
             // Page navigation cluster at the bottom (as in Acrobat's rail).
             let view = &mut app.views[index];
+            let mut page_display = None;
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                if icons::button(ui, "zoom-out", 32.0, false, "Zoom out (⌘−)").clicked() {
+                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
+                if icons::button(ui, "zoom-out", 32.0, false, &tip).clicked() {
                     view.zoom_step(false);
                 }
-                if icons::button(ui, "zoom-in", 32.0, false, "Zoom in (⌘+)").clicked() {
+                let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
+                if icons::button(ui, "zoom-in", 32.0, false, &tip).clicked() {
                     view.zoom_step(true);
                 }
-                if icons::button(ui, "rotate-cw", 32.0, false, "Rotate view clockwise (⇧⌘+)").clicked() {
+                // Between rotate and zoom, as in Acrobat. Its command runs once `view` is free.
+                let tip = crate::i18n::fmt(tl!("Page display: {layout}"), &[("layout", tl!(view.layout.label()))]);
+                let resp = icons::button(ui, view.layout.icon(), 32.0, false, &tip);
+                page_display = egui::Popup::menu(&resp)
+                    .show(|ui| {
+                        ui.set_min_width(220.0);
+                        rail_view_menu(ui, view)
+                    })
+                    .and_then(|r| r.inner);
+                let tip = crate::commands::key_tip(ui.ctx(), tl!("Rotate view clockwise ({key})"), crate::commands::ROTATE_CW);
+                if icons::button(ui, "rotate-cw", 32.0, false, &tip).clicked() {
                     view.rotate_view(true);
                 }
-                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "columns-2" };
-                if icons::button(ui, fit_icon, 32.0, false, "Toggle fit page / fit width").clicked() {
+                // Not `columns-2` while fitting the page: that is the two-page view's icon.
+                let fit_icon = if view.fit == Fit::Width { "maximize" } else { "maximize-2" };
+                if icons::button(ui, fit_icon, 32.0, false, tl!("Toggle fit page / fit width")).clicked() {
                     view.fit = if view.fit == Fit::Width { Fit::Page } else { Fit::Width };
                     view.goto = Some((view.current, 0.0));
                 }
-                ui.label(egui::RichText::new(format!("{:.0}%", view.zoom * 100.0)).font(theme::regular(10.5)).color(t.text_faint));
+                let zoom = format!("{:.0}%", view.zoom * 100.0);
+                ui.allocate_ui_with_layout(vec2(40.0, 16.0), Layout::top_down(Align::Center), |ui| {
+                    ui.label(egui::RichText::new(zoom).font(theme::medium(11.0)).color(t.text_muted));
+                });
                 ui.add_space(6.0);
-                if icons::button(ui, "chevron-down", 30.0, false, "Next page").clicked() {
+                if icons::button(ui, "chevron-down", 30.0, false, tl!("Next page")).clicked() {
                     view.step_page(true);
                 }
-                if icons::button(ui, "chevron-up", 30.0, false, "Previous page").clicked() {
+                if icons::button(ui, "chevron-up", 30.0, false, tl!("Previous page")).clicked() {
                     view.step_page(false);
                 }
                 ui.label(egui::RichText::new(page_count.to_string()).font(theme::regular(11.0)).color(t.text_muted));
@@ -357,7 +646,7 @@ pub fn right_rail(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     .corner_radius(CornerRadius::same(5))
                     .show(ui, |ui| ui.add(edit))
                     .inner
-                    .on_hover_text("Current page — type a page number or label (such as iv) and press Enter");
+                    .on_hover_text(tl!("Current page — type a page number or label (such as iv) and press Enter"));
                 if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     // A page label first (logical page numbers, as Acrobat), then a number.
                     let typed = view.page_input.clone();
@@ -366,5 +655,120 @@ pub fn right_rail(app: &mut PrintCraftApp, ui: &mut egui::Ui) {
                     }
                 }
             });
+            if let Some(id) = page_display {
+                app.execute(id);
+            }
         });
+}
+
+/// View ▸ Page display and the rail's Page display menu: the layouts and the cover page.
+/// Returns the command a click asks for, for the caller to run.
+fn page_display_menu(ui: &mut egui::Ui, view: &DocView) -> Option<&'static str> {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(tl!("Page display")).color(t.text_faint).small());
+    let mut picked = None;
+    for l in PageLayout::ORDER {
+        if ui.add(widgets::radio(view.layout == l, tl!(l.label()))).clicked() {
+            picked = Some(l.command());
+        }
+    }
+    ui.separator();
+    // Continuous scrolling is an independent checkbox over the base layout, as in Acrobat (#752).
+    let mut continuous = view.continuous();
+    if ui.add(widgets::checkbox(&mut continuous, tl!("Continuous scrolling"))).changed() {
+        picked = Some("view.continuous");
+    }
+    let mut cover = view.cover;
+    if ui.add_enabled(view.cover_applies(), widgets::checkbox(&mut cover, tl!("Show cover page in two-page view"))).changed() {
+        picked = Some("view.layout.cover");
+    }
+    if picked.is_some() {
+        ui.close();
+    }
+    picked
+}
+
+/// The rail's Page display menu: Acrobat's view choices around the page display. Zoom changes
+/// apply at once; the command a click asks for is returned for the caller to run.
+fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str> {
+    let mut picked = None;
+    for (id, label) in [("view.fit_width_scrolling", "Fit to width scrolling"), ("view.fit_one_page", "Fit one full page")] {
+        if ui.button(tl!(label)).clicked() {
+            picked = Some(id);
+        }
+    }
+    ui.separator();
+    if ui.button(tl!("Actual size")).clicked() {
+        view.set_zoom(1.0);
+        ui.close();
+    }
+    if ui.button(tl!("Zoom to page level")).clicked() {
+        view.set_fit(Fit::Page);
+        ui.close();
+    }
+    if ui.button(tl!("Fit visible")).clicked() {
+        picked = Some("view.fit_visible");
+    }
+    ui.separator();
+    picked = page_display_menu(ui, view).or(picked);
+    ui.separator();
+    for (id, label) in [("view.read_mode", "Read mode"), ("view.full_screen", "Full screen mode")] {
+        if ui.button(tl!(label)).clicked() {
+            picked = Some(id);
+        }
+    }
+    if picked.is_some() {
+        ui.close();
+    }
+    picked
+}
+
+#[cfg(test)]
+mod tab_widths {
+    use super::{MAC_CONTENT_LEFT, MAC_LIGHT, MAC_LIGHT_PITCH, MAC_LIGHTS_LEFT, MAC_TITLE_BAR, tab_cap};
+
+    /// Tabs that fit keep their own widths.
+    #[test]
+    fn tabs_that_fit_do_not_shrink() {
+        assert_eq!(tab_cap(&[200.0, 150.0], 400.0, 4.0, 110.0), None);
+        assert_eq!(tab_cap(&[], 0.0, 4.0, 110.0), None);
+    }
+
+    /// Too wide: narrow tabs keep their width, the wide ones share the rest equally, and
+    /// together they fill the strip exactly.
+    #[test]
+    fn wide_tabs_share_what_narrow_ones_leave() {
+        let natural = [120.0, 300.0, 300.0];
+        let cap = tab_cap(&natural, 500.0, 4.0, 110.0).expect("must shrink");
+        let used: f32 = natural.iter().map(|w| w.min(cap)).sum::<f32>() + 2.0 * 4.0;
+        assert!((used - 500.0).abs() < 0.01, "{cap} uses {used}");
+        assert!((cap - 186.0).abs() < 0.01, "{cap}");
+    }
+
+    /// Arrows appear only when the tabs can't fit even at their narrowest.
+    #[test]
+    fn arrows_only_when_the_narrowest_tabs_overflow() {
+        use super::tabs_overflow;
+        assert!(!tabs_overflow(&[250.0; 3], 600.0, 4.0, 180.0), "three shrunk tabs fit");
+        assert!(tabs_overflow(&[250.0; 4], 600.0, 4.0, 180.0), "four don't, even at 180");
+        assert!(!tabs_overflow(&[100.0; 5], 600.0, 4.0, 180.0), "narrow tabs fit as they are");
+        assert!(!tabs_overflow(&[], 0.0, 4.0, 180.0));
+    }
+
+    /// Tabs never get narrower than the minimum: past it, the strip scrolls instead.
+    #[test]
+    fn tabs_stop_at_their_minimum() {
+        assert_eq!(tab_cap(&[250.0; 12], 600.0, 4.0, 110.0), Some(110.0));
+        assert_eq!(tab_cap(&[250.0; 3], 0.0, 4.0, 110.0), Some(110.0));
+    }
+
+    #[test]
+    fn the_mac_title_bar_centres_and_clears_the_traffic_lights() {
+        // The lights are centred in the bar, and content keeps the same gap after them (#789).
+        let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+        let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
+        assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+        // `egui::Margin` is in `i8`.
+        assert!(MAC_CONTENT_LEFT <= f32::from(i8::MAX));
+    }
 }

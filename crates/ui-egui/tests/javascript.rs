@@ -33,6 +33,7 @@ fn form() -> Vec<u8> {
 fn harness() -> Harness<'static, PrintCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, form()).unwrap();
         app
     });
@@ -93,11 +94,15 @@ fn document_scripts_and_preferences() {
     assert_eq!(h.state().session.get(id).unwrap().document_scripts()[0].0, "init");
     h.state_mut().dialog = Some(Dialog::Preferences);
     h.run_steps(2);
+    // Below the fold in a 900-point window: the preferences scroll to it.
+    h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
+    h.run_steps(4);
     h.get_by_label("Enable Acrobat JavaScript").click();
     h.run_steps(2);
     assert!(!h.state().session.javascript());
     let saved = h.state().persist();
     let mut fresh = PrintCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
 }
@@ -108,6 +113,7 @@ fn merge_data_files_into_a_spreadsheet() {
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("report.csv");
     let mut app = PrintCraftApp::new();
+    app.set_option("language", "en").unwrap();
     app.save_override = Some(out.to_string_lossy().into_owned());
     app.merge_data_files(vec![("form.pdf".into(), form())]);
     assert_eq!(std::fs::read_to_string(&out).unwrap(), "greeting\n\n");
@@ -122,6 +128,7 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
         printcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("paper.pdf", None, paper.clone()).unwrap();
         app
     });

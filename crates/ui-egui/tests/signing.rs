@@ -2,7 +2,7 @@
 
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use printcraft_engine::SignatureStatus;
 use printcraft_ui_egui::{Dialog, PrintCraftApp, QuickTool, RightPanel, SignStep};
 
@@ -30,6 +30,7 @@ fn dir() -> std::path::PathBuf {
 fn harness(dir: std::path::PathBuf) -> Harness<'static, PrintCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.export_dir_override = Some(dir.to_string_lossy().into_owned());
@@ -155,6 +156,7 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     // Trusted certificates and the ID list persist.
     let saved = s.persist();
     let mut fresh = PrintCraftApp::new();
+    fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
 }
@@ -179,6 +181,9 @@ fn certifying_without_a_visible_signature() {
     h.get_by_label("Continue").click();
     h.run_steps(2);
     assert_eq!(h.state().digital_ids.len(), 1);
+    // The dialog shrinks onto this step. egui centers an area from the previous frame's size,
+    // so give the buttons a frame to land before clicking.
+    h.run_steps(2);
     h.get_by_label("Continue").click();
     h.run_steps(2);
     h.get_by_label("Certify as \"Test Signer EC\"");
@@ -243,4 +248,244 @@ fn clicking_an_empty_signature_field_signs_it() {
     let s = h.state();
     let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
     assert!(sig.signed && sig.visible);
+}
+
+#[test]
+fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
+    use printcraft_ui_egui::SignGraphic;
+    use printcraft_ui_egui::fill_sign::SavedSig;
+    let dir = dir().join("graphic");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let cert = printcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
+    let sign_as = |h: &mut Harness<'static, PrintCraftApp>, rect: [f64; 4]| {
+        h.state_mut().start_signing(0, Some(rect), None, None);
+        let entry = h.state_mut().add_digital_id(p12, &cert);
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, "test".into());
+        h.run_steps(2);
+    };
+
+    // Without a saved Fill & Sign signature there is nothing to choose.
+    sign_as(&mut h, [20.0, 110.0, 280.0, 140.0]);
+    h.get_by_label("Graphic");
+    assert!(h.get_by_label("Fill & Sign signature").accesskit_node().is_disabled(), "disabled without one");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+
+    // The saved signature (typed here) takes the name's place.
+    h.state_mut().signature = Some(SavedSig::Typed("Grace Hopper".into()));
+    sign_as(&mut h, [20.0, 110.0, 280.0, 140.0]);
+    h.get_by_label("Fill & Sign signature").click();
+    h.run_steps(2);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().graphic, SignGraphic::FillSign);
+    h.get_by_label("Sign").click();
+    h.run_steps(6);
+    let s = h.state();
+    assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
+    let sig = s.session.get(s.views[0].id).unwrap().signatures.iter().find(|x| x.signed).cloned().unwrap();
+    assert!(sig.visible && sig.status == SignatureStatus::Unknown, "{:?}", sig.details);
+    // Remembered for the next signature, and across a restart.
+    assert_eq!(s.sign_graphic, SignGraphic::FillSign);
+    sign_as(&mut h, [20.0, 20.0, 280.0, 60.0]);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().graphic, SignGraphic::FillSign);
+
+    // An image (the picker's result is set directly: the file dialog is native).
+    let image = {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(60, 20, image::Rgba([200, 0, 0, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        printcraft_engine::SignatureImage::from_bytes(png.get_ref()).unwrap()
+    };
+    h.state_mut().sign_draft.as_mut().unwrap().graphic = SignGraphic::Image(image.clone());
+    h.run_steps(2);
+    h.get_by_label("Choose image…");
+    h.get_by_label("Sign").click();
+    h.run_steps(6);
+    let s = h.state();
+    assert_eq!(s.sign_draft.as_ref().and_then(|d| d.error.clone()), None);
+    let signed = std::fs::read(dir.join("contract_signed.pdf")).unwrap();
+    assert!(signed.windows(6).any(|w| w == b"/Image"), "the image is embedded");
+    assert_eq!(s.session.get(s.views[0].id).unwrap().signatures.iter().filter(|x| x.signed).count(), 2);
+    let mut fresh = PrintCraftApp::new();
+    fresh.restore(&s.persist());
+    assert_eq!(fresh.sign_graphic, SignGraphic::Image(image));
+    // A saved choice that can't be read back falls back to the name.
+    fresh.restore(r#"{"sign_graphic": {"Image": "not base64"}}"#);
+    assert_eq!(fresh.sign_graphic, SignGraphic::Name);
+}
+
+#[test]
+fn os_store_identities_are_not_persisted() {
+    let mut app = PrintCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    for path in ["windows:Store signer", "keychain:Store signer", "file-id.p12"] {
+        app.digital_ids.push(printcraft_ui_egui::DigitalIdEntry {
+            path: path.into(),
+            name: "Signer".into(),
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+            unusable: None,
+        });
+    }
+    let saved = app.persist();
+    let settings: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(settings["digital_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(settings["digital_ids"][0]["path"], "file-id.p12");
+    let mut restored = PrintCraftApp::new();
+    restored.set_option("language", "en").unwrap();
+    restored.restore(&saved);
+    assert_eq!(restored.digital_ids.len(), 1);
+    assert_eq!(restored.digital_ids[0].path, "file-id.p12");
+}
+
+#[test]
+fn windows_store_identity_does_not_ask_for_a_file_password() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    // A synthetic picker entry exercises the dialog without a real Windows identity.
+    h.state_mut().digital_ids.push(printcraft_ui_egui::DigitalIdEntry {
+        path: "windows:No Such Signer".into(),
+        name: "Store signer".into(),
+        issuer: "Test issuer".into(),
+        email: String::new(),
+        expires: "2030.01.01".into(),
+        unusable: None,
+    });
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    h.get_by_label("Sign as \"Store signer\"");
+    assert_eq!(h.query_all_by_label("Digital ID password").count(), 0);
+    h.get_by_label("The key is in the Windows certificate store, which may ask to allow CivilOps PDF to use it.");
+    h.get_by_label("Sign").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
+}
+
+/// Certificate names are as long as their owners made them: the picker cuts both lines of a
+/// row with "…" instead of painting them past the dialog's edge.
+#[test]
+fn long_digital_id_names_stay_inside_the_picker() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    let long = "a certificate subject much longer than the picker is wide ".repeat(4);
+    h.state_mut().digital_ids.push(printcraft_ui_egui::DigitalIdEntry {
+        path: "windows:No Such Signer".into(),
+        name: long.clone(),
+        issuer: long,
+        email: String::new(),
+        expires: "2030.01.01".into(),
+        unusable: None,
+    });
+    h.state_mut().sign_draft.as_mut().unwrap().step = SignStep::Choose;
+    h.run_steps(3);
+    let right = h.get_by_label("Continue").rect().right();
+    let lines: Vec<_> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text.contains("much longer") => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines.len(), 2, "the name and the details line");
+    for line in lines {
+        assert!(line.galley.elided, "{}", line.galley.job.text);
+        assert!(
+            line.pos.x + line.galley.size().x <= right,
+            "the line ends at {} but the dialog's buttons end at {right}",
+            line.pos.x + line.galley.size().x
+        );
+    }
+}
+
+/// A store certificate that can't sign is shown with its reason (so the user learns why an
+/// identity Acrobat lists is missing, issue #179) but is never selected or chosen.
+#[test]
+fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
+    let mut h = harness(dir());
+    // Not a `windows:` path: those are replaced by the real store listing when signing starts.
+    h.state_mut().digital_ids.push(printcraft_ui_egui::DigitalIdEntry {
+        path: "store-test:broken".into(),
+        name: "Broken signer".into(),
+        issuer: String::new(),
+        email: String::new(),
+        expires: String::new(),
+        unusable: Some("its private key can't be opened: the key is missing from its key store (Windows error 0x80090016)".into()),
+    });
+    h.state_mut().start_signing(0, None, None, None);
+    h.run_steps(3);
+    let draft = h.state().sign_draft.as_ref().unwrap();
+    assert_eq!(draft.step, SignStep::Choose, "shown, with its reason, rather than skipped to Configure");
+    assert_eq!(draft.selected, None);
+    h.get_by_label("Broken signer").click();
+    h.run_steps(3);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().selected, None);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().step, SignStep::Choose);
+    // A usable ID after it is the one selected to begin with.
+    h.state_mut().digital_ids.push(printcraft_ui_egui::DigitalIdEntry {
+        path: "store-test:fine".into(),
+        name: "Working signer".into(),
+        issuer: "Test issuer".into(),
+        email: String::new(),
+        expires: "2030.01.01".into(),
+        unusable: None,
+    });
+    h.state_mut().start_signing(0, None, None, None);
+    h.run_steps(3);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().selected, Some(1));
+}
+
+/// Issue #1396: an imported digital ID can be removed from Sign with a Digital ID, after a
+/// confirmation, and its file stays where it was.
+#[test]
+fn an_imported_digital_id_can_be_removed() {
+    let dir = dir().join("remove");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p12 = dir.join("signer.p12");
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12"), &p12).unwrap();
+    let mut h = harness(dir.clone());
+    assert!(h.state_mut().execute("sign.certify_invisible"));
+    h.run_steps(2);
+    {
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        d.new_id.create = false;
+        d.new_id.file = p12.to_string_lossy().into_owned();
+        d.new_id.file_password = "test".into();
+    }
+    h.run_steps(1);
+    h.get_by_label("Continue").click();
+    h.run_steps(4);
+    assert_eq!(h.state().digital_ids.len(), 1);
+    assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Choose));
+
+    // Remove asks first, and Cancel keeps the ID. The dialog changes size with the question;
+    // egui centres it from the previous frame's size, so let it settle before each click.
+    h.get_by_label("Remove").click();
+    h.run_steps(4);
+    h.get_by_label("Remove \"Test Signer EC\" from this list? The file itself is not deleted.");
+    // The question's Cancel comes before the dialog's own.
+    h.get_all_by_label("Cancel").next().unwrap().click();
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("from this list?").is_none());
+    assert_eq!(h.state().digital_ids.len(), 1);
+
+    h.get_by_label("Remove").click();
+    h.run_steps(4);
+    h.get_by_label("Remove").click();
+    h.run_steps(3);
+    assert!(h.state().digital_ids.is_empty());
+    assert!(p12.exists(), "the file itself is not deleted");
+    // With no IDs left the dialog offers to configure one.
+    assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure));
+    h.get_by_label("Configure a Digital ID for Signing");
 }

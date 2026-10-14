@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+printcraft-content = { workspace = true }
 printcraft-cos = { workspace = true }
 thiserror = { workspace = true }
 

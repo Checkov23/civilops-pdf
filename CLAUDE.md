@@ -26,9 +26,12 @@ crash); this file holds the day-to-day working instructions. If the two disagree
   lock poisoning. Every crash fix gets a synthetic regression test.
 - **Rust only** in the product and its build (`xtask`); Python only for the release scripts in
   `packaging/civilops/`.
-- **Language:** text the user sees is written in English in the code and translated in
-  `crates/ui-egui/src/i18n_de.rs` (German is the default). Keep keys and translations in step; a
-  test rejects duplicates.
+- **Language:** text the user sees is written in English in the code. German is the default:
+  `crates/ui-egui/src/i18n_de.rs` (ours, formal "Sie", "Kennwort") comes before upstream's
+  catalog `crates/ui-egui/src/i18n/de.tsv`; the other languages are the `*.tsv` catalogs next to
+  it. A label of ours that every language must have (a command, an All tools item) goes into
+  each catalog too. `german_is_formal_and_says_kennwort` lists catalog entries that need a
+  label of ours after a merge.
 - **Quality gates** before every commit: `cargo fmt --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`,
   `cargo xtask layers`, `cargo xtask wasm`, `cargo xtask assets`, `cargo xtask parity`.

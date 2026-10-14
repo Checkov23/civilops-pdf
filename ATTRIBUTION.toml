@@ -1,3 +1,14 @@
+[[asset]]
+path = "crates/ui-egui/src/i18n/el.tsv"
+title = "Greek interface translation catalog"
+author = "Camthalion77 and contributors"
+source = "Contributor-original: clean-room translations of PrintCraft English UI labels"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Greek UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "a7eed2f1c4493a9fc167f3aeca3ebd8fbed3a50e511a97d26f02ff798202f107"
+
 # ATTRIBUTION.toml: one entry per asset (AGENTS.md §1). The source of truth for provenance and licences.
 # ATTRIBUTION.md is generated from this file: `cargo xtask assets --write`. Checked by `cargo xtask assets` (part of `xtask ci`).
 #
@@ -9,6 +20,215 @@
 #
 # licence: SPDX expression from the allowlist in AGENTS.md §1.2. adobe_data = true marks the closed list of
 # Adobe-authored non-visual technical data allowed by AGENTS.md §1.1.
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/zh-hans.tsv"
+title = "Simplified Chinese interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Simplified Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "22383f7ddd19dceedb645b0ceb2de800c5db603d3f043a081a0663f11c552fa2"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/zh-hant.tsv"
+title = "Traditional Chinese (Taiwan) interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Traditional Chinese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "690c3791d3dd61d3af29936e55372ce5c2d886fe3ad478628274e1d30ac06bf8"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/cs.tsv"
+title = "Czech interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Czech UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "87cc76de454235b2350c99e7f704f46c336146d8f00ac4ed3fe39c19d0b20c2a"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/pt-br.tsv"
+title = "Brazilian Portuguese interface translation catalog"
+author = "André Cardoso (andrecards), PrintCraft contributors"
+source = "Clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources: the ~1,826-entry gist posted in issue #288 (https://gist.github.com/andrecards/ac388c25fba17312ce83207f8b7b467e), completed and reviewed by PrintCraft contributors"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Brazilian Portuguese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "ae0b19b0e0ad8d8ef76cd5c816acad3da3964db811127a7f73070c4dcc4af2f7"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/es.tsv"
+title = "Spanish interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Spanish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "75d5d40904e858aa1318571a0978986b2b693b0e608c794fed65c094f702fc41"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/fr.tsv"
+title = "French interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "French UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "691a0d8c691531d75c1b03ab7b9f36b67af9c66f9f1ee774ba52e7777e8dffcf"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/de.tsv"
+title = "German interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "German UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "398cf4d7467e821e0e744f3e12c5dd92fde6eb8eb742d9fd9bedbaa7ecc55cfd"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/te.tsv"
+title = "Telugu interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Telugu UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "0230d0fd0feeabbd28ddd7eefc62126e454ee62d168d79f95080972dde30d29c"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/it.tsv"
+title = "Italian interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Italian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "ea6cab16505bd1107476349a44a2afe14879fb7b99d470dd8c4507ffadc44861"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/pl.tsv"
+title = "Polish interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Polish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "d6664627d600243540d9a639d748b37cca5b206bffedd1cfa4dfce05ac1ef30c"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/ru.tsv"
+title = "Russian interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Russian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "74ed5979464264ff9f193c074fe98065878f3a38cb3b95dcc2d19b80289da706"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/hu.tsv"
+title = "Hungarian interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Hungarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "39d70b185eead18402aa85f9042441782adb416093a04b632fc26c7918cd8c9a"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/bg.tsv"
+title = "Bulgarian interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Bulgarian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "380623cb938678765d323ee03d5d9f68ddb9a7e342854a75d227d73da1c68c19"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/kk.tsv"
+title = "Kazakh interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of the English UI labels into Kazakh, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Kazakh UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "61cf53a010da6509fdaaecdeb430f2dc33018a68e12751281a60571ee89c3c9c"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/ja.tsv"
+title = "Japanese interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Japanese UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "4b709388b3cdf8e2b30a04808ff87d9456a930b6e00eab3bc8e850e0cf8039cf"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/uk.tsv"
+title = "Ukrainian interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Ukrainian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "14005da194cdc9fcc5791b31fdc7c27c7cd32e746660214187c15382a452a07a"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/ar.tsv"
+title = "Arabic interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Arabic UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "f93122a970603469034794ba7c27e0199eccd62711b3b829b09ffee0aa86513d"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/tr.tsv"
+title = "Turkish interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Turkish UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "5acacb4ec171052314a7c816ed05d34b1e1876445a2845ac422f23f9925ace66"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/lt.tsv"
+title = "Lithuanian interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels and user-facing messages; reviewed by a native Lithuanian-speaking contributor"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Lithuanian UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "4c1a0686bae23ba67b1d4ff908730c63ddcfc970fab7c62171ab1bc65e562863"
 
 [[asset]]
 path = "assets/icons/accessibility.svg"
@@ -902,6 +1122,17 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "2cafe78609903c93e1d7c3f9ebfcbcf855b86e9c8b223ef15b4d56d8b52c3809"
 
 [[asset]]
+path = "assets/icons/heart.svg"
+title = "Lucide icon \"heart\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/heart.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs (CivilOps PDF: Help ▸ Donate)"
+sha256 = "58921971b7525d22189b6172a88bea31347f945a5e381866664b90de633a1aeb"
+
+[[asset]]
 path = "assets/icons/globe.svg"
 title = "Lucide icon \"globe\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
@@ -1230,6 +1461,17 @@ licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
 usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "fe917d6144a9aed9a5297cb28addb9e582ac591a8f1c498a55aecea9b5c1783e"
+
+[[asset]]
+path = "assets/icons/minimize-2.svg"
+title = "Lucide icon \"minimize-2\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/minimize-2.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "1150437d5a870321c59b7ebca2e1bc3f6227f0fa03dd10484ab384dfe5110739"
 
 [[asset]]
 path = "assets/icons/minus.svg"
@@ -1932,7 +2174,7 @@ source = "https://github.com/rsms/inter"
 licence = "OFL-1.1"
 licence_file = "assets/fonts/OFL-Inter.txt"
 kind = "font"
-usage = "UI font, embedded in the app; demo PDF labels"
+usage = "UI font, embedded in the app; demo PDF labels; slanted fallback glyphs in Fill & Sign typed signatures for characters Dancing Script lacks (Cyrillic, Greek), drawn as filled paths"
 sha256 = "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
 
 [[asset]]
@@ -2134,15 +2376,16 @@ usage = "Default CMYK colour conversion (vendored hayro-interpret)"
 sha256 = "73e1ba37d2bad5bab2a964f40a9eed96209666efc067c3322626214bbef234a0"
 
 [[asset]]
-path = "vendor/hayro-interpret/assets/LAB.icc"
-title = "Lab abstract ICC profile"
-author = "The Hayro Authors (generated with LittleCMS 2)"
-source = "https://github.com/LaurenzV/hayro (hayro-interpret 0.7.0 assets/)"
+path = "crates/fonts/src/std14.rs"
+title = "Standard-14 font advance widths and encodings (as Rust tables)"
+author = "Adobe (Core14 AFM metrics, PDF specification encodings); tables generated by the PrintCraft contributors"
+source = "ISO 32000-2 Annex D and the Adobe Core14 AFM metrics. Generated by joining the published WinAnsi, Symbol and ZapfDingbats encodings (code to glyph name) with the per-glyph advance widths, then spot-checked against the specification by hand in the tests of crates/fonts/src/std14.rs."
 licence = "MIT OR Apache-2.0"
-licence_file = "vendor/hayro-interpret/LICENSE-MIT"
+licence_file = "LICENSE-MIT"
 kind = "data"
-usage = "Lab colour space conversion (vendored hayro-interpret)"
-sha256 = "a6efc5c30ece826eba2a83ddf5aa7026289b0c5ffa90acb129bc59ab8d7f5c59"
+adobe_data = true
+usage = "Advance widths for the fourteen standard fonts, which a PDF may name without embedding. Non-visual data, not a typeface: the item AGENTS.md 1.1 permits, held first-party so generated appearance streams and the renderer agree."
+sha256 = "b21694a6565487b2c9dc78c9652b7e98848f9f3bf272f131541eaaf9248050ca"
 
 # CivilOps PDF (this fork): CivilOps brand marks, not open source (AGENTS.md §1.2, assets/civilops/LICENSE-brand.txt).
 
@@ -2784,10 +3027,43 @@ sha256 = "e484866d4cce403175bd8d00b128feb08ab42e208de30e42cd9889d8f1735a6e"
 [[build_input]]
 name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"
-title = "Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho"
-author = "The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU)"
-source = "https://github.com/storytold/craft-fonts (optional build input; CivilOps PDF releases are built without it)"
+title = "Japanese fonts: BIZ UDPGothic (Regular, Bold), Shippori Mincho, BIZ UDMincho; Arabic font: Noto Sans Arabic"
+author = "The BIZ UDGothic and BIZ UDMincho Project Authors (Morisawa Inc.), The Shippori Mincho Project Authors (FONTDASU), The Noto Project Authors (Noto Sans Arabic)"
+source = "https://github.com/storytold/craft-fonts (pinned by commit in .github/workflows/release.yml)"
 licence = "OFL-1.1"
 attribution = "https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md"
 kind = "font"
-usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); the web build embeds only BIZ UDPGothic Regular"
+usage = "Japanese fallback in the interface (BIZ UDPGothic first) and Japanese glyphs in edited PDF text (Shippori Mincho); Arabic interface text, file names and document titles (Noto Sans Arabic); the web build embeds only BIZ UDPGothic Regular and Noto Sans Arabic. The checkout also holds Noto Sans CJK SC, which crates/fonts/build.rs never embeds (AGENTS.md §1.1)"
+
+[[asset]]
+path = "crates/sign/tests/data/x509-rsa-sha1.pdf"
+title = "One-page PDF with a legacy adbe.x509.rsa_sha1 signature by the RSA test key"
+author = "PrintCraft contributors"
+source = "Contributor-original: hand-written PDF objects; signature made with `openssl dgst -sha1 -sign` over its byte ranges (see crates/sign/tests/data/README.md)"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "document"
+usage = "Signature validation tests (crates/sign/tests/pdf.rs): the legacy adbe.x509.rsa_sha1 format"
+sha256 = "b77bfb21166f4bd043597e45a1ea28b9d9f4ba6df0142b3a0fc8b7f8e0fc111b"
+
+[[asset]]
+path = "assets/icons/monitor.svg"
+title = "Lucide icon \"monitor\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/monitor.svg)"
+licence = "ISC"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "d1a443233345724859de8e4fb48968ba91e885e12ddbd710701548bd91b39428"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/sl.tsv"
+title = "Slovene interface translation catalog"
+author = "PrintCraft contributors"
+source = "Contributor-original: clean-room translations of PrintCraft's English UI labels, no proprietary localisation resources"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Slovene UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs"
+sha256 = "bd50eed6b307ac2723c69294fbe57c89bd1e1b4caa3e315ae696e5abc6b20eab"

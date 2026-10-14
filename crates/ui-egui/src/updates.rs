@@ -163,18 +163,18 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
         ui.set_width(440.0);
         ui.horizontal(|ui| {
             ui.add(crate::icons::image("cloud", 22.0, t.accent));
-            ui.label(egui::RichText::new("Check for updates").font(theme::semibold(16.0)));
+            ui.label(egui::RichText::new(tl!("Check for updates")).font(theme::semibold(16.0)));
         });
         ui.add_space(8.0);
         match &app.updates.check {
             Check::Idle => {
-                ui.label("No check has run yet.");
+                ui.label(tl!("No check has run yet."));
             }
             #[cfg(not(target_arch = "wasm32"))]
             Check::Running(_) => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Checking for a newer version…");
+                    ui.label(tl!("Checking for a newer version…"));
                 });
             }
             Check::Done(Ok(r)) if is_newer(&r.version, current) && installs => {
@@ -208,7 +208,11 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 let version = r.version.trim_start_matches(['v', 'V']);
                 ui.label(egui::RichText::new(format!("CivilOps PDF {version} is available.")).strong());
                 ui.label(
-                    egui::RichText::new(format!("You have version {current}. Download the new version from its release page.")).color(t.text_muted),
+                    egui::RichText::new(crate::i18n::fmt(
+                        tl!("You have version {c}. Download the new version from its release page."),
+                        &[("c", current)],
+                    ))
+                    .color(t.text_muted),
                 );
                 download = Some(r.url.clone());
             }
@@ -216,8 +220,14 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 ui.label(format!("CivilOps PDF {current} is up to date."));
             }
             Check::Done(Err(e)) => {
-                ui.label(format!("Couldn't check for updates: {e}"));
-                ui.label(egui::RichText::new(format!("You have version {current}. All releases are listed at {RELEASES_PAGE}.")).color(t.text_muted));
+                ui.label(crate::i18n::fmt(tl!("Couldn't check for updates: {e}"), &[("e", &e.to_string())]));
+                ui.label(
+                    egui::RichText::new(crate::i18n::fmt(
+                        tl!("You have version {c}. All releases are listed at {page}."),
+                        &[("c", current), ("page", RELEASES_PAGE)],
+                    ))
+                    .color(t.text_muted),
+                );
             }
         }
         ui.add_space(10.0);
@@ -237,7 +247,7 @@ pub(crate) fn dialog(app: &mut PrintCraftApp, ctx: &egui::Context) {
                 let later = widgets::pill_button(ui, "Later", false).clicked();
                 close = get || later;
                 download = get.then_some(url);
-            } else if widgets::pill_button(ui, "Close", true).clicked() {
+            } else if widgets::pill_button(ui, tl!("Close"), true).clicked() {
                 close = true;
             }
         });

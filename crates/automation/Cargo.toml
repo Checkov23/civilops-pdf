@@ -10,9 +10,13 @@ workspace = true
 
 [dependencies]
 printcraft-engine = { workspace = true }
+printcraft-cos = { workspace = true }
 printcraft-render = { workspace = true }
 printcraft-organize = { workspace = true }
+printcraft-platform = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.11"
+tempfile = "3.27"
 png = "0.18"
 base64 = { version = "0.22", optional = true }
 
@@ -23,4 +27,8 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+printcraft-fonts = { workspace = true }
+flate2.workspace = true
+printcraft-model = { workspace = true }
+printcraft-xfa = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

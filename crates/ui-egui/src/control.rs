@@ -13,17 +13,31 @@
 //!
 //! Methods (JSON in, JSON out):
 //! - `ui.state`: open documents, active document, page, zoom, page errors, mode, panels, dialog,
-//!   notice.
-//! - `ui.inspect {query?, role?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
-//!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `depth`.
+//!   notice and observed window dimensions in logical points.
+//! - `ui.inspect {query?, role?, focused?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
+//!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `focusable`, `focused`, `depth`.
 //! - `ui.click {id}` | `{label}` | `{x, y, button?}`: click a widget (by its AccessKit action) or a
-//!   point (`button`: primary or secondary, for context menus).
-//! - `ui.drag {from: [x, y], to: [x, y], steps?, modifiers?}`: press, move and release (drawing
+//!   point (`button`: primary, secondary, or middle).
+//! - `ui.focus {id}` | `{label}`: focus one enabled widget through its AccessKit action.
+//! - `ui.resize {width, height}`: request a native window size (320–8192 logical points per dimension).
+//!   The window manager may constrain it; `ui.state.window` reports the observed result.
+//! - `ui.quit {}`: normal native exit, or `quitting: false, needs_confirmation: true` and the
+//!   existing save prompt when any document has unsaved edits or typing. No discard parameter.
+//! - `ui.move {x, y}`: move the pointer without pressing a button (e.g. latched autoscroll).
+//! - `ui.drag {from: [x, y], to: [x, y], steps?, modifiers?, button?}`: press, move and release (drawing
 //!   comments, selecting text, moving comments). `ui.state` reports `pages_on_screen` to aim at.
 //! - `ui.type {text}`, `ui.key {key, modifiers?}`: keyboard input to the focused widget / app.
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
-//! - `ui.set {key, value}`: the view options of the command line (`--page`, `--zoom`, …).
-//! - `ui.open {path}`: open a file.
+//! - `ui.set {key, value}`: view options (`--page`, `--zoom`, …), plus persistent preferences.
+//!   `select` accepts physical page numbers and ranges such as `1,12,16-18`; blank clears the
+//!   explicit selection. This is the same bounded parser as the Organize Pages field; invalid
+//!   input leaves the previous selection unchanged. `ui.state.active.selected_pages` reports it.
+//!   `default-mode=all|read|edit|convert|sign` applies to future PDF opens; `mode` overrides it
+//!   for this session without changing the saved preference. `ui.state.default_mode` reports it.
+//!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
+//!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
+//! - `ui.open {path}`: accept a file open; native opens report `pending: true` until they
+//!   complete and are listed in `ui.state.pending_opens`.
 //! - `ui.screenshot {region?}`: PNG of the window (base64), optionally cropped to a rect.
 
 use std::collections::{HashMap, VecDeque};
@@ -167,9 +181,11 @@ pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
 pub(crate) trait Host {
     fn state(&self) -> Value;
     fn command(&mut self, id: &str) -> Reply;
+    fn dock(&mut self, reset: bool, params: &Value) -> Reply;
     fn commands(&self) -> Value;
     fn set(&mut self, key: &str, value: &str) -> Reply;
     fn open(&mut self, path: &str) -> Reply;
+    fn quit(&mut self, ctx: &egui::Context) -> bool;
 }
 
 impl Control {
@@ -260,8 +276,15 @@ impl Control {
     fn handle(&mut self, ctx: &egui::Context, host: &mut impl Host, method: &str, p: &Value) -> Handled {
         let str_param = |k: &str| p.get(k).and_then(Value::as_str).ok_or_else(|| format!("{method}: missing string parameter {k}"));
         let r: Result<Handled, String> = (|| match method {
-            "ui.state" => Ok(Handled::Now(Ok(host.state()))),
+            "ui.state" => {
+                let mut state = host.state();
+                let size = ctx.input(|i| i.viewport_rect().size());
+                state["window"] = json!({ "width": size.x, "height": size.y, "pixels_per_point": ctx.pixels_per_point() });
+                Ok(Handled::Now(Ok(state)))
+            }
             "ui.commands" => Ok(Handled::Now(Ok(host.commands()))),
+            "ui.dock" | "ui.dock.reset" => Ok(Handled::Now(host.dock(method == "ui.dock.reset", p))),
+            "ui.command" if str_param("id")? == "ui.dock" => Ok(Handled::Now(host.dock(false, p.get("params").unwrap_or(p)))),
             "ui.command" => Ok(Handled::Now(host.command(str_param("id")?))),
             "ui.set" => {
                 let value = match p.get("value") {
@@ -274,7 +297,44 @@ impl Control {
             "ui.open" => Ok(Handled::Now(host.open(str_param("path")?))),
             "ui.inspect" => Ok(Handled::Now(Ok(self.inspect(p)))),
             "ui.click" => self.click(p),
+            "ui.focus" => self.focus(p),
+            "ui.resize" => {
+                only_params(p, method, &["width", "height"])?;
+                let dimension = |key: &str| -> Result<f32, String> {
+                    p.get(key)
+                        .and_then(Value::as_f64)
+                        .filter(|n| n.is_finite() && (320.0..=8192.0).contains(n))
+                        .map(|n| n as f32)
+                        .ok_or_else(|| format!("ui.resize: {key} must be between 320 and 8192 logical points"))
+                };
+                let size = egui::vec2(dimension("width")?, dimension("height")?);
+                if cfg!(target_arch = "wasm32") {
+                    return Err("ui.resize needs a native window".into());
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+                ctx.request_repaint();
+                Ok(Handled::AfterFrames(2, json!({ "requested": [size.x, size.y] })))
+            }
+            "ui.quit" => {
+                only_params(p, method, &[])?;
+                if cfg!(target_arch = "wasm32") {
+                    return Err("ui.quit needs a native window".into());
+                }
+                let quitting = host.quit(ctx);
+                Ok(Handled::Now(Ok(json!({ "quitting": quitting, "needs_confirmation": !quitting }))))
+            }
             "ui.drag" => self.drag(p),
+            "ui.move" => {
+                let point = |key: &str| -> Result<f32, String> {
+                    p.get(key)
+                        .and_then(Value::as_f64)
+                        .map(|n| n as f32)
+                        .filter(|n| n.is_finite())
+                        .ok_or_else(|| format!("ui.move: {key} must be a finite coordinate in points"))
+                };
+                let pos = egui::pos2(point("x")?, point("y")?);
+                Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::PointerMoved(pos)]]), json!({ "moved": [pos.x, pos.y] })))
+            }
             "ui.type" => {
                 let text = str_param("text")?.to_string();
                 Ok(Handled::AfterFrames(self.inject(vec![vec![egui::Event::Text(text)]]), json!({ "typed": true })))
@@ -296,7 +356,7 @@ impl Control {
                 Ok(Handled::Screenshot(region))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -305,6 +365,7 @@ impl Control {
     fn inspect(&self, p: &Value) -> Value {
         let query = p.get("query").and_then(Value::as_str).map(str::to_lowercase);
         let role = p.get("role").and_then(Value::as_str).map(str::to_lowercase);
+        let focused = p.get("focused").and_then(Value::as_bool);
         let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
         let Ok(s) = self.shared.lock() else { return json!({ "widgets": [] }) };
         let mut out = Vec::new();
@@ -321,7 +382,8 @@ impl Control {
                     .to_lowercase();
             let role_ok = role.as_ref().is_none_or(|r| w["role"].as_str().is_some_and(|x| x.to_lowercase() == *r));
             let query_ok = query.as_ref().is_none_or(|q| text.contains(q.as_str()));
-            if role_ok && query_ok && id != s.root.unwrap_or(id) {
+            let focus_ok = focused.is_none_or(|want| (s.focus == Some(id)) == want);
+            if role_ok && query_ok && focus_ok && id != s.root.unwrap_or(id) {
                 total += 1;
                 if out.len() < limit {
                     out.push(w);
@@ -335,14 +397,20 @@ impl Control {
     fn drag(&mut self, p: &Value) -> Result<Handled, String> {
         let point = |k: &str| -> Result<egui::Pos2, String> {
             match p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()).as_deref() {
-                Some([x, y]) => Ok(egui::pos2(*x as f32, *y as f32)),
+                Some([x, y]) => Some(egui::pos2(*x as f32, *y as f32))
+                    .filter(|pos| pos.is_finite())
+                    .ok_or_else(|| format!("ui.drag: {k} must be [x, y], finite coordinates in points")),
                 _ => Err(format!("ui.drag: {k} must be [x, y] in points")),
             }
         };
         let (from, to) = (point("from")?, point("to")?);
+        if !(to - from).is_finite() {
+            return Err("ui.drag: from and to must be a finite distance apart, in points".into());
+        }
         let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).clamp(1, 200) as usize;
         let modifiers = modifiers(p.get("modifiers"))?;
-        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+        let which = pointer_button(p, "ui.drag")?;
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers };
         let mut frames = vec![vec![egui::Event::PointerMoved(from)], vec![button(from, true)]];
         for k in 1..=steps {
             frames.push(vec![egui::Event::PointerMoved(from + (to - from) * (k as f32 / steps as f32))]);
@@ -354,12 +422,11 @@ impl Control {
 
     fn click(&mut self, p: &Value) -> Result<Handled, String> {
         if let (Some(x), Some(y)) = (p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) {
-            let pos = egui::pos2(x as f32, y as f32);
-            let which = match p.get("button").and_then(Value::as_str).unwrap_or("primary") {
-                "primary" | "left" => egui::PointerButton::Primary,
-                "secondary" | "right" => egui::PointerButton::Secondary,
-                other => return Err(format!("ui.click: unknown button {other:?} (primary, secondary)")),
+            let point = |key: &str, n: f64| {
+                Some(n as f32).filter(|n| n.is_finite()).ok_or_else(|| format!("ui.click: {key} must be a finite coordinate in points"))
             };
+            let pos = egui::pos2(point("x", x)?, point("y", y)?);
+            let which = pointer_button(p, "ui.click")?;
             // CivilOps PDF: count=2 double-clicks (Objects: the whole polyline), modifiers as for ui.key.
             let count = p.get("count").and_then(Value::as_u64).unwrap_or(1).clamp(1, 3) as usize;
             let modifiers = modifiers(p.get("modifiers"))?;
@@ -409,6 +476,38 @@ impl Control {
         let frames = self.inject(vec![vec![egui::Event::AccessKitActionRequest(action)]]);
         Ok(Handled::AfterFrames(frames, json!({ "clicked": id.0.to_string(), "label": label })))
     }
+
+    fn focus(&mut self, p: &Value) -> Result<Handled, String> {
+        only_params(p, "ui.focus", &["id", "label"])?;
+        let s = self.shared.lock().map_err(|_| "control state poisoned")?;
+        let id = match (p.get("id"), p.get("label")) {
+            (Some(id), None) => {
+                NodeId(id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse().ok())).ok_or("ui.focus: id must be a widget id from ui.inspect")?)
+            }
+            (None, Some(Value::String(label))) => {
+                let matches: Vec<NodeId> = s
+                    .nodes
+                    .iter()
+                    .filter(|(_, n)| n.supports_action(Action::Focus) && !n.is_disabled() && n.label().is_some_and(|l| l.eq_ignore_ascii_case(label)))
+                    .map(|(id, _)| *id)
+                    .collect();
+                match matches.as_slice() {
+                    [one] => *one,
+                    [] => return Err(format!("ui.focus: no enabled focusable widget labelled {label:?}")),
+                    many => return Err(format!("ui.focus: {} widgets are labelled {label:?}; use a widget id", many.len())),
+                }
+            }
+            _ => return Err("ui.focus: pass exactly one widget id or label".into()),
+        };
+        let node = s.nodes.get(&id).ok_or_else(|| format!("ui.focus: no widget with id {} on screen (run ui.inspect again)", id.0))?;
+        if node.is_disabled() || !node.supports_action(Action::Focus) {
+            return Err(format!("ui.focus: widget {} is disabled or not focusable", id.0));
+        }
+        let action = accesskit::ActionRequest { action: Action::Focus, target_tree: accesskit::TreeId::ROOT, target_node: id, data: None };
+        drop(s);
+        let frames = self.inject(vec![vec![egui::Event::AccessKitActionRequest(action)]]);
+        Ok(Handled::AfterFrames(frames, json!({ "focus_requested": id.0.to_string() })))
+    }
 }
 
 enum Handled {
@@ -426,6 +525,7 @@ fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value
         "depth": depth,
         "enabled": !n.is_disabled(),
         "clickable": n.supports_action(Action::Click),
+        "focusable": n.supports_action(Action::Focus),
     });
     let mut more = serde_json::Map::new();
     let obj = &mut more;
@@ -454,6 +554,27 @@ fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value
         m.extend(more);
     }
     w
+}
+
+fn only_params(p: &Value, method: &str, allowed: &[&str]) -> Result<(), String> {
+    // The JSON-RPC transport represents omitted params as null.
+    if p.is_null() && allowed.is_empty() {
+        return Ok(());
+    }
+    let object = p.as_object().ok_or_else(|| format!("{method}: params must be an object"))?;
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("{method}: unknown parameter {key:?}"));
+    }
+    Ok(())
+}
+
+fn pointer_button(p: &Value, method: &str) -> Result<egui::PointerButton, String> {
+    match p.get("button").and_then(Value::as_str).unwrap_or("primary") {
+        "primary" | "left" => Ok(egui::PointerButton::Primary),
+        "secondary" | "right" => Ok(egui::PointerButton::Secondary),
+        "middle" => Ok(egui::PointerButton::Middle),
+        other => Err(format!("{method}: unknown button {other:?} (primary, secondary, middle)")),
+    }
 }
 
 fn modifiers(v: Option<&Value>) -> Result<egui::Modifiers, String> {
@@ -519,6 +640,14 @@ fn screenshot_png(image: &egui::ColorImage, region: Option<egui::Rect>, ppp: f32
 }
 
 impl Host for crate::PrintCraftApp {
+    fn dock(&mut self, reset: bool, params: &Value) -> Reply {
+        crate::docking::command(self, reset, params)
+    }
+
+    fn quit(&mut self, ctx: &egui::Context) -> bool {
+        self.request_quit(ctx)
+    }
+
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
@@ -530,8 +659,15 @@ impl Host for crate::PrintCraftApp {
                 Some(json!({ "tab": i, "doc": v.id.0, "name": d.name, "path": d.path, "pages": d.info.pages.len(), "dirty": d.dirty, "active": self.active == Some(i) }))
             })
             .collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let pending_opens: Vec<Value> =
+            self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
+        #[cfg(target_arch = "wasm32")]
+        let pending_opens: Vec<Value> = Vec::new();
         json!({
+            "docking": self.docking,
             "documents": docs,
+            "pending_opens": pending_opens,
             "active": active.map(|v| json!({
                 "doc": v.id.0,
                 "page": v.current + 1,
@@ -539,6 +675,12 @@ impl Host for crate::PrintCraftApp {
                 "fit": format!("{:?}", v.fit),
                 "layout": format!("{:?}", v.layout),
                 "organize": v.organize,
+                "grid_zoom": v.grid_zoom(),
+                // Pages picked in the organize grid or the Pages panel (empty: the current page).
+                "selected_pages": v.selected.iter().map(|p| p + 1).collect::<Vec<_>>(),
+                "auto_scrolling": v.auto_scrolling(),
+                "raster_memory": v.raster_memory(),
+                "viewport": [v.viewport_rect().min.x, v.viewport_rect().min.y, v.viewport_rect().max.x, v.viewport_rect().max.y],
                 "find_open": v.find.is_some(),
                 "page_errors": v.page_errors().iter().map(|(p, e)| json!({ "page": p + 1, "error": e })).collect::<Vec<_>>(),
                 // Where pages are on screen (points), to aim ui.click / ui.drag at page content.
@@ -546,10 +688,23 @@ impl Host for crate::PrintCraftApp {
                 "selected_comment": v.comments.selected.map(|(p, i)| json!({ "page": p + 1, "index": i + 1 })),
                 "comment_composer_open": v.comments.composer.is_some(),
             })),
+            // The Combine files tab: how its files show, and each grid thumbnail's state.
+            "combine": {
+                "showing": self.combine_showing(),
+                "view": self.combine_view.as_str(),
+                "zoom": self.combine_zoom,
+                "files": self.combine_draft.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
+                "selected": self.combine_selection(),
+                "thumbnails": self.combine_thumbnails().iter().map(|t| format!("{t:?}")).collect::<Vec<_>>(),
+                "expanded": self.combine_expanded().iter().filter_map(|i| self.combine_draft.get(*i).map(|f| f.name.clone())).collect::<Vec<_>>(),
+                "preview": self.combine_preview().map(|(file, page, render)| json!({ "file": file, "page": page + 1, "render": format!("{render:?}") })),
+            },
             "quick_tool": match self.quick_tool {
+                crate::QuickTool::Measure(t) => format!("measure-{}", t.name()),
                 crate::QuickTool::Select => "select".to_string(),
                 crate::QuickTool::Hand => "hand".to_string(),
                 crate::QuickTool::Crop => "crop".to_string(),
+                crate::QuickTool::EnhanceCamera => "enhance-camera".to_string(),
                 crate::QuickTool::Redact => "redact".to_string(),
                 crate::QuickTool::AddText => "add-text".to_string(),
                 crate::QuickTool::EditText => "edit-text".to_string(),
@@ -559,6 +714,7 @@ impl Host for crate::PrintCraftApp {
                 crate::QuickTool::SignArea { certify: true } => "certify".to_string(),
                 crate::QuickTool::MarqueeZoom => "marquee-zoom".to_string(),
                 crate::QuickTool::Snapshot => "snapshot".to_string(),
+                crate::QuickTool::ColumnSelect => "column-select".to_string(),
                 crate::QuickTool::Stamp(k) => format!("stamp-{}", k.name().trim_start_matches("PC").to_ascii_lowercase()),
                 crate::QuickTool::CustomStamp(i) => format!("custom-stamp-{i}"),
                 crate::QuickTool::Fill(f) => format!("fill-{}", f.command().trim_start_matches("sign.fill.")),
@@ -567,13 +723,17 @@ impl Host for crate::PrintCraftApp {
             },
             "home": self.active.is_none(),
             "mode": format!("{:?}", self.mode),
+            "default_mode": self.default_mode,
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
+            "tools_side": if self.docking.tools_on_right() { "right" } else { "left" },
             "right_panel": self.right.map(|r| format!("{r:?}")),
             "dialog": self.dialog.map(|d| format!("{d:?}")),
             "palette_open": self.palette_open,
             "theme": format!("{:?}", self.theme),
+            "theme_preference": self.theme_preference,
             "language": self.language,
             "notice": self.toast.as_ref().map(|t| t.0.clone()),
+            "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
             "password_prompt": self.password_prompt.is_some(),
             "close_prompt": self.close_request.is_some(),
         })
@@ -589,10 +749,11 @@ impl Host for crate::PrintCraftApp {
     }
 
     fn commands(&self) -> Value {
-        let list: Vec<Value> = printcraft_engine::commands::COMMANDS
+        let mut list: Vec<Value> = printcraft_engine::commands::COMMANDS
             .iter()
             .map(|c| json!({ "id": c.id, "label": c.label, "menu": c.menu, "enabled": self.command_enabled(c), "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))) }))
             .collect();
+        list.push(json!({"id": "ui.dock", "label": "Arrange Panel", "enabled": true, "params": "action, or operation/panel; move: target/zone/before; float/moveFloating: rect; resizeSplit: path/size; setStackOpen: open; resizeStack: height"}));
         json!({ "commands": list })
     }
 
@@ -606,6 +767,8 @@ impl Host for crate::PrintCraftApp {
         self.open_path(path);
         if self.views.len() > before || self.password_prompt.is_some() {
             Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() }))
+        } else if self.pending_opens.iter().any(|pending| pending.path.as_deref() == Some(path)) {
+            Ok(json!({ "accepted": path, "pending": true }))
         } else {
             Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}")))
         }
@@ -629,10 +792,11 @@ pub struct Endpoint {
 /// Listen on `127.0.0.1` (random port) and forward authenticated requests to `client`.
 ///
 /// Protocol: newline-delimited JSON-RPC 2.0. The first request on a connection must be
-/// `{"method": "auth", "params": {"token": …}}`; anything else closes the connection.
+/// `{"method": "auth", "params": {"token": …}}`; anything else closes the connection, and so does
+/// a line longer than [`MAX_AUTH_LINE`] before that.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufReader, Write};
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     let token = random_token()?;
@@ -645,13 +809,30 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                 let Ok(read) = stream.try_clone() else { return };
                 let mut write = stream;
                 let mut authed = false;
-                for line in BufReader::new(read).lines() {
-                    let Ok(line) = line else { break };
+                let mut reader = BufReader::new(read);
+                let mut buf = Vec::new();
+                loop {
+                    // Until `auth` succeeds, lines are capped at MAX_AUTH_LINE; afterwards they
+                    // are read whole, as before.
+                    let max = if authed { usize::MAX } else { MAX_AUTH_LINE };
+                    match read_line_limited(&mut reader, &mut buf, max) {
+                        Ok(LineRead::Line) => {}
+                        // End of stream or a failed read ends the connection, as before.
+                        Ok(LineRead::End) | Err(_) => break,
+                        Ok(LineRead::TooLong) => {
+                            let e = rpc_error(Value::Null, -32600, &format!("request line longer than {max} bytes before auth"));
+                            let _ = writeln!(write, "{e}").and_then(|_| write.flush());
+                            break;
+                        }
+                    }
+                    // Bytes that aren't UTF-8 end the connection, as `BufRead::lines` did.
+                    let Ok(line) = std::str::from_utf8(&buf) else { break };
                     if line.trim().is_empty() {
                         continue;
                     }
-                    let (reply, close) = match serde_json::from_str::<Value>(&line) {
-                        Err(e) => (rpc_error(Value::Null, -32700, &format!("parse error: {e}")), false),
+                    let (reply, close) = match serde_json::from_str::<Value>(line) {
+                        // Before `auth`, like any other first request, this closes the connection.
+                        Err(e) => (rpc_error(Value::Null, -32700, &format!("parse error: {e}")), !authed),
                         Ok(msg) => {
                             let id = msg.get("id").cloned().unwrap_or(Value::Null);
                             let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
@@ -685,6 +866,44 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
     Ok(Endpoint { port, token })
 }
 
+/// Longest line read before a connection has authenticated. The only acceptable request then is
+/// `auth`, about a hundred bytes; a longer line is refused without buffering the rest of it.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_AUTH_LINE: usize = 4 * 1024;
+
+/// What [`read_line_limited`] found.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, PartialEq, Eq)]
+enum LineRead {
+    /// A line, now in the buffer (newline and a trailing `\r` stripped).
+    Line,
+    /// End of stream.
+    End,
+    /// The line is longer than the limit; at most limit + 1 bytes of it were read.
+    TooLong,
+}
+
+/// Read one `\n`-terminated line of at most `max` bytes into `buf`.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_line_limited(reader: &mut impl std::io::BufRead, buf: &mut Vec<u8>, max: usize) -> std::io::Result<LineRead> {
+    use std::io::{BufRead, Read};
+    buf.clear();
+    // `take` bounds what is buffered for one line: never more than `max` + 1 bytes.
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    if reader.take(limit).read_until(b'\n', buf)? == 0 {
+        return Ok(LineRead::End);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        return Ok(LineRead::Line);
+    }
+    // No newline: either the limit was passed, or this is a last line before end of stream.
+    Ok(if buf.len() > max { LineRead::TooLong } else { LineRead::Line })
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
@@ -701,4 +920,103 @@ fn random_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(test)]
+mod transport_tests {
+    /// Before authenticating, a line that isn't JSON gets a parse error and closes the
+    /// connection, as [`super::serve`] documents for any first request other than `auth`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn malformed_input_before_auth_closes_the_connection() {
+        use std::io::{BufRead, BufReader, ErrorKind, Write};
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve(client).unwrap();
+        let s = std::net::TcpStream::connect(("127.0.0.1", ep.port)).unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        writeln!(s.try_clone().unwrap(), "not json").unwrap();
+        let mut r = BufReader::new(s);
+        let mut first = String::new();
+        r.read_line(&mut first).unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(reply["error"]["code"], -32700, "{first}");
+        // Closed: end of stream (or a reset), not a connection left waiting for more input.
+        let mut next = String::new();
+        let closed = match r.read_line(&mut next) {
+            Ok(n) => n == 0,
+            Err(e) => matches!(e.kind(), ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted),
+        };
+        assert!(closed, "the connection stayed open: {next:?}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn lines_are_read_up_to_the_limit() {
+        use super::{LineRead, read_line_limited};
+        let mut buf = Vec::new();
+        let mut input: &[u8] = b"aaaaaaaaaa\nbb\r\ncc";
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"aaaaaaaaaa", "a line exactly at the limit is accepted");
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"bb", "CRLF is stripped");
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"cc", "a last line without a newline is still read");
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::End, "then end of stream");
+        let long = [b'x'; 100];
+        let mut input: &[u8] = &long;
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::TooLong);
+        assert_eq!(input.len(), 100 - 11, "at most limit + 1 bytes are read; the rest is left");
+    }
+
+    /// Before authenticating, a line longer than [`super::MAX_AUTH_LINE`] is refused as soon as
+    /// the limit is passed (no newline needed) and the connection is closed.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_overlong_line_before_auth_is_refused() {
+        use std::io::{BufRead, BufReader, ErrorKind, Write};
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve(client).unwrap();
+        let s = std::net::TcpStream::connect(("127.0.0.1", ep.port)).unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        // Exactly one byte over the limit, without a newline: the server reads it all, so the
+        // close below is a clean end of stream.
+        s.try_clone().unwrap().write_all(&vec![b'x'; super::MAX_AUTH_LINE + 1]).unwrap();
+        let mut r = BufReader::new(s);
+        let mut first = String::new();
+        r.read_line(&mut first).unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(reply["error"]["code"], -32600, "{first}");
+        let mut next = String::new();
+        let closed = match r.read_line(&mut next) {
+            Ok(n) => n == 0,
+            Err(e) => matches!(e.kind(), ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted),
+        };
+        assert!(closed, "the connection stayed open: {next:?}");
+    }
+
+    /// After `auth` the limit no longer applies: a long line is read as before (here it isn't
+    /// JSON, so it gets a parse error and the connection stays open).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn long_lines_after_auth_are_still_read() {
+        use std::io::{BufRead, BufReader, Write};
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve(client).unwrap();
+        let s = std::net::TcpStream::connect(("127.0.0.1", ep.port)).unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut w = s.try_clone().unwrap();
+        let mut r = BufReader::new(s);
+        let reply = |r: &mut BufReader<std::net::TcpStream>| {
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            serde_json::from_str::<serde_json::Value>(&line).unwrap()
+        };
+        let auth = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "auth", "params": { "token": ep.token } });
+        writeln!(w, "{auth}").unwrap();
+        assert_eq!(reply(&mut r)["result"]["ok"], true);
+        writeln!(w, "{}", "x".repeat(4 * super::MAX_AUTH_LINE)).unwrap();
+        assert_eq!(reply(&mut r)["error"]["code"], -32700, "a long line after auth is parsed, not refused");
+        writeln!(w, "y").unwrap();
+        assert_eq!(reply(&mut r)["error"]["code"], -32700, "and the connection is still open");
+    }
 }

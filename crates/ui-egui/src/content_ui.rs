@@ -11,6 +11,50 @@ use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
 use crate::widgets;
 
+/// The colour of the warning under text the standard fonts can't draw.
+const UNDRAWABLE: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
+
+/// The first character of a draft that can't be drawn, as the engine decides it (it refuses
+/// such text, #125): outside the standard fonts and not shaped with the Arabic face.
+pub(crate) fn undrawable(d: &TextDraft, memo: &UndrawableMemo) -> Option<char> {
+    // Checked as `finish` will commit it: without trailing whitespace.
+    let t = AddedText { text: d.text.trim_end().to_string(), rect: d.rect, ..d.style.clone() };
+    if let Some((key, c)) = memo.borrow().as_ref()
+        && *key == t
+    {
+        return *c;
+    }
+    let c = printcraft_engine::first_undrawable(&t);
+    *memo.borrow_mut() = Some((t, c));
+    c
+}
+
+/// The last draft [`undrawable`] checked and its answer: the check lays the text out (and shapes
+/// Arabic), too slow to repeat every frame for long text, so it reruns only when the text or
+/// anything that changes its layout does.
+pub(crate) type UndrawableMemo = std::cell::RefCell<Option<(AddedText, Option<char>)>>;
+
+/// The warning shown for text with `c` in it.
+pub(crate) fn undrawable_message(c: char) -> String {
+    crate::i18n::fmt(
+        tl!("The PDF text fonts can't draw “{c}” ({code}). Choose supported text."),
+        &[("c", &c.to_string()), ("code", &format!("U+{:04X}", u32::from(c)))],
+    )
+}
+
+/// The warning after an edit that saved text its font can't draw: PrintCraft drew `?` for it (a form
+/// field, which other viewers redraw from its value, or a comment, where the `?` shows everywhere).
+pub(crate) fn undrawn_message(n: &printcraft_engine::TextNotice) -> String {
+    let template = if n.redrawn_elsewhere {
+        tl!(
+            "This field's font can't draw “{c}” ({code}), so CivilOps PDF shows ? in its place. The value is saved, and other PDF viewers redraw the field from it."
+        )
+    } else {
+        tl!("The fonts CivilOps PDF writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.")
+    };
+    crate::i18n::fmt(template, &[("c", &n.ch.to_string()), ("code", &format!("U+{:04X}", u32::from(n.ch)))])
+}
+
 const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
 /// The text being typed or retyped in place.
@@ -41,6 +85,146 @@ pub struct ContentView {
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
     grab: Option<(usize, Grab, Pos2)>,
+    undrawable: UndrawableMemo,
+}
+
+impl ContentView {
+    /// The draft's first character the standard fonts can't draw. Such a draft is kept open, and
+    /// counts as unsaved work, until it is corrected or discarded.
+    pub(crate) fn blocked(&self) -> Option<char> {
+        self.draft.as_ref().and_then(|d| undrawable(d, &self.undrawable))
+    }
+
+    /// Keeps a blocked draft open and focused instead of finishing or replacing it.
+    pub(crate) fn hold_blocked(&mut self) -> bool {
+        let blocked = self.blocked().is_some();
+        if let Some(d) = self.draft.as_mut().filter(|_| blocked) {
+            d.focus = true;
+        }
+        blocked
+    }
+}
+
+/// While an added item is moved, the page without it, rendered once per gesture: the item's own
+/// pixels follow the pointer over it instead of staying put until release (#1488).
+#[derive(Default)]
+pub(crate) struct MoveBackground {
+    key: Option<(u64, usize, usize)>,
+    renderer: Option<printcraft_render::RenderPool>,
+    texture: Option<egui::TextureHandle>,
+    tag: Option<u64>,
+    /// The item's display-space box when the gesture started.
+    from: Option<[f64; 4]>,
+    /// The applied move's box. The page raster on screen still has the item where it was until
+    /// its replacement arrives, so the preview stays up until then.
+    settling: Option<[f64; 4]>,
+}
+
+impl MoveBackground {
+    pub fn pending(&self) -> bool {
+        self.renderer.is_some() && self.texture.is_none()
+    }
+
+    pub fn prepare(&mut self, ctx: &egui::Context, doc: &printcraft_engine::Document, cv: &ContentView, scale: f32) {
+        let key = match (cv.grab, cv.selected) {
+            (Some((gp, Grab::Move, _)), Some((sp, si))) if gp == sp => Some((doc.edit_generation(), sp, si)),
+            _ => None,
+        };
+        if !(key.is_none() && self.settling.is_some()) && self.key != key {
+            *self = Self { key, ..Default::default() };
+            if let Some((_, page, index)) = key {
+                self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
+                self.from = on_page(&doc.added, page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
+            }
+        }
+        if self.settling.is_some() {
+            return;
+        }
+        let (Some((_, page, _)), Some(renderer)) = (self.key, self.renderer.as_ref()) else { return };
+        let Some(p) = doc.info.pages.get(page) else { return };
+        let max_side = ctx.input(|i| i.max_texture_side) as f32;
+        let scale = scale.min(crate::canvas::BASE_SIDE.min(max_side) / p.width.max(p.height).max(1.0));
+        let tag = (scale * 1000.0) as u64;
+        if self.tag != Some(tag) {
+            renderer.set_queue(vec![printcraft_render::RenderRequest { page, scale, tag, ..Default::default() }]);
+            self.tag = Some(tag);
+        }
+        if let Some(out) = renderer.try_recv() {
+            if out.error.is_some() {
+                // Without a background the item stays put while dragged, as before.
+                self.renderer = None;
+                return;
+            }
+            if out.request.tag == tag {
+                self.texture = Some(ctx.load_texture(
+                    "added-content-move-background",
+                    crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba),
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        if self.pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    /// The move was applied: keep the preview, now at the new generation, until the page is
+    /// rendered again. Any other edit ends it.
+    pub fn committed(&mut self, edit: &Edit, generation: u64) {
+        match edit {
+            Edit::UpdateContent { page, index, content } if self.texture.is_some() && self.key.is_some_and(|(_, p, i)| (p, i) == (*page, *index)) => {
+                self.key = Some((generation, *page, *index));
+                self.settling = Some(content.rect());
+            }
+            _ => *self = Self::default(),
+        }
+    }
+
+    pub fn page_received(&mut self, page: usize) {
+        if self.settling.is_some() && self.key.is_some_and(|(_, p, _)| p == page) {
+            *self = Self::default();
+        }
+    }
+
+    /// The page without the moving item, then the item's pixels taken from `page_tex` (the page
+    /// as rendered, item included where it was) at the dragged or applied position.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint(
+        &self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        xf: &PageXform,
+        page: usize,
+        info: &DocInfo,
+        cv: &ContentView,
+        page_tex: Option<egui::TextureId>,
+    ) {
+        let (Some((_, kp, _)), Some(background), Some(page_tex), Some(from)) = (self.key, &self.texture, page_tex, self.from) else { return };
+        if kp != page {
+            return;
+        }
+        let r = screen_rect(xf, info, page, from);
+        let d = if let Some((_, _, start)) = cv.grab {
+            let Some(p) = ui.input(|i| i.pointer.hover_pos()) else { return };
+            p - start
+        } else if let Some(to) = self.settling {
+            // A moved text box keeps its top edge (its height follows its lines).
+            screen_rect(xf, info, page, to).left_top() - r.left_top()
+        } else {
+            return;
+        };
+        let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+        xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
+        let r = r.expand(1.0);
+        let mut mesh = egui::Mesh::with_texture(page_tex);
+        for c in [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()] {
+            let (u, v) = xf.screen_to_norm(c);
+            mesh.vertices.push(egui::epaint::Vertex { pos: c + d, uv: Pos2::new(u, v), color: Color32::WHITE });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+    }
 }
 
 /// Text style for new text (the panel's Format controls set it).
@@ -151,6 +335,10 @@ pub(crate) fn page_input(
     if adding_text && hit.is_none() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         if resp.clicked() {
+            // Text that can't be drawn stays where it is being typed (#125).
+            if cv.hold_blocked() {
+                return true;
+            }
             // A click elsewhere keeps the text being typed and starts a new box (#74). The click
             // can reach the page before the editor sees it lose focus, so finish it here.
             let typed = cv.draft.take().and_then(|d| finish(cv, d, added));
@@ -195,6 +383,9 @@ pub(crate) fn page_input(
         && let Some((i, a)) = hit
         && let AddedContent::Text(t) = &a.content
     {
+        if cv.hold_blocked() {
+            return true;
+        }
         cv.draft = Some(TextDraft { page, index: Some(i), rect: t.rect, text: t.text.clone(), style: t.clone(), focus: true });
         cv.selected = Some((page, i));
         consumed = true;
@@ -277,8 +468,12 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
     let zoom = xf.rect.width() / xf.pw.max(1.0);
     let tokens = Tokens::get(ctx);
     let (mut commit, mut cancel, mut done) = (false, false, false);
+    let mut undrawable = None;
+    let memo = &view.content.undrawable;
     egui::Area::new(egui::Id::new(("added-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(r.min).show(ctx, |ui| {
         let Some(t) = view.content.draft.as_mut() else { return };
+        // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+        ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
         let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -289,7 +484,7 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .desired_rows(1)
                     .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 235))
                     .text_color(Color32::from_rgb(cr, cg, cb))
-                    .hint_text("Type text")
+                    .hint_text(tl!("Type text"))
                     .id_salt("added-text-edit"),
             );
             if t.focus {
@@ -304,8 +499,8 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
                     ui.horizontal(|ui| {
-                        done = crate::icons::button(ui, "check", 24.0, false, "Done adding text").clicked();
-                        cancel = crate::icons::button(ui, "x", 24.0, false, "Discard this text (Esc)").clicked();
+                        done = crate::icons::button(ui, "check", 24.0, false, tl!("Done adding text")).clicked();
+                        cancel = crate::icons::button(ui, "x", 24.0, false, tl!("Discard this text (Esc)")).clicked();
                     });
                 })
                 .response
@@ -313,14 +508,20 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
             // Pressing a button takes the focus from the text: that is not a click away.
             let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p));
             cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-            commit = done || resp.lost_focus() && !on_buttons;
+            commit = done || resp.lost_focus() && !on_buttons && !view.objects.hold_editor;
         });
+        // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
+        undrawable = self::undrawable(t, memo);
+        if let Some(c) = undrawable {
+            ui.label(egui::RichText::new(undrawable_message(c)).small().color(UNDRAWABLE));
+        }
     });
     if cancel {
         view.content.draft = None;
         return (None, false);
     }
-    if !commit {
+    // Text that can't be drawn stays in the editor, with the warning, rather than being lost.
+    if !commit || undrawable.is_some() {
         return (None, false);
     }
     let edit = view.content.draft.take().and_then(|d| finish(&mut view.content, d, added));
@@ -350,7 +551,7 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
 /// Returns the changed style; for a selected item the caller turns it into an update.
 pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> Option<AddedText> {
     let mut s = style.clone();
-    widgets::section_title(ui, "Format text");
+    widgets::section_title(ui, tl!("Format text"));
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(110.0).show_ui(ui, |ui| {
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
@@ -365,18 +566,18 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
         });
     });
     ui.horizontal(|ui| {
-        if ui.selectable_label(s.bold, egui::RichText::new("B").strong()).on_hover_text("Bold").clicked() {
+        if ui.selectable_label(s.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold")).clicked() {
             s.bold = !s.bold;
         }
-        if ui.selectable_label(s.italic, egui::RichText::new("I").italics()).on_hover_text("Italic").clicked() {
+        if ui.selectable_label(s.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic")).clicked() {
             s.italic = !s.italic;
         }
         ui.separator();
         for (a, icon, tip) in [
-            (TextAlign::Left, "align-left", "Align left"),
-            (TextAlign::Center, "align-center", "Centre"),
-            (TextAlign::Right, "align-right", "Align right"),
-            (TextAlign::Justify, "align-justify", "Justify"),
+            (TextAlign::Left, "align-left", tl!("Align left")),
+            (TextAlign::Center, "align-center", tl!("Centre")),
+            (TextAlign::Right, "align-right", tl!("Align right")),
+            (TextAlign::Justify, "align-justify", tl!("Justify")),
         ] {
             if crate::icons::button(ui, icon, 26.0, s.align == a, tip).clicked() {
                 s.align = a;
@@ -387,7 +588,7 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
     if let Some(picked) = crate::comments::swatch_grid(ui, Some(c)) {
         s.color = picked;
     }
-    ui.label(egui::RichText::new("Standard fonts; text outside Windows-1252 isn't supported yet.").small().color(t.text_faint));
+    ui.label(egui::RichText::new(tl!("Thai and Arabic use regular fallback fonts when available.")).small().color(t.text_faint));
     (s != *style).then_some(s)
 }
 
@@ -395,7 +596,7 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
 pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens) {
     ui.label(
         egui::RichText::new(
-            "Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.",
+            tl!("Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it."),
         )
             .small()
             .color(t.text_faint),
@@ -404,71 +605,95 @@ pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens) {
 }
 
 impl crate::PrintCraftApp {
+    /// Pick an image file for the active document, read it, and call `then` with its name and
+    /// bytes: now when `save_override` answers (tests and automation never see a native dialog),
+    /// otherwise on a later frame, and only if that document is still the active one.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pick_image(&mut self, title: &str, then: impl FnOnce(&mut Self, String, Vec<u8>) + Send + 'static) {
+        let read = |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
+            Ok(bytes) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                then(app, name, bytes);
+            }
+            Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
+        };
+        match self.save_override.clone() {
+            Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => read(self, p.into()),
+            Some(_) => {}
+            None => {
+                let dialog = rfd::AsyncFileDialog::new()
+                    .add_filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
+                    .set_title(title);
+                let target = self.active_ids().map(|(_, id)| id);
+                self.ask_one(crate::pickers::Ask::File(dialog), target, read);
+            }
+        }
+    }
+
     /// Edit a PDF ▸ Add content ▸ Image: pick a file and place it in the middle of the current page.
     pub fn add_image_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                // Tests and automation set `save_override` and never see a native dialog.
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Choose an image")
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.add_image(name, bytes);
-                }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
-            }
-        }
+        self.pick_image(tl!("Choose an image"), |app, name, bytes| app.add_image(name, bytes));
         #[cfg(target_arch = "wasm32")]
-        self.notify("Adding images arrives on the web with file pickers for images");
+        self.notify_tr("Adding images arrives on the web with file pickers for images");
     }
 
     /// Edit text & images ▸ Replace Image: pick a file to draw in a page image's place.
     pub(crate) fn replace_page_image_dialog(&mut self, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Replace image")
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.apply_edit(Edit::EditPageImage {
-                        page,
-                        index,
-                        change: printcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
-                    });
-                }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
-            }
-        }
+        self.pick_image(tl!("Replace image"), move |app, name, bytes| {
+            app.apply_edit(Edit::EditPageImage {
+                page,
+                index,
+                change: printcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
+            });
+        });
         #[cfg(target_arch = "wasm32")]
-        self.notify(format!("Replacing images on page {} arrives on the web with image pickers ({index})", page + 1));
+        self.notify_fmt(
+            "Replacing images on page {p} arrives on the web with image pickers ({i})",
+            &[("p", &(page + 1).to_string()), ("i", &index.to_string())],
+        );
     }
 
     /// Edit text & images ▸ Save Image As.
     pub(crate) fn save_page_image(&mut self, page: usize, index: usize) {
         let Some((_, id)) = self.active_ids() else { return };
+        if !self.may_copy(id) {
+            return;
+        }
         let file = self.session.get(id).map(|d| d.page_image_file(page, index));
         match file {
             Some(Ok((ext, bytes))) => {
                 self.write_files(&[(format!("Image page {} #{}.{ext}", page + 1, index + 1), std::sync::Arc::new(bytes))], "Save image");
             }
-            Some(Err(e)) => self.notify(format!("Couldn't save the image: {e}")),
+            Some(Err(e)) => self.notify_fmt("Couldn't save the image: {e}", &[("e", &e.to_string())]),
             None => {}
+        }
+    }
+
+    /// Copy Image: image `index` on `page`, at its own resolution, to the clipboard.
+    pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) {
+        let Some((_, id)) = self.active_ids() else { return };
+        if !self.may_copy(id) {
+            return;
+        }
+        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return };
+        let copied = pixels.and_then(|(w, h, rgba)| {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.system_clipboard {
+                let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
+                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+            }
+            #[cfg(target_arch = "wasm32")]
+            if self.system_clipboard {
+                return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
+            }
+            self.last_copied_image = Some((w, h, rgba));
+            Ok((w, h))
+        });
+        match copied {
+            Ok((w, h)) => self.notify_fmt("The image has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())]),
+            Err(e) => self.notify_fmt("Couldn't copy the image: {e}", &[("e", &e)]),
         }
     }
 
@@ -476,51 +701,25 @@ impl crate::PrintCraftApp {
     pub fn choose_field_image(&mut self, name: &str) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Select Icon")
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    self.apply_edit(Edit::SetFieldImage { name: name.to_string(), image: std::sync::Arc::new(bytes) });
-                }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
-            }
+            let name = name.to_string();
+            self.pick_image(tl!("Select Icon"), move |app, _, bytes| {
+                app.apply_edit(Edit::SetFieldImage { name, image: std::sync::Arc::new(bytes) });
+            });
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify(format!("{name}: choosing images arrives on the web with file pickers for images"));
+        self.notify_fmt("{name}: choosing images arrives on the web with file pickers for images", &[("name", &name)]);
     }
 
     /// Edit image ▸ Replace: pick a file for the selected image.
     pub fn replace_image_dialog(&mut self, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let picked = match self.save_override.clone() {
-                Some(p) if p.ends_with(".png") || p.ends_with(".jpg") => Some(std::path::PathBuf::from(p)),
-                Some(_) => None,
-                None => rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"])
-                    .set_title("Replace image")
-                    .pick_file(),
-            };
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.apply_edit(Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
-                }
-                Err(e) => self.notify(format!("Couldn't read {}: {e}", path.display())),
-            }
-        }
+        self.pick_image(tl!("Replace image"), move |app, name, bytes| {
+            app.apply_edit(Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
+        });
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (page, index);
-            self.notify("Replacing images arrives on the web with image file pickers");
+            self.notify_tr("Replacing images arrives on the web with image file pickers");
         }
     }
 
@@ -546,7 +745,7 @@ pub(crate) enum ImageAction {
 /// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
 pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &printcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
-    widgets::section_title(ui, "Edit image");
+    widgets::section_title(ui, tl!("Edit image"));
     ui.horizontal(|ui| {
         let mut i = img.clone();
         let r = i.rect;
@@ -556,27 +755,27 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &printcraft_engine
             let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
             i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
         };
-        if crate::icons::button(ui, "rotate-ccw", 28.0, false, "Rotate counterclockwise").clicked() {
+        if crate::icons::button(ui, "rotate-ccw", 28.0, false, tl!("Rotate counterclockwise")).clicked() {
             turn(&mut i, 1);
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "rotate-cw", 28.0, false, "Rotate clockwise").clicked() {
+        if crate::icons::button(ui, "rotate-cw", 28.0, false, tl!("Rotate clockwise")).clicked() {
             turn(&mut i, 3);
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, "Flip horizontal").clicked() {
+        if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, tl!("Flip horizontal")).clicked() {
             i.flip_h = !i.flip_h;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-vertical-2", 28.0, false, "Flip vertical").clicked() {
+        if crate::icons::button(ui, "flip-vertical-2", 28.0, false, tl!("Flip vertical")).clicked() {
             i.flip_v = !i.flip_v;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "replace", 28.0, false, "Replace image").clicked() {
+        if crate::icons::button(ui, "replace", 28.0, false, tl!("Replace image")).clicked() {
             out = Some(ImageAction::Replace);
         }
     });
-    ui.label(egui::RichText::new("Crop (% trimmed from each side)").small().color(t.text_muted));
+    ui.label(egui::RichText::new(tl!("Crop (% trimmed from each side)")).small().color(t.text_muted));
     let mut crop = img.crop.map(|v| (v * 100.0).round());
     let mut changed = false;
     ui.horizontal(|ui| {

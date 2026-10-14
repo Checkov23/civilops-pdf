@@ -12,24 +12,30 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod a11y;
+mod batch;
 mod comments;
 mod content;
+mod conventions;
 mod forms;
 mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 mod measure;
 mod objects;
+mod plan_measure;
 mod printing;
+mod reading;
 mod redact;
 mod signing;
+mod text_cache;
 mod tools;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use printcraft_engine::{DocId, Document, Edit, Session, commands};
+use printcraft_engine::{CombineSource, DocId, Document, Edit, Session, commands};
+use printcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
 use printcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
@@ -72,12 +78,32 @@ fn failed(e: impl std::fmt::Display) -> ToolError {
     ToolError::Failed(e.to_string())
 }
 
+impl From<printcraft_engine::EditError> for ToolError {
+    fn from(e: printcraft_engine::EditError) -> Self {
+        failed(e)
+    }
+}
+
 /// Default and maximum resolution for `page_render`.
 const DEFAULT_DPI: f64 = 96.0;
 const MAX_DPI: f64 = 600.0;
+/// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
+const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
 
-/// Page texts of one document version: (the working bytes, one slot per page).
-type TextCache = (Arc<Vec<u8>>, Vec<Option<Arc<PageText>>>);
+/// Bookmarks in one page of the bookmark list, by default and at most.
+const BOOKMARK_PAGE: usize = 100;
+const MAX_BOOKMARK_PAGE: usize = 1000;
+
+/// `text_find` extracts this many pages first, doubling each batch up to [`FIND_MAX_BATCH`], so a
+/// match near the start returns without touching the rest of a long document (#971).
+const FIND_FIRST_BATCH: usize = 8;
+const FIND_MAX_BATCH: usize = 128;
+
+use text_cache::TextCache;
+
+type PageTexts = Vec<(usize, std::result::Result<Arc<PageText>, String>)>;
+const FIND_MAX_WARNINGS: usize = 100;
+const FIND_MAX_WARNING_BYTES: usize = 1024;
 
 /// A headless PrintCraft session driven by tool calls.
 pub struct Automation {
@@ -85,8 +111,8 @@ pub struct Automation {
     root: Option<PathBuf>,
     /// Synchronous renderers, rebuilt when a document's working bytes change.
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
-    /// Extracted page text per document version (the working bytes it was taken from).
-    texts: HashMap<DocId, TextCache>,
+    /// Extracted page text, under one memory budget across all open documents.
+    texts: TextCache,
 }
 
 impl Default for Automation {
@@ -97,7 +123,7 @@ impl Default for Automation {
 
 impl Automation {
     pub fn new() -> Self {
-        Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: HashMap::new() }
+        Self { session: Session::new(), root: None, renderers: HashMap::new(), texts: TextCache::default() }
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).
@@ -146,8 +172,13 @@ impl Automation {
         let a = Args(args);
         let out = match name {
             "doc_open" => self.doc_open(&a)?,
+            "doc_batch" => self.doc_batch(&a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
-            "doc_info" => info(self.doc(&a)?),
+            "doc_info" => {
+                let id = self.doc(&a)?.id;
+                self.session.refresh_fonts(id);
+                info(self.doc(&a)?)
+            }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
             "doc_set_info" => {
@@ -155,6 +186,7 @@ impl Automation {
                 self.apply(&a, edit)?
             }
             "page_render" => return self.page_render(&a).map(|c| vec![c]),
+            "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_find" => self.text_find(&a)?,
             "page_rotate" => {
@@ -188,6 +220,38 @@ impl Automation {
                 out["rotated"] = json!(n);
                 out
             }
+            "page_enhance_camera" => {
+                let page = self.page(&a)?;
+                let given = a.nums::<8>("corners")?;
+                let doc = self.doc(&a)?;
+                let (id, info) = (doc.id, doc.info.pages.get(page).cloned().ok_or_else(|| failed("no such page"))?);
+                let corners = match given {
+                    Some(c) => [0, 1, 2, 3].map(|i| {
+                        let [x, y] = info.view_to_user(c[2 * i] as f32, c[2 * i + 1] as f32);
+                        [x as f64, y as f64]
+                    }),
+                    None => self.session.detect_camera_corners(id, page).ok_or_else(|| {
+                        failed("the document's edges could not be found on this page: pass `corners` [x1, y1, x2, y2, x3, y3, x4, y4]")
+                    })?,
+                };
+                let level = match a.opt_int("level")? {
+                    None => 0,
+                    Some(l @ 0..=100) => l as u8,
+                    Some(l) => return Err(ToolError::InvalidArgs(format!("level must be between 0 and 100, not {l}"))),
+                };
+                let look = match a.opt_str("mode")? {
+                    None => printcraft_engine::camera_clean::Look::Colour,
+                    Some(m) => printcraft_engine::camera_clean::Look::from_name(m)
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("unknown mode {m:?} (original, colour, greyscale, bw)")))?,
+                };
+                self.session.enhance_camera_page_at(id, page, corners, look, level).map_err(failed)?;
+                let r = |v: f32| (v * 100.0).round() / 100.0;
+                let used: Vec<f32> = corners.iter().flat_map(|&[x, y]| info.user_to_view(x as f32, y as f32)).map(r).collect();
+                let mut out = summary(self.doc(&a)?);
+                out["corners"] = json!(used);
+                out["detected"] = json!(given.is_none());
+                out
+            }
             "page_delete" => {
                 let pages = self.pages(&a, "pages")?;
                 self.apply(&a, Edit::DeletePages { pages })?
@@ -201,18 +265,23 @@ impl Automation {
             "page_insert_file" => self.insert_file(&a)?,
             "page_extract" => self.page_extract(&a)?,
             "doc_combine" => self.doc_combine(&a)?,
+            "doc_create_multiple" => self.doc_create_multiple(&a)?,
             "doc_split" => self.doc_split(&a)?,
             "edit_undo" => {
                 let id = self.doc(&a)?.id;
-                let label = self.session.undo(id).map_err(failed)?;
+                let label = self.session.undo(id).map_err(failed)?.to_string();
                 json!({ "undone": label, "document": summary(self.doc(&a)?) })
             }
             "edit_redo" => {
                 let id = self.doc(&a)?.id;
-                let label = self.session.redo(id).map_err(failed)?;
+                let label = self.session.redo(id).map_err(failed)?.to_string();
                 json!({ "redone": label, "document": summary(self.doc(&a)?) })
             }
             "command_list" => self.command_list(&a)?,
+            "command_run" => return self.command_run(&a),
+            "command_batch" => self.command_batch(&a)?,
+            "doc_inspect" => self.doc_inspect(&a)?,
+            "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
             "page_number" => {
                 use printcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();
@@ -235,7 +304,7 @@ impl Automation {
                 out["labels"] = json!(self.doc(&a)?.info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>());
                 out
             }
-            "bookmark_list" => json!({ "bookmarks": bookmark_tree(&self.doc(&a)?.info.outline, &[]) }),
+            "bookmark_list" => self.bookmark_listing(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
@@ -260,6 +329,13 @@ impl Automation {
             "bookmark_set_page" => {
                 let (path, page) = (a.path("path")?, self.page(&a)?);
                 self.apply(&a, Edit::SetBookmarkPage { path, page })?
+            }
+            "bookmark_from_structure" => {
+                let mut out = self.apply(&a, Edit::BookmarksFromStructure)?;
+                let listing = self.bookmark_listing(&a)?;
+                out["bookmarks"] = listing["bookmarks"].clone();
+                out["next"] = listing["next"].clone();
+                out
             }
             "doc_protect" => self.doc_protect(&a)?,
             "page_replace" => {
@@ -291,8 +367,12 @@ impl Automation {
                 let before = self.doc(&a)?.bytes.len();
                 let path = self.resolve(a.str("path")?, true)?;
                 let (bytes, merged) = self.session.reduced_bytes(id).map_err(failed)?;
-                write_atomic(&path, &bytes)?;
-                json!({ "path": path.to_string_lossy(), "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
+                // As in the app, a copy that isn't smaller is not written (#490).
+                let written = bytes.len() < before;
+                if written {
+                    write_atomic(&path, &bytes)?;
+                }
+                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged })
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,
@@ -319,6 +399,21 @@ impl Automation {
                     .collect();
                 json!({ "page": page + 1, "count": lines.len(), "lines": lines })
             }
+            "image_hit" => {
+                let page = self.page(&a)?;
+                let point = a
+                    .get("point")
+                    .and_then(Value::as_array)
+                    .filter(|p| p.len() == 2)
+                    .and_then(|p| Some([p.first()?.as_f64()?, p.get(1)?.as_f64()?]))
+                    .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 1e9))
+                    .ok_or_else(|| ToolError::InvalidArgs("point must contain two finite coordinates".into()))?;
+                let doc = self.doc(&a)?;
+                let p = &doc.info.pages[page];
+                let user = p.view_to_user(point[0] as f32, point[1] as f32).map(f64::from);
+                let images: Vec<_> = doc.page_images(page).iter().enumerate().filter(|(_, im)| im.contains(user)).map(|(i, _)| i + 1).collect();
+                json!({"page":page+1,"images":images})
+            }
             "page_images" => {
                 let page = self.page(&a)?;
                 let doc = self.doc(&a)?;
@@ -330,7 +425,11 @@ impl Automation {
                     .enumerate()
                     .map(|(i, im)| {
                         let (u, v) = (info.user_to_view(im.rect[0] as f32, im.rect[1] as f32), info.user_to_view(im.rect[2] as f32, im.rect[3] as f32));
-                        json!({ "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name })
+                        let visible = im.visible_rect.map(|rect| {
+                            let (u, v) = (info.user_to_view(rect[0] as f32, rect[1] as f32), info.user_to_view(rect[2] as f32, rect[3] as f32));
+                            [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))]
+                        });
+                        json!({ "visible_rect": visible, "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name, "kind": if im.is_form { "form" } else { "image" } })
                     })
                     .collect();
                 json!({ "page": page + 1, "count": list.len(), "images": list })
@@ -387,7 +486,7 @@ impl Automation {
             }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
-                let doc = self.doc(&a)?;
+                let doc = self.doc_to_copy(&a)?;
                 let info = &doc.info.pages[page];
                 let r = |x: f32| (x as f64 * 100.0).round() / 100.0;
                 let blocks: Vec<Value> = doc
@@ -399,6 +498,8 @@ impl Automation {
                         json!({
                             "paragraph": i + 1,
                             "text": b.text,
+                            "editor_text": b.editor_text,
+                            "rows": b.rows.iter().map(|row| row.iter().map(|i| i + 1).collect::<Vec<_>>()).collect::<Vec<_>>(),
                             "lines": b.lines.iter().map(|l| l + 1).collect::<Vec<_>>(),
                             "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))],
                             "font": b.base_font,
@@ -407,6 +508,78 @@ impl Automation {
                     })
                     .collect();
                 json!({ "page": page + 1, "count": blocks.len(), "paragraphs": blocks })
+            }
+            "text_font_files" => {
+                let roots = if let Some(paths) = a.get("directories") {
+                    let paths = paths
+                        .as_array()
+                        .filter(|p| p.len() <= 16)
+                        .ok_or_else(|| ToolError::InvalidArgs("directories must be at most 16 paths".into()))?;
+                    paths
+                        .iter()
+                        .map(|p| self.resolve(p.as_str().ok_or_else(|| ToolError::InvalidArgs("directory must be a path".into()))?, false))
+                        .collect::<Result<Vec<_>>>()?
+                } else if let Some(root) = &self.root {
+                    vec![root.clone()]
+                } else {
+                    printcraft_engine::text_fonts::installed_directories()
+                };
+                json!({"fonts": printcraft_engine::text_fonts::discover(&roots).into_iter().map(|f| json!({"path":f.path,"family":f.family,"font":f.face})).collect::<Vec<_>>()})
+            }
+            "text_font_import" => {
+                let page = self.page(&a)?;
+                let path = self.resolve(a.str("path")?, false)?;
+                let file = std::fs::File::open(&path).map_err(failed)?;
+                use std::io::Read;
+                let mut bytes = Vec::new();
+                file.take((16 << 20) + 1).read_to_end(&mut bytes).map_err(failed)?;
+                if bytes.len() > 16 << 20 {
+                    return Err(ToolError::InvalidArgs("font input exceeds 16 MiB".into()));
+                }
+                let before: Vec<_> = self.doc(&a)?.text_editor_fonts(page).into_iter().map(|f| f.resource).collect();
+                let mut out = self.apply(&a, Edit::RegisterTextFont { page, bytes: Arc::new(bytes) })?;
+                let added = self
+                    .doc(&a)?
+                    .text_editor_fonts(page)
+                    .into_iter()
+                    .find(|f| !before.contains(&f.resource) && !f.resource.starts_with("PCApproved"));
+                if let Some(f) = added {
+                    out["resource"] = json!(f.resource);
+                    out["font"] = json!(f.face);
+                }
+                out
+            }
+            "text_fonts" => {
+                let page = self.page(&a)?;
+                json!({"fonts": self.doc(&a)?.text_editor_fonts(page).into_iter().map(|f| json!({"resource":f.resource,"font":f.face,"full_face":f.resource.starts_with("PCFull"),"preview_only":f.resource.starts_with("PCApproved")})).collect::<Vec<_>>()})
+            }
+            "text_edit_layout" => {
+                let page = self.page(&a)?;
+                let doc = self.doc(&a)?;
+                let k = a.int("paragraph")?;
+                let blocks = doc.text_blocks(page);
+                if k < 1 || k as usize > blocks.len() {
+                    return Err(ToolError::InvalidArgs("paragraph is out of range".into()));
+                }
+                let source = &blocks[k as usize - 1];
+                let text = a.opt_str("text")?.unwrap_or(&source.editor_text);
+                let style = printcraft_engine::BlockStyle {
+                    size: a.opt_num("size")?,
+                    width: a.opt_num("width")?,
+                    resource: a.opt_str("font_resource")?.map(str::to_owned),
+                    ranges: parse_style_ranges(a.get("ranges"))?,
+                    ..Default::default()
+                };
+                let layout = doc.text_edit_layout(page, k as usize - 1, text, &style).map_err(failed)?;
+                let info = &doc.info.pages[page];
+                let view_rect = |r: [f64; 4]| {
+                    let a = info.user_to_view(r[0] as f32, r[1] as f32);
+                    let b = info.user_to_view(r[2] as f32, r[3] as f32);
+                    [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
+                };
+                let fonts: Vec<_> = doc.text_editor_fonts(page).into_iter().map(|f| json!({"resource": f.resource, "face": f.face})).collect();
+                json!({ "page": page + 1, "paragraph": k, "source_rect": view_rect(layout.source_rect),
+                    "draft_rect": layout.draft_rect.map(view_rect), "overflow": layout.overflow, "embedded_fonts": fonts })
             }
             "text_edit" if a.get("paragraph").is_some() => {
                 let page = self.page(&a)?;
@@ -418,6 +591,9 @@ impl Automation {
                 let block = self.doc(&a)?.text_blocks(page)[k as usize - 1].clone();
                 let text = a.opt_str("text")?.map(str::to_owned).unwrap_or(block.text);
                 let mut style = printcraft_engine::BlockStyle {
+                    ranges: parse_style_ranges(a.get("ranges"))?,
+                    resource: a.opt_str("font_resource")?.map(str::to_owned),
+                    bold: a.opt_bool("bold")?,
                     size: a.opt_num("size")?,
                     underline: a.opt_bool("underline")?,
                     line_spacing: a.opt_num("line_spacing")?,
@@ -513,12 +689,16 @@ impl Automation {
             "redact_clear" => self.redact_clear(&a)?,
             "doc_hidden_info" => self.doc_hidden_info(&a)?,
             "printers" => self.printers()?,
+            "printer_options" => self.printer_options(&a)?,
             "link_list" => self.link_list(&a)?,
+            "link_open" => self.link_open(&a)?,
             "link_add" => self.link_add(&a)?,
             "link_edit" => self.link_edit(&a)?,
             "link_delete" => self.link_delete(&a)?,
             "links_from_urls" => self.links_from_urls(&a)?,
             "links_remove" => self.links_remove(&a)?,
+            "object_list" => self.object_list(&a)?,
+            "object_move" => self.object_move(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,
             "page_add_image" => self.page_add_image(&a)?,
@@ -526,12 +706,22 @@ impl Automation {
             "content_delete" => self.content_delete(&a)?,
             "doc_print" => self.doc_print(&a)?,
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
+            "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,
+            "fill_sign_date_format" => self.fill_sign_date_format(&a)?,
+            "measure_distance" => self.measurement_add(&a, printcraft_engine::measure::Kind::Distance)?,
+            "measure_perimeter" => self.measurement_add(&a, printcraft_engine::measure::Kind::Perimeter)?,
+            "measure_area" => self.measurement_add(&a, printcraft_engine::measure::Kind::Area)?,
+            "measure_info" => self.measurement_info(&a)?,
+            "measure_list" => self.measurement_list(&a)?,
+            "measure_scale" => self.measurement_scale(&a)?,
+            "measure_snap" => self.measurement_snap(&a)?,
+            "measure_export" => self.measurement_export(&a)?,
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,
-            "measure_scale" => self.measure_scale(&a)?,
-            "measure_add" => self.measure_add(&a)?,
-            "measure_list" => self.measure_list(&a)?,
+            "plan_scale" => self.measure_scale(&a)?,
+            "plan_measure" => self.measure_add(&a)?,
+            "plan_measure_list" => self.measure_list(&a)?,
             "objects_list" => self.objects_list(&a)?,
             "objects_edit" => self.objects_edit(&a)?,
             "stamp_custom" => self.stamp_custom(&a)?,
@@ -539,6 +729,8 @@ impl Automation {
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,
             "accessibility_check" => self.a11y_check(&a)?,
+            "accessibility_autotag_preview" => self.accessibility_autotag_preview(&a)?,
+            "accessibility_autotag_apply" => self.accessibility_autotag_apply(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
             "js_run" => self.js_run(&a)?,
             "js_document_scripts" => self.js_document_scripts(&a)?,
@@ -551,6 +743,7 @@ impl Automation {
             "doc_compare" => self.doc_compare(&a)?,
             "action_list" => self.action_list()?,
             "pdfa_verify" => self.pdfa_verify(&a)?,
+            "print_readiness" => self.print_readiness(&a)?,
             "doc_export_office" => self.doc_export_office(&a)?,
             "pdfa_convert" => self.pdfa_convert(&a)?,
             "action_run" => self.action_run(&a)?,
@@ -560,9 +753,16 @@ impl Automation {
             "ocr_status" => self.ocr_status()?,
             "ocr_recognize_files" => self.ocr_recognize_files(&a)?,
             "accessibility_report" => self.a11y_report(&a)?,
+            "accessibility_review_record" => self.a11y_review_record(&a)?,
+            "accessibility_review_save" => self.a11y_review_save(&a)?,
+            "accessibility_review_load" => self.a11y_review_load(&a)?,
+            "accessibility_review_html" => self.a11y_review_html(&a)?,
             "accessibility_fix" => self.a11y_fix(&a)?,
             "accessibility_figures" => self.accessibility_figures(&a)?,
             "accessibility_set_alt" => self.accessibility_set_alt(&a)?,
+            "accessibility_tags" => self.accessibility_tags(&a)?,
+            "accessibility_set_tag_property" => self.accessibility_set_tag_property(&a)?,
+            "accessibility_move_tag" => self.accessibility_move_tag(&a)?,
             "sign_id_create" => self.sign_id_create(&a)?,
             "sign_document" => self.sign_document(&a)?,
             "sign_keychain_ids" => {
@@ -576,10 +776,31 @@ impl Automation {
                 let ids: Vec<Value> = Vec::new();
                 json!({ "count": ids.len(), "ids": ids })
             }
+            "sign_windows_ids" => {
+                #[cfg(target_os = "windows")]
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = {
+                    let listing = printcraft_engine::sign::windows::list().map_err(failed)?;
+                    let ids = listing
+                        .ids
+                        .iter()
+                        .map(|id| json!({ "id": printcraft_engine::sign::windows::reference(&id.certificate), "certificate": signing::cert_json(&id.certificate) }))
+                        .collect();
+                    let unusable = listing
+                        .unusable
+                        .iter()
+                        .map(|u| json!({ "subject": u.subject, "sha256": u.fingerprint, "reason": u.reason, "no_private_key": u.no_private_key }))
+                        .collect();
+                    (ids, unusable)
+                };
+                #[cfg(not(target_os = "windows"))]
+                let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
+                json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
+            }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,
             "comments_hide" => self.comments_hide(&a)?,
+            "view_reading_colors" => self.view_reading_colors(&a)?,
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,
@@ -590,10 +811,35 @@ impl Automation {
 
     // ---- documents ---------------------------------------------------------------------------
 
+    /// One page of a document's bookmarks: `offset` (from 0) and `limit` (1 to `MAX_BOOKMARK_PAGE`).
+    fn bookmark_listing(&self, a: &Args) -> Result<Value> {
+        let id = a.int("doc")?;
+        let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
+        let offset = a.opt_int("offset")?.unwrap_or(0);
+        let offset = usize::try_from(offset).map_err(|_| ToolError::InvalidArgs("offset must be 0 or more".into()))?;
+        let limit = a.opt_int("limit")?.unwrap_or(BOOKMARK_PAGE as i64);
+        let limit = usize::try_from(limit)
+            .ok()
+            .filter(|l| (1..=MAX_BOOKMARK_PAGE).contains(l))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("limit must be from 1 to {MAX_BOOKMARK_PAGE}")))?;
+        let page = self
+            .session
+            .bookmark_page(id, offset, limit)
+            .ok_or_else(|| ToolError::Failed(format!("no open document with id {} (see doc_list)", id.0)))?;
+        Ok(json!({ "bookmarks": nest_rows(&page.rows), "next": page.next, "truncated": page.truncated }))
+    }
+
     fn doc(&self, a: &Args) -> Result<&Document> {
         let id = a.int("doc")?;
         let id = u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?;
         self.session.get(DocId(id)).ok_or_else(|| ToolError::Failed(format!("no open document with id {id} (see doc_list)")))
+    }
+
+    /// The document, if its security allows copying text and images out of it (Table 22, bit 5).
+    fn doc_to_copy(&self, a: &Args) -> Result<&Document> {
+        let doc = self.doc(a)?;
+        doc.check_copying().map_err(failed)?;
+        Ok(doc)
     }
 
     fn doc_open(&mut self, a: &Args) -> Result<Value> {
@@ -608,7 +854,8 @@ impl Automation {
     fn doc_close(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
-        if doc.dirty && !a.opt_bool("discard_changes")?.unwrap_or(false) {
+        let discard_changes = a.opt_bool("discard_changes")?.unwrap_or(false);
+        if doc.dirty && !discard_changes {
             return Err(failed("the document has unsaved changes: save it with doc_save, or pass discard_changes: true"));
         }
         self.session.close(id);
@@ -627,11 +874,18 @@ impl Automation {
         let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
+        let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
+        if flatten_fill_sign {
+            self.apply(a, Edit::FlattenFillSign)?;
+        }
         let bytes = if full { self.session.save_full_bytes(id) } else { self.session.save_bytes(id) }.map_err(failed)?;
+        // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
+        // redaction), is rewritten in full even when an incremental save was asked for.
+        let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
         write_atomic(&target, &bytes)?;
         let path = target.to_string_lossy().into_owned();
         self.session.mark_saved(id, bytes.clone(), Some(path.clone())).map_err(failed)?;
-        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": !full, "document": summary(self.doc(a)?) }))
+        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(self.doc(a)?) }))
     }
 
     fn doc_revisions(&mut self, a: &Args) -> Result<Value> {
@@ -817,6 +1071,7 @@ impl Automation {
             "invalid_links": o.invalid_links,
             "invalid_bookmarks": o.invalid_bookmarks,
             "unreferenced_dests": o.unreferenced_dests,
+            "unused_xobjects": o.unused_xobjects,
             "merged_objects": r.merged,
             "discarded": r.discarded.iter().map(|(h, n)| json!({ "category": h.id(), "count": n })).collect::<Vec<_>>(),
         }))
@@ -838,7 +1093,13 @@ impl Automation {
     fn apply(&mut self, a: &Args, edit: Edit) -> Result<Value> {
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
-        Ok(summary(self.doc(a)?))
+        let doc = self.doc(a)?;
+        let mut out = summary(doc);
+        // Text the edit stored as typed but drew with `?` (its font can't draw it): said, not silent.
+        if !doc.edit_notices.is_empty() {
+            out["warnings"] = json!(doc.edit_notices.iter().map(ToString::to_string).collect::<Vec<_>>());
+        }
+        Ok(out)
     }
 
     fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
@@ -886,7 +1147,10 @@ impl Automation {
                     opacity: a.opt_num("opacity")?.unwrap_or(d.opacity),
                     rotation: a.opt_num("rotation")?.unwrap_or(d.rotation),
                     behind: a.opt_bool("behind")?.unwrap_or(false),
-                    offset: [0.0; 2],
+                    offset: [
+                        a.opt_num("offset_x")?.unwrap_or(0.0).clamp(-WATERMARK_MAX_OFFSET, WATERMARK_MAX_OFFSET),
+                        a.opt_num("offset_y")?.unwrap_or(0.0).clamp(-WATERMARK_MAX_OFFSET, WATERMARK_MAX_OFFSET),
+                    ],
                 };
                 Edit::AddWatermark { pages, settings: wm, replace, file }
             }
@@ -915,7 +1179,7 @@ impl Automation {
     }
 
     fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {
-        let doc = self.doc(a)?;
+        let doc = self.doc_to_copy(a)?;
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
@@ -951,13 +1215,23 @@ impl Automation {
             f => return Err(ToolError::InvalidArgs(format!("unknown format {f:?} (png, jpeg, tiff)"))),
         };
         let mut files = Vec::new();
+        let mut lowered = Vec::new();
         for p in pages {
             let img = ex.image(p, dpi, format).map_err(failed)?;
             let path = child(&folder, &format!("{stem}_page_{}.{}", p + 1, format.extension()));
             write_atomic(&path, &img)?;
             files.push(path.to_string_lossy().into_owned());
+            // A page too large for the renderer at `dpi` is drawn at the most it allows.
+            let used = ex.dpi_used(p, dpi);
+            if used < dpi.clamp(18.0, 1200.0) - 0.5 {
+                lowered.push(json!({ "page": p + 1, "dpi": used.floor() }));
+            }
         }
-        Ok(json!({ "count": files.len(), "files": files }))
+        if lowered.is_empty() {
+            Ok(json!({ "count": files.len(), "files": files }))
+        } else {
+            Ok(json!({ "count": files.len(), "files": files, "lower_dpi": lowered }))
+        }
     }
 
     fn doc_create(&mut self, a: &Args) -> Result<Value> {
@@ -988,11 +1262,17 @@ impl Automation {
                     (None, Some(p)) => {
                         let path = self.resolve(p, false)?;
                         let t = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), String::from_utf8_lossy(&t).into_owned())
+                        (path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), printcraft_engine::decode_text(&t))
                     }
                     (None, None) => return Err(ToolError::InvalidArgs("text needs `text` or `path`".into())),
                 };
-                (format!("{title}.pdf"), self.session.create_from_text(&title, &text).map_err(failed)?)
+                // The page font is Helvetica/WinAnsi: text it would turn into `?` is refused (with
+                // its line) by `printcraft_create::from_text`, as for every other caller.
+                let bytes = self.session.create_from_text(&title, &text).map_err(|e| match e {
+                    printcraft_engine::EditError::Create(printcraft_engine::CreateError::Invalid(m)) => ToolError::InvalidArgs(m),
+                    e => failed(e),
+                })?;
+                (format!("{title}.pdf"), bytes)
             }
             other => return Err(ToolError::InvalidArgs(format!("unknown source {other:?}"))),
         };
@@ -1043,6 +1323,15 @@ impl Automation {
     fn doc_protect(&mut self, a: &Args) -> Result<Value> {
         use printcraft_engine::{Algorithm, Changes, Printing, Protection};
         let d = Protection::default();
+        // Restrictions only exist behind a permissions password (ISO 32000-2 §7.6.4.4: /P is
+        // enforced against the owner password; without one everything stays allowed). Refuse a
+        // restriction that could not take effect instead of writing an unrestricted file (#134).
+        let restriction = ["printing", "changes", "copy", "accessibility"].into_iter().find(|k| a.get(k).is_some());
+        if let (None, Some(key)) = (a.opt_str("permissions_password")?, restriction) {
+            return Err(ToolError::InvalidArgs(format!(
+                "`{key}` needs `permissions_password`: with open_password alone the document is encrypted but nothing is restricted"
+            )));
+        }
         let p = Protection {
             open_password: a.opt_str("open_password")?.map(str::to_owned),
             permissions_password: a.opt_str("permissions_password")?.map(str::to_owned),
@@ -1098,7 +1387,7 @@ impl Automation {
         let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
         let pages = a.opt_ints("pages")?.map(|p| one_based(&p)).transpose()?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.apply(a, Edit::InsertPagesFrom { name, bytes: Arc::new(bytes), pages, at })
+        self.apply(a, Edit::InsertPagesFrom { name, bytes: Arc::new(bytes), pages, at, field_conflicts: printcraft_organize::FieldConflicts::Rename })
     }
 
     /// Write freshly created bytes to `out` and/or open them as a new document.
@@ -1115,6 +1404,63 @@ impl Automation {
             result["document"] = summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?);
         }
         Ok(result)
+    }
+
+    fn doc_create_multiple(&mut self, a: &Args) -> Result<Value> {
+        let paths = a.strs("paths")?;
+        if paths.is_empty() {
+            return Err(ToolError::InvalidArgs("paths must list at least one file".into()));
+        }
+        let separate = match a.opt_str("mode")? {
+            None | Some("combine") => false,
+            Some("separate") => true,
+            Some(m) => return Err(ToolError::InvalidArgs(format!("mode must be \"combine\" or \"separate\", not {m:?}"))),
+        };
+        if separate {
+            return self.create_separate(a, &paths);
+        }
+        let ranges: Vec<Option<String>> = match a.get("pages") {
+            None | Some(Value::Null) => vec![None; paths.len()],
+            Some(Value::Array(v)) if v.len() == paths.len() => v.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
+            Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
+        };
+        // Each file is read, converted and copied in turn, so a long list holds one file at a time.
+        let sources = paths.into_iter().zip(ranges).map(|(p, range)| -> std::result::Result<printcraft_engine::CombineSource, ToolError> {
+            let path = self.resolve(p, false)?;
+            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let (_, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
+            let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            Ok((title, pdf, range))
+        });
+        let bytes = self.session.combine_each(sources)?.ok_or_else(|| ToolError::InvalidArgs("paths must list at least one file".into()))?;
+        self.deliver(a, "Combined", bytes)
+    }
+
+    /// One PDF per file, written into `out_dir`; a file that fails doesn't stop the others.
+    fn create_separate(&mut self, a: &Args, paths: &[&str]) -> Result<Value> {
+        let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("mode \"separate\" needs out_dir".into()))?, true)?;
+        std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        let mut out = Vec::new();
+        for &p in paths {
+            let converted = self.resolve(p, false).map_err(|e| e.to_string()).and_then(|src| {
+                let bytes = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+                let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let stem = src.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+                let (kind, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(|e| e.to_string())?;
+                Ok((kind, stem, pdf))
+            });
+            out.push(match converted {
+                Ok((printcraft_engine::SourceKind::Pdf, ..)) => json!({ "path": p, "skipped": "already a PDF" }),
+                Ok((_, stem, pdf)) => {
+                    let target = unused(&dir, &stem);
+                    write_atomic(&target, &pdf)?;
+                    json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() })
+                }
+                Err(e) => json!({ "path": p, "error": e }),
+            });
+        }
+        Ok(json!({ "files": out }))
     }
 
     fn page_extract(&mut self, a: &Args) -> Result<Value> {
@@ -1152,18 +1498,91 @@ impl Automation {
         }
         let ranges: Vec<Option<String>> = match a.get("pages") {
             None | Some(Value::Null) => vec![None; paths.len()],
-            Some(Value::Array(v)) if v.len() == paths.len() => v.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
+            Some(Value::Array(v)) if v.len() == paths.len() => v
+                .iter()
+                .enumerate()
+                .map(|(index, value)| match value {
+                    Value::Null => Ok(None),
+                    Value::String(range) => Ok(Some(range.clone())),
+                    _ => Err(ToolError::InvalidArgs(format!("pages[{index}] must be a range string or null"))),
+                })
+                .collect::<Result<_>>()?,
             Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
         };
-        let mut sources = Vec::new();
-        for (p, range) in paths.into_iter().zip(ranges) {
+        let passwords: Vec<Option<String>> = match a.get("passwords") {
+            None | Some(Value::Null) => vec![None; paths.len()],
+            Some(Value::Array(v)) if v.len() == paths.len() && v.iter().all(|x| x.is_string() || x.is_null()) => {
+                v.iter().map(|x| x.as_str().map(str::to_owned)).collect()
+            }
+            Some(_) => return Err(ToolError::InvalidArgs("passwords must list a password (or null) for each path".into())),
+        };
+        // Entries sharing a group number are one file split into parts placed apart.
+        let groups: Option<Vec<Option<u64>>> = match a.get("groups") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(v)) if v.len() == paths.len() && v.iter().all(|x| x.is_u64() || x.is_null()) => {
+                Some(v.iter().map(Value::as_u64).collect())
+            }
+            Some(_) => return Err(ToolError::InvalidArgs("groups must list a number (or null) for each path".into())),
+        };
+        let field_conflicts = match a.opt_str("field_conflicts")? {
+            None | Some("rename") => printcraft_organize::FieldConflicts::Rename,
+            Some("merge") => printcraft_organize::FieldConflicts::Merge,
+            Some(other) => {
+                return Err(ToolError::InvalidArgs(format!("field_conflicts must be \"rename\" or \"merge\", not {other:?}")));
+            }
+        };
+        let mut sources: Vec<CombineSource> = Vec::new();
+        let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
+        for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
             let path = self.resolve(p, false)?;
-            let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
+            let group = groups.as_ref().and_then(|g| g.get(i).copied().flatten());
+            let first = group.and_then(|g| firsts.iter().find(|f| f.0 == g));
+            let bytes = match first {
+                Some((g, first_path, at)) => {
+                    if *first_path != path {
+                        return Err(ToolError::InvalidArgs(format!("groups[{i}]: group {g} is {}, not {}", first_path.display(), path.display())));
+                    }
+                    sources.get(*at).map(|s| s.1.clone()).ok_or_else(|| failed("group source missing"))?
+                }
+                None => {
+                    if let Some(g) = group {
+                        firsts.push((g, path.clone(), sources.len()));
+                    }
+                    let bytes = Arc::new(std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?);
+                    // Images and text files are made into PDFs first (#569), as in the Combine files tab.
+                    let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    self.session.as_pdf(&file_name, &bytes).map_err(failed)?
+                }
+            };
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            sources.push((name, Arc::new(bytes), range));
+            sources.push((name, bytes, range));
         }
-        let bytes = self.session.combine_ranges(&sources).map_err(failed)?;
-        self.deliver(a, "Combined", bytes)
+        let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
+        let combined = match groups {
+            None => self.session.combine_unlocked_reporting(&sources, &passwords, field_conflicts),
+            Some(groups) => {
+                // A path without a group is a file of its own: give it a key no group uses.
+                let mut next = groups.iter().flatten().max().map_or(Some(0), |m| m.checked_add(1));
+                let mut keys = Vec::with_capacity(groups.len());
+                for g in &groups {
+                    keys.push(match g {
+                        Some(g) => *g,
+                        None => {
+                            let own = next.ok_or_else(|| ToolError::InvalidArgs("group numbers are too large".into()))?;
+                            next = own.checked_add(1);
+                            own
+                        }
+                    });
+                }
+                self.session.combine_grouped_reporting(&sources, &keys, &passwords, field_conflicts)
+            }
+        }
+        .map_err(failed)?;
+        let mut result = self.deliver(a, "Combined", combined.bytes)?;
+        if !combined.renamed_fields.is_empty() {
+            result["renamed_fields"] = json!(combined.renamed_fields.iter().map(|(old, new)| json!([old, new])).collect::<Vec<_>>());
+        }
+        Ok(result)
     }
 
     fn doc_split(&mut self, a: &Args) -> Result<Value> {
@@ -1202,13 +1621,21 @@ impl Automation {
         let dir = self.resolve(a.str("out_dir")?, true)?;
         std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
         let mut files = Vec::new();
+        let mut used = std::collections::HashSet::new();
         for (i, (first, last, bytes)) in parts.iter().enumerate() {
             let safe = |t: &str| t.chars().map(|c| if c.is_alphanumeric() || " -_.,()".contains(c) { c } else { '_' }).collect::<String>();
             let file = match titles.iter().find(|t| t.0 + 1 == *first) {
                 Some((_, t)) => format!("{stem}-{}.pdf", safe(t)),
                 None => format!("{stem}-part{}.pdf", i + 1),
             };
-            let path = child(&dir, &file);
+            // Equal titles (or titles that sanitize alike) get -2, -3, ... so no part overwrites another; compared case-insensitively.
+            let mut unique = file.clone();
+            let mut n = 1;
+            while !used.insert(unique.to_lowercase()) {
+                n += 1;
+                unique = format!("{}-{n}.pdf", file.trim_end_matches(".pdf"));
+            }
+            let path = child(&dir, &unique);
             write_atomic(&path, bytes)?;
             files.push(json!({ "path": path.to_string_lossy(), "first_page": first, "last_page": last }));
         }
@@ -1242,12 +1669,13 @@ impl Automation {
 
     fn renderer(&mut self, id: DocId) -> Result<&mut PageRenderer> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        let colors = self.session.reading_colors(id).unwrap_or_default();
         let fresh = || {
-            let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
-            (doc.bytes.clone(), PageRenderer::new(doc.bytes.clone(), config))
+            let config = RenderConfig { password: doc.password.as_deref().map(Arc::from), reading_colors: colors, ..Default::default() };
+            (doc.display.clone(), PageRenderer::new(doc.display.clone(), config))
         };
         let entry = self.renderers.entry(id).or_insert_with(fresh);
-        if !Arc::ptr_eq(&entry.0, &doc.bytes) {
+        if !Arc::ptr_eq(&entry.0, &doc.display) {
             *entry = fresh();
         }
         Ok(&mut entry.1)
@@ -1260,7 +1688,16 @@ impl Automation {
         if !(1.0..=MAX_DPI).contains(&dpi) {
             return Err(ToolError::InvalidArgs(format!("dpi must be between 1 and {MAX_DPI}")));
         }
-        let out = self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (dpi / 72.0) as f32, tag: 0 });
+        let scale = (dpi / 72.0) as f32;
+        let out = if let Some(block) = a.opt_int("hide_text_block")? {
+            let index = usize::try_from(block)
+                .ok()
+                .and_then(|n| n.checked_sub(1))
+                .ok_or_else(|| ToolError::InvalidArgs("hide_text_block must be a positive paragraph index from text_paragraphs".into()))?;
+            self.doc(a)?.text_edit_preview(page, index).map_err(failed)?.render_background(scale).map_err(failed)?
+        } else {
+            self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false })
+        };
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
         }
@@ -1279,53 +1716,130 @@ impl Automation {
 
     /// The text of `pages` (0-based), from the cache or extracted in parallel.
     fn page_texts(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<Arc<PageText>>> {
+        self.page_text_results(id, pages, &mut extract_parallel)?
+            .into_iter()
+            .map(|(p, text)| text.map_err(|e| failed(format!("page {}: {e}", p + 1))))
+            .collect()
+    }
+
+    /// Keep per-page failures until the caller chooses strict or partial-result semantics.
+    fn page_text_results(
+        &mut self,
+        id: DocId,
+        pages: &[usize],
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<PageTexts> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
         let (bytes, n) = (doc.bytes.clone(), doc.info.pages.len());
         let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
-        let entry = self.texts.entry(id).or_insert_with(|| (bytes.clone(), Vec::new()));
-        if !Arc::ptr_eq(&entry.0, &bytes) || entry.1.len() != n {
-            *entry = (bytes.clone(), vec![None; n]);
-        }
-        let mut missing: Vec<usize> = pages.iter().copied().filter(|p| entry.1.get(*p).is_some_and(Option::is_none)).collect();
-        missing.sort_unstable();
-        missing.dedup();
-        for (p, text) in extract_parallel(&bytes, password, &missing) {
-            let text = Arc::new(text.map_err(|e| failed(format!("page {}: {e}", p + 1)))?);
-            if let Some(slot) = entry.1.get_mut(p) {
-                *slot = Some(text);
+        self.texts.prepare(id, &bytes);
+        let mut results = HashMap::new();
+        let mut missing = Vec::new();
+        for &p in pages {
+            if p >= n {
+                results.insert(p, Err("page is out of range".to_owned()));
+            } else if let Some(text) = self.texts.get(id, p) {
+                results.insert(p, Ok(text));
+            } else {
+                missing.push(p);
             }
         }
-        pages.iter().map(|p| entry.1.get(*p).cloned().flatten().ok_or_else(|| failed(format!("page {} has no text", p + 1)))).collect()
+        missing.sort_unstable();
+        missing.dedup();
+        if !missing.is_empty() {
+            for (p, text) in extract(&bytes, password, &missing) {
+                if let Ok(text) = &text {
+                    self.texts.insert(id, p, &bytes, text.clone());
+                }
+                results.insert(p, text);
+            }
+        }
+        // The batch owns its Arcs: evicting a cache entry cannot lose a requested result. A
+        // worker that fails to return a page is an explicit failure, never an empty success.
+        Ok(pages.iter().map(|p| (*p, results.get(p).cloned().unwrap_or_else(|| Err("text extraction returned no result".into())))).collect())
     }
 
     fn text_extract(&mut self, a: &Args) -> Result<Value> {
-        let doc = self.doc(a)?;
+        let doc = self.doc_to_copy(a)?;
         let id = doc.id;
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
             None => (0..doc.info.pages.len()).collect(),
         };
+        // Column select (#740): only the text inside the rectangle, row by row.
+        let rect = a.nums::<4>("rect")?.map(|r| r.map(|v| v as f32));
         let texts = self.page_texts(id, &pages)?;
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": t.plain_text() })).collect();
+        let text = |t: &PageText| match rect {
+            Some(r) => t.column_text(&t.glyphs_in(r)),
+            None => t.plain_text(),
+        };
+        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
         Ok(json!({ "pages": out }))
     }
 
+    /// Matches in document order, extracting page text in growing batches and stopping as soon as
+    /// `limit` is reached, so a bounded search doesn't extract (and cache) the whole document
+    /// (#971). One match past the limit supplies `next`. Reached extraction failures are reported
+    /// as bounded warnings; `complete` requires both no continuation and no failed pages.
     fn text_find(&mut self, a: &Args) -> Result<Value> {
+        self.text_find_with(a, &mut extract_parallel)
+    }
+
+    fn text_find_with(&mut self, a: &Args, extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
         let query = a.str("query")?;
-        let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
-        let texts = self.page_texts(id, &(0..n).collect::<Vec<_>>())?;
+        let limit = usize::try_from(a.opt_int("limit")?.unwrap_or(500).max(1)).unwrap_or(usize::MAX);
+        let start = match a.opt_int("start_page")? {
+            None => 0,
+            Some(p) if p >= 1 && usize::try_from(p).is_ok_and(|p| p <= n) => usize::try_from(p - 1).unwrap_or(0),
+            Some(p) => return Err(ToolError::InvalidArgs(format!("start_page {p} is out of range: the document has {n} pages"))),
+        };
+        let skip = usize::try_from(a.opt_int("skip")?.unwrap_or(0).max(0)).unwrap_or(usize::MAX);
         let mut matches = Vec::new();
-        'pages: for (p, text) in texts.iter().enumerate() {
-            for r in text.find(query) {
-                if matches.len() == limit {
-                    break 'pages;
+        let mut next = None;
+        let mut warnings = Vec::new();
+        let mut warning_count = 0usize;
+        let (mut first, mut batch) = (start, FIND_FIRST_BATCH);
+        'search: while first < n {
+            let end = first.saturating_add(batch).min(n);
+            let pages: Vec<usize> = (first..end).collect();
+            let texts = self.page_text_results(id, &pages, extract)?;
+            for (p, text) in texts {
+                let text = match text {
+                    Ok(text) => text,
+                    Err(mut error) => {
+                        warning_count += 1;
+                        if warnings.len() < FIND_MAX_WARNINGS {
+                            let end = error.floor_char_boundary(FIND_MAX_WARNING_BYTES.min(error.len()));
+                            let truncated = end < error.len();
+                            error.truncate(end);
+                            warnings.push(json!({ "page": p + 1, "error": error, "error_truncated": truncated }));
+                        }
+                        continue;
+                    }
+                };
+                let skip_here = if p == start { skip } else { 0 };
+                // One extra match proves that the caller needs a continuation. Include skipped
+                // matches on the starting page when bounding the temporary per-page result.
+                let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(1);
+                for (k, r) in text.find_opts_limited(query, false, false, needed).into_iter().enumerate().skip(skip_here) {
+                    if matches.len() == limit {
+                        next = Some(json!({ "start_page": p + 1, "skip": k }));
+                        break 'search;
+                    }
+                    matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
                 }
-                matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
             }
+            first = end;
+            batch = batch.saturating_mul(2).min(FIND_MAX_BATCH);
         }
-        Ok(json!({ "query": query, "count": matches.len(), "matches": matches }))
+        let mut out = json!({ "query": query, "count": matches.len(), "complete": next.is_none() && warning_count == 0, "matches": matches,
+            "warnings_truncated": warning_count > warnings.len(), "warning_count": warning_count, "warnings": warnings });
+        if let (Some(next), Some(o)) = (next, out.as_object_mut()) {
+            o.insert("next".into(), next);
+        }
+        Ok(out)
     }
 
     fn command_list(&self, a: &Args) -> Result<Value> {
@@ -1333,6 +1847,8 @@ impl Automation {
             Some(_) => Some(self.doc(a)?.id),
             None => None,
         };
+        let filter = a.opt_str("filter")?.unwrap_or("").to_lowercase();
+        let enabled_only = a.opt_bool("enabled_only")?.unwrap_or(false);
         let list: Vec<Value> = commands::COMMANDS
             .iter()
             .map(|c| {
@@ -1343,7 +1859,16 @@ impl Automation {
                     "shortcut": c.shortcut.map(|s| s.label(cfg!(target_os = "macos"))),
                     "enabled": commands::is_enabled(c, &self.session, active),
                     "tool": tools::tool_for_command(c.id),
+                    "params": tools::tool_for_command(c.id).and_then(tools::find).map(|t| &t.input_schema),
                 })
+            })
+            .collect();
+        let list: Vec<Value> = list
+            .into_iter()
+            .filter(|c| {
+                (!enabled_only || c.get("enabled").and_then(Value::as_bool) == Some(true))
+                    && (filter.is_empty()
+                        || ["id", "label", "menu"].iter().any(|k| c.get(k).is_some_and(|v| v.to_string().to_lowercase().contains(&filter))))
             })
             .collect();
         Ok(json!({ "commands": list }))
@@ -1438,6 +1963,53 @@ fn foreign_share(path: &Path, root: &Path) -> bool {
 
 // ---- JSON helpers ----------------------------------------------------------------------------
 
+fn parse_style_ranges(value: Option<&Value>) -> Result<Vec<printcraft_engine::RangeStyle>> {
+    let Some(value) = value else { return Ok(Vec::new()) };
+    let values = value.as_array().filter(|v| v.len() <= 1024).ok_or_else(|| Args::wrong("ranges", "an array of at most 1024 style objects"))?;
+    values
+        .iter()
+        .map(|v| {
+            let a = Args(v);
+            let bounds = a
+                .get("range")
+                .and_then(Value::as_array)
+                .filter(|v| v.len() == 2)
+                .ok_or_else(|| Args::wrong("range", "[start,end] UTF-8 byte offsets"))?;
+            let start = bounds
+                .first()
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| Args::wrong("range", "nonnegative byte offsets"))?;
+            let end = bounds
+                .get(1)
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| Args::wrong("range", "nonnegative byte offsets"))?;
+            let family = a
+                .opt_str("font")?
+                .map(|f| match f {
+                    "helvetica" => Ok(printcraft_engine::FontFamily::Helvetica),
+                    "times" => Ok(printcraft_engine::FontFamily::Times),
+                    "courier" => Ok(printcraft_engine::FontFamily::Courier),
+                    _ => Err(Args::wrong("font", "helvetica, times or courier")),
+                })
+                .transpose()?
+                .map(|f| -> Result<_> { Ok((f, a.opt_bool("bold")?.unwrap_or(false), a.opt_bool("italic")?.unwrap_or(false))) })
+                .transpose()?;
+            Ok(printcraft_engine::RangeStyle {
+                range: start..end,
+                family,
+                resource: a.opt_str("font_resource")?.map(str::to_owned),
+                size: a.opt_num("size")?,
+                color: a.opt_str("color")?.map(comments::parse_color).transpose()?,
+                underline: a.opt_bool("underline")?,
+                char_spacing: a.opt_num("char_spacing")?,
+                scale: a.opt_num("scale")?,
+            })
+        })
+        .collect()
+}
+
 /// Typed access to validated arguments.
 struct Args<'a>(&'a Value);
 
@@ -1496,17 +2068,36 @@ impl Args<'_> {
     }
 }
 
-/// The bookmark tree as JSON, with 1-based paths and pages.
-fn bookmark_tree(items: &[printcraft_render::OutlineItem], parent: &[usize]) -> Vec<Value> {
-    items
-        .iter()
-        .enumerate()
-        .map(|(i, o)| {
-            let mut path = parent.to_vec();
-            path.push(i + 1);
-            json!({ "path": path, "title": o.title, "page": o.page.map(|p| p + 1), "open": o.open, "children": bookmark_tree(&o.children, &path) })
-        })
-        .collect()
+/// Bookmark rows in listing order as JSON: a row holds the rows that follow it on the page at the
+/// next level down in `children`, and paths and pages are 1-based.
+fn nest_rows(rows: &[printcraft_engine::BookmarkRow]) -> Vec<Value> {
+    // The open rows, outermost first, with their depth and the children gathered so far.
+    let mut open: Vec<(usize, Value, Vec<Value>)> = Vec::new();
+    let mut roots = Vec::new();
+    for row in rows {
+        let depth = row.path.len().saturating_sub(1);
+        while open.last().is_some_and(|(d, _, _)| *d >= depth) {
+            close_row(&mut open, &mut roots);
+        }
+        let path: Vec<usize> = row.path.iter().map(|p| p.saturating_add(1)).collect();
+        let fields = json!({ "path": path, "title": row.title, "page": row.page.map(|p| p.saturating_add(1)), "open": row.open });
+        open.push((depth, fields, Vec::new()));
+    }
+    while !open.is_empty() {
+        close_row(&mut open, &mut roots);
+    }
+    roots
+}
+
+/// Closes the innermost open row: it joins the row above it as a child, or the top level.
+fn close_row(open: &mut Vec<(usize, Value, Vec<Value>)>, roots: &mut Vec<Value>) {
+    if let Some((_, mut fields, children)) = open.pop() {
+        fields["children"] = Value::Array(children);
+        match open.last_mut() {
+            Some((_, _, siblings)) => siblings.push(fields),
+            None => roots.push(fields),
+        }
+    }
 }
 
 fn one_based(pages: &[i64]) -> Result<Vec<usize>> {
@@ -1565,26 +2156,57 @@ fn info(d: &Document) -> Value {
         "creator": i.creator, "producer": i.producer,
         "tagged": i.tagged,
         "has_javascript": i.has_javascript,
-        // XFA forms aren't read yet: "static" (fields work, XFA data ignored) or "dynamic" (placeholder pages).
+        // XFA forms: "static" (the PDF's own fields work; the XFA data is ignored) or "dynamic"
+        // (laid out from the template by PrintCraft, see xfa_layout; placeholder pages when that failed).
         "xfa": i.xfa.map(|x| match x { printcraft_render::Xfa::Static => "static", printcraft_render::Xfa::Dynamic => "dynamic" }),
+        "xfa_layout": d.xfa.as_ref().map(|x| json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })),
+        // A script of the form ran too long and was abandoned: its scripts no longer run in this
+        // document (calculations, buttons) until it is opened again.
+        "xfa_scripts_off": d.xfa_scripts_off(),
+        // What was rewritten from, or could not be written to, the XFA data.
+        "xfa_warnings": d.xfa_warnings,
         "security": security,
         "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
         })).collect::<Vec<_>>(),
         "outline": outline(&i.outline),
+        "outline_more": i.outline_more,
+        // Rectangles use the tools' convention (top-left of the displayed page, like
+        // comment_list and link_list), not raw PDF user space, so they can be fed back to
+        // geometry-taking tools (#129).
         "annotations": i.annotations.iter().map(|a| json!({
             "page": page1(a.page), "type": a.subtype, "author": a.author, "contents": a.contents,
-            "modified": a.modified, "name": a.name, "in_reply_to": a.in_reply_to, "rect": a.rect,
+            "modified": a.modified, "name": a.name, "in_reply_to": a.in_reply_to, "rect": view_rect(i, a.page, a.rect),
         })).collect::<Vec<_>>(),
         "fields": i.fields.iter().map(|f| json!({
             "name": f.name, "kind": format!("{:?}", f.kind), "value": f.value, "page": f.page.map(page1),
             "tooltip": f.tooltip, "has_actions": f.has_actions,
         })).collect::<Vec<_>>(),
         "links": i.links.iter().map(|l| json!({
-            "page": page1(l.page), "rect": l.rect,
+            "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
             "target": match &l.target {
-                printcraft_render::LinkTarget::Page(p) => json!({ "page": page1(*p) }),
+                printcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
                 printcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
+                printcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
+                    "layers": changes.iter().map(|(op, ocg)| json!({
+                        "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
+                        "state": match op {
+                            printcraft_render::LayerOp::On => "on",
+                            printcraft_render::LayerOp::Off => "off",
+                            printcraft_render::LayerOp::Toggle => "toggle",
+                        },
+                    })).collect::<Vec<_>>(),
+                    "preserve_rb": preserve_rb,
+                }),
+                printcraft_render::LinkTarget::RemoteGoTo { file, destination, new_window } => json!({
+                    "remote_document": file,
+                    "destination": match destination {
+                        printcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
+                        printcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
+                        printcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
+                    },
+                    "new_window": new_window,
+                }),
                 printcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
             },
         })).collect::<Vec<_>>(),
@@ -1596,6 +2218,12 @@ fn info(d: &Document) -> Value {
         "warnings": i.warnings,
         "repairs": d.repair_log(),
     })
+}
+
+/// A user-space rectangle on 0-based `page` in displayed-page coordinates; unchanged when the
+/// page is unknown (a malformed annotation that points at no page).
+fn view_rect(i: &printcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [f32; 4] {
+    i.pages.get(page).map_or(rect, |p| comments::rect_to_view(p, rect))
 }
 
 fn outline(items: &[printcraft_render::OutlineItem]) -> Value {
@@ -1623,12 +2251,12 @@ fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>> 
 }
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
-fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> Vec<(usize, std::result::Result<PageText, String>)> {
+fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
     let extract = |r: &mut PageRenderer, p: usize| {
-        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0 });
+        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         match out.error {
             Some(e) => Err(e),
-            None => Ok(out.text.map(|t| (*t).clone()).unwrap_or_default()),
+            None => Ok(out.text.unwrap_or_default()),
         }
     };
     let config = RenderConfig { password, ..Default::default() };
@@ -1639,7 +2267,7 @@ fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[u
         return pages.iter().map(|p| (*p, extract(&mut r, *p))).collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let mut out: Vec<(usize, std::result::Result<PageText, String>)> = std::thread::scope(|s| {
+    let mut out: PageTexts = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
                 s.spawn(|| {
@@ -1671,8 +2299,23 @@ fn child(dir: &Path, name: &str) -> PathBuf {
     dir.join(safe)
 }
 
+/// `<stem>.pdf` in `dir`, or `<stem> (2).pdf` and so on when that name is taken.
+fn unused(dir: &Path, stem: &str) -> PathBuf {
+    let first = child(dir, &format!("{stem}.pdf"));
+    if !first.exists() {
+        return first;
+    }
+    (2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).pdf"))).find(|p| !p.exists()).unwrap_or(first)
+}
+
 /// Write via a temporary file in the same directory, then rename over the target.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_with(path, bytes, staging_suffixes())
+}
+
+/// [`write_atomic`], trying the staging names that `suffixes` give.
+fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>) -> Result<()> {
+    use std::io::Write;
     // A folder can't be replaced, and staging beside it could land outside the root: "." names
     // the root itself, whose parent isn't ours to write in.
     if path.is_dir() {
@@ -1681,8 +2324,17 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let name = path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-    let tmp = dir.join(format!(".{}.printcraft-tmp", name.to_string_lossy()));
-    std::fs::write(&tmp, bytes).map_err(|e| failed(format!("{}: {e}", tmp.display())))?;
+    let (tmp, file) =
+        create_staging(dir, &name.to_string_lossy(), StagingName::SuffixThenTag, suffixes).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+    // Closed at the end of the block, before the rename.
+    let written = {
+        let mut file = file;
+        file.write_all(bytes)
+    };
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(failed(format!("{}: {e}", tmp.display())));
+    }
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         failed(format!("{}: {e}", path.display()))
@@ -1692,6 +2344,198 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use printcraft_platform::staging::STAGING_ATTEMPTS;
+
+    /// `n` pages, page i showing "Page i".
+    fn numbered_pages(n: usize) -> Vec<u8> {
+        let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
+        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
+        objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
+        for i in 0..n {
+            objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
+            let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
+            objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    fn json(a: &mut Automation, tool: &str, args: Value) -> Value {
+        match a.call(tool, &args).map(|mut c| c.remove(0)) {
+            Ok(Content::Json(v)) => v,
+            other => panic!("{tool} {args}: {other:?}"),
+        }
+    }
+
+    fn search_document(a: &mut Automation, pages: usize) -> DocId {
+        a.session.open("synthetic.pdf", None, Arc::new(numbered_pages(pages)), None).unwrap()
+    }
+
+    #[test]
+    fn search_cache_stays_bounded_reextracts_and_follows_edits_and_close() {
+        let mut a = Automation::new();
+        a.texts = TextCache::new(16 * 1024);
+        let first = search_document(&mut a, 200);
+        let second = search_document(&mut a, 200);
+        for id in [first, second] {
+            let result = json(&mut a, "text_find", json!({ "doc": id.0, "query": "absent" }));
+            assert_eq!(result["complete"], true);
+            assert!(a.texts.bytes() <= 16 * 1024);
+            assert!(a.texts.len() < 200, "an exhaustive search must not retain every page");
+            let found = json(&mut a, "text_find", json!({ "doc": id.0, "query": "Page", "limit": 1000 }));
+            assert_eq!(found["count"], 200, "eviction inside a batch must not discard its matches");
+            eprintln!("200 pages searched: {} resident pages, {} estimated bytes (budget 16384)", a.texts.len(), a.texts.bytes());
+        }
+        assert!(a.texts.get(first, 0).is_none());
+        let text = a.page_texts(first, &[0]).unwrap().remove(0);
+        assert_eq!(text.plain_text(), "Page 1");
+        let again = a.page_texts(first, &[0]).unwrap().remove(0);
+        assert!(Arc::ptr_eq(&text, &again), "cache hits reuse glyph storage");
+        assert!(a.texts.bytes() <= 16 * 1024);
+        json(&mut a, "page_delete", json!({ "doc": first.0, "pages": [1] }));
+        let edited = a.page_texts(first, &[0]).unwrap().remove(0);
+        assert_eq!(edited.plain_text(), "Page 2");
+        assert!(!Arc::ptr_eq(&text, &edited));
+        json(&mut a, "doc_close", json!({ "doc": first.0, "discard_changes": true }));
+        json(&mut a, "doc_close", json!({ "doc": second.0 }));
+        assert_eq!((a.texts.bytes(), a.texts.len()), (0, 0));
+    }
+
+    #[test]
+    fn strict_text_collection_refuses_partial_results_but_keeps_successful_pages() {
+        let mut a = Automation::new();
+        let id = search_document(&mut a, 3);
+        let error = a.page_texts(id, &[0, 3, 1]).unwrap_err();
+        assert!(error.to_string().contains("page 4: page is out of range"));
+        assert!(a.texts.get(id, 0).is_some());
+        assert!(a.texts.get(id, 1).is_some(), "successful extraction after the failed entry is retained");
+        let results = a.page_text_results(id, &[2], &mut |_, _, _| vec![]).unwrap();
+        assert!(results[0].1.is_err(), "a missing worker result must not become an empty page");
+    }
+
+    #[test]
+    fn search_keeps_matches_around_failed_pages_and_continuations() {
+        let mut a = Automation::new();
+        let id = search_document(&mut a, 16);
+        let mut extract = |bytes: &Arc<Vec<u8>>, password, pages: &[usize]| {
+            extract_parallel(bytes, password, pages)
+                .into_iter()
+                .map(|(p, result)| (p, if [2, 6].contains(&p) { Err(format!("synthetic page {} failure", p + 1)) } else { result }))
+                .collect()
+        };
+        let all = a.text_find_with(&Args(&json!({ "doc": id.0, "query": "Page" })), &mut extract).unwrap();
+        assert_eq!(all["count"], 14);
+        assert_eq!(all["complete"], false);
+        assert_eq!(all["warning_count"], 2);
+        assert_eq!(all["warnings"][0]["page"], 3);
+        assert_eq!(all["warnings"][1]["page"], 7);
+        assert!(all.get("next").is_none());
+        assert_eq!(all["matches"][13]["page"], 16);
+        assert!(a.texts.get(id, 7).is_some(), "success after a failure in the same batch is cached");
+        let mut args = json!({ "doc": id.0, "query": "Page", "limit": 4 });
+        let mut matches = Vec::new();
+        let mut warned = Vec::new();
+        loop {
+            let part = a.text_find_with(&Args(&args), &mut extract).unwrap();
+            matches.extend(part["matches"].as_array().unwrap().iter().cloned());
+            warned.extend(part["warnings"].as_array().unwrap().iter().map(|w| w["page"].clone()));
+            if !part["warnings"].as_array().unwrap().is_empty() {
+                assert_eq!(part["complete"], false);
+            }
+            let Some(next) = part.get("next") else { break };
+            args["start_page"] = next["start_page"].clone();
+            args["skip"] = next["skip"].clone();
+        }
+        assert_eq!(matches, *all["matches"].as_array().unwrap(), "no readable match is lost or repeated");
+        assert_eq!(warned, vec![json!(3), json!(7)]);
+    }
+
+    #[test]
+    fn search_bounds_warning_volume_and_does_not_reach_distant_failures() {
+        let mut a = Automation::new();
+        let id = search_document(&mut a, 200);
+        let first = a
+            .text_find_with(&Args(&json!({ "doc": id.0, "query": "Page", "limit": 1 })), &mut |bytes, password, pages| {
+                assert!(pages.iter().all(|p| *p < FIND_FIRST_BATCH), "a bounded search must not reach the bad page at the end");
+                extract_parallel(bytes, password, pages)
+            })
+            .unwrap();
+        assert_eq!(first["count"], 1);
+        assert_eq!(first["warning_count"], 0);
+        assert_eq!(first["next"], json!({ "start_page": 2, "skip": 0 }));
+        a.texts.remove(&id);
+        let failures = a
+            .text_find_with(&Args(&json!({ "doc": id.0, "query": "Page" })), &mut |_, _, pages| {
+                pages.iter().map(|p| (*p, Err("界".repeat(2000)))).collect()
+            })
+            .unwrap();
+        assert_eq!(failures["count"], 0);
+        assert_eq!(failures["complete"], false);
+        assert!(failures.get("next").is_none());
+        assert_eq!(failures["warning_count"], 200);
+        assert_eq!(failures["warnings_truncated"], true);
+        let warnings = failures["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), FIND_MAX_WARNINGS);
+        assert!(warnings.iter().all(|w| w["error"].as_str().unwrap().len() <= FIND_MAX_WARNING_BYTES && w["error_truncated"] == true));
+    }
+
+    #[test]
+    fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
+        let dir = std::env::temp_dir().join(format!("printcraft-automation-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("long.pdf"), numbered_pages(200)).unwrap();
+        let mut a = Automation::new().with_root(&dir).unwrap();
+        let doc = json(&mut a, "doc_open", json!({ "path": "long.pdf" }))["doc"].clone();
+        let extracted = |a: &Automation| a.texts.len();
+
+        // #971: the first match is on page 1 and the next on page 10, so the rest of the 200 pages
+        // aren't extracted or cached.
+        let first = json(&mut a, "text_find", json!({ "doc": doc, "query": "Page 1", "limit": 1 }));
+        assert_eq!(first["count"], 1);
+        assert_eq!(first["matches"][0]["page"], 1);
+        assert_eq!(first["complete"], false, "{first}");
+        assert_eq!(first["next"], json!({ "start_page": 10, "skip": 0 }));
+        assert!(extracted(&a) <= 3 * FIND_FIRST_BATCH, "{} pages extracted for one match", extracted(&a));
+
+        // Following `next` returns every match exactly once, in order, and then says it's complete.
+        // "1" appears twice on pages like 11 and 101, so continuing has to skip within a page.
+        let all = json(&mut a, "text_find", json!({ "doc": doc, "query": "1", "limit": 10_000 }));
+        assert_eq!(all["complete"], true);
+        assert!(all.get("next").is_none());
+        let mut pieced = Vec::new();
+        let mut args = json!({ "doc": doc, "query": "1", "limit": 3 });
+        loop {
+            let found = json(&mut a, "text_find", args.clone());
+            pieced.extend(found["matches"].as_array().unwrap().iter().map(|m| (m["page"].clone(), m["rects"].clone())));
+            if found["complete"] == true {
+                break;
+            }
+            args["start_page"] = found["next"]["start_page"].clone();
+            args["skip"] = found["next"]["skip"].clone();
+        }
+        let expected: Vec<_> = all["matches"].as_array().unwrap().iter().map(|m| (m["page"].clone(), m["rects"].clone())).collect();
+        assert_eq!(all["count"], expected.len());
+        assert_eq!(pieced, expected);
+
+        // A search that runs to the end below its limit is complete; a start page past the end is refused.
+        let few = json(&mut a, "text_find", json!({ "doc": doc, "query": "Page 200", "start_page": 150 }));
+        assert_eq!((few["count"].clone(), few["complete"].clone()), (json!(1), json!(true)));
+        assert!(a.call("text_find", &json!({ "doc": doc, "query": "x", "start_page": 201 })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn dot_dot_resolves_by_name_and_never_climbs_above_the_start() {
@@ -1742,5 +2586,159 @@ mod tests {
         assert!(!foreign_share(Path::new(r"\\?\UNC\SERVER\DOCS\x.pdf"), shared));
         assert!(foreign_share(Path::new(r"\\server\other\x.pdf"), shared));
         assert!(foreign_share(Path::new(r"\\attacker\docs\x.pdf"), shared));
+    }
+
+    /// A fresh, empty folder for one staging test.
+    fn staging_dir(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("printcraft-staging-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn staged(dir: &Path, suffix: u64) -> PathBuf {
+        dir.join(format!(".out.pdf.{suffix:016x}.printcraft-tmp"))
+    }
+
+    fn read(p: &Path) -> String {
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    /// A symbolic link to a file, where the system allows one (Windows needs Developer Mode or an
+    /// administrator for it).
+    fn file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Err(std::io::Error::other(format!("no symbolic links here: {} {}", target.display(), link.display())))
+        }
+    }
+
+    #[test]
+    fn staging_never_writes_through_a_file_planted_at_its_name() {
+        let dir = staging_dir("planted");
+        // A file elsewhere that a planted link points at.
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "PRECIOUS").unwrap();
+        let target = dir.join("out.pdf");
+        // A hard link needs no privileges on any system, and writing to it writes to `outside`.
+        std::fs::hard_link(&outside, staged(&dir, 1)).unwrap();
+        std::fs::write(staged(&dir, 2), "PLANTED").unwrap();
+        write_atomic_with(&target, b"NEW", [1, 2, 3]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&outside), "PRECIOUS");
+        assert_eq!(read(&staged(&dir, 1)), "PRECIOUS");
+        assert_eq!(read(&staged(&dir, 2)), "PLANTED");
+        assert!(!staged(&dir, 3).exists(), "the staging file was renamed into place");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_never_writes_through_a_symbolic_link_planted_at_its_name() {
+        let dir = staging_dir("symlink");
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "PRECIOUS").unwrap();
+        let target = dir.join("out.pdf");
+        if let Err(e) = file_symlink(&outside, &staged(&dir, 1)) {
+            eprintln!("symbolic links not checked: {e}");
+            return;
+        }
+        write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&outside), "PRECIOUS");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_never_creates_a_file_through_a_dangling_link_at_its_name() {
+        let dir = staging_dir("dangling");
+        let unborn = dir.join("created-through-a-link.txt");
+        let target = dir.join("out.pdf");
+        if let Err(e) = file_symlink(&unborn, &staged(&dir, 1)) {
+            eprintln!("symbolic links not checked: {e}");
+            return;
+        }
+        write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert!(!unborn.exists(), "nothing was created through the dangling link");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_gives_up_rather_than_reuse_a_taken_name() {
+        let dir = staging_dir("taken");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        for s in 1..=STAGING_ATTEMPTS as u64 {
+            std::fs::write(staged(&dir, s), "PLANTED").unwrap();
+        }
+        assert!(write_atomic_with(&target, b"NEW", 1..).is_err());
+        assert_eq!(read(&target), "OLD");
+        for s in 1..=STAGING_ATTEMPTS as u64 {
+            assert_eq!(read(&staged(&dir, s)), "PLANTED");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The names in a folder: what a test can see was left behind.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn staging_names_differ_between_saves_and_fit_long_names() {
+        let suffixes: std::collections::HashSet<u64> = staging_suffixes().take(64).collect();
+        assert_eq!(suffixes.len(), 64);
+        assert_ne!(staging_suffixes().next(), staging_suffixes().next(), "each save draws new names");
+        // 60 four-byte characters: a 244-byte name, within every system's limit. Its staging name
+        // must be too (on Linux the whole name in it would be 275 bytes).
+        let dir = staging_dir("long");
+        let name = format!("{}.pdf", "\u{1F600}".repeat(60));
+        write_atomic(&dir.join(&name), b"NEW").unwrap();
+        assert_eq!(read(&dir.join(&name)), "NEW");
+        assert_eq!(listing(&dir), [name], "no staging file is left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_at_the_staging_name_is_left_alone() {
+        let dir = staging_dir("folder");
+        std::fs::create_dir(staged(&dir, 1)).unwrap();
+        std::fs::write(staged(&dir, 1).join("inside.txt"), "PLANTED").unwrap();
+        let target = dir.join("out.pdf");
+        write_atomic_with(&target, b"NEW", [1, 2]).unwrap();
+        assert_eq!(read(&target), "NEW");
+        assert_eq!(read(&staged(&dir, 1).join("inside.txt")), "PLANTED");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows refuses to replace a read-only file, so the rename fails: the staging file must not
+    /// be left behind.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_rename_removes_the_staging_file() {
+        let dir = staging_dir("readonly");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, "OLD").unwrap();
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms.clone()).unwrap();
+        let e = write_atomic_with(&target, b"NEW", [7]).unwrap_err();
+        assert!(e.to_string().contains(&target.display().to_string()), "the rename failed, not the staging: {e}");
+        assert_eq!(read(&target), "OLD");
+        assert_eq!(listing(&dir), ["out.pdf"], "the staging file was removed");
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&target, perms).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

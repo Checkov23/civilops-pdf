@@ -3,7 +3,7 @@
 //!
 //! Geometry follows the automation convention: points from the top-left of the displayed page.
 
-use printcraft_engine::{Edit, ObjectChange, ObjectKind};
+use printcraft_engine::{Edit, ObjectChange, PlanObjectKind as ObjectKind};
 use serde_json::{Value, json};
 
 use crate::comments::parse_color;

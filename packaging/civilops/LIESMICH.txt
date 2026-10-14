@@ -11,7 +11,10 @@ auf dem Desktop und im Startmenü. Windows fragt beim ersten Mal eventuell nach,
 Programm noch nicht signiert ist: „Weitere Informationen“ > „Trotzdem ausführen“.
 Ohne Installation: CivilOps-PDF-<Version>-Portable.zip entpacken und „CivilOps PDF.exe“
 starten. Auch diese Fassung aktualisiert sich selbst.
-Eine PDF öffnen: über „Öffnen“ oder einfach ins Fenster ziehen.
+Eine PDF öffnen: über „Öffnen“ oder einfach ins Fenster ziehen. Läuft das Programm schon,
+kommen weitere Dateien (Doppelklick im Explorer, Anhang in Outlook) als neuer Reiter dazu.
+Auf der Startseite lassen sich Ordner anheften, zum Beispiel der Ordner des Scanners: Dort
+stehen dann seine neuesten PDFs.
 
 Werkzeuge
 ---------
@@ -75,7 +78,15 @@ Texterkennung hinzufügen.
 
 Drucken
 -------
-Datei > Drucken (Strg+P): Drucker, Exemplare, beidseitig und Graustufen wählen.
+Datei > Drucken (Strg+P) zeigt jedes Blatt in der Vorschau. Für maßstabsgetreue Pläne
+„Originalgröße“ wählen; „Anpassen“ verkleinert auf das Papier, „Poster“ verteilt einen
+großen Plan auf mehrere Blätter. Dazu Drucker, Exemplare, beidseitig, Graustufen und mit
+„Eigenschaften…“ die Einstellungen des Druckertreibers.
+
+Spenden
+-------
+CivilOps PDF ist kostenlos. Wer die Entwicklung unterstützen möchte: Hilfe > Spenden
+(PayPal), auch im Fenster „Über“ und auf der Startseite.
 
 Lizenzen
 --------

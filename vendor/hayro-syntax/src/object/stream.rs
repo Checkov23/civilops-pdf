@@ -22,6 +22,16 @@ struct FiltersAndParams<'a> {
     params: SmallVec<[Dict<'a>; 2]>,
 }
 
+/// PrintCraft patch: how the decoded data of a stream can be produced (see `Stream::incremental`).
+pub(crate) enum Incremental {
+    /// The stream has no filter, so its data is its own bytes.
+    Plain,
+    /// The stream is Flate-compressed without a predictor, so it decodes a piece at a time.
+    Flate,
+    /// Anything else decodes whole.
+    Whole,
+}
+
 /// A stream of arbitrary data.
 #[derive(Clone)]
 pub struct Stream<'a> {
@@ -152,6 +162,22 @@ impl<'a> Stream<'a> {
         self.filters_and_params().filters
     }
 
+    /// PrintCraft patch: how the decoded data of the stream can be produced a piece at a time.
+    pub(crate) fn incremental(&self) -> Incremental {
+        let filters_and_params = self.filters_and_params();
+
+        match (
+            filters_and_params.filters.as_slice(),
+            filters_and_params.params.first(),
+        ) {
+            ([], _) => Incremental::Plain,
+            ([Filter::FlateDecode], Some(params)) if crate::filter::flate_is_plain(params) => {
+                Incremental::Flate
+            }
+            _ => Incremental::Whole,
+        }
+    }
+
     /// Return the decoded data of the stream.
     ///
     /// Note that the result of this method will not be cached, so calling it multiple
@@ -167,20 +193,61 @@ impl<'a> Stream<'a> {
         &self,
         image_params: &ImageDecodeParams,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
-        let data = self.raw_data();
+        self.decode_within(image_params, usize::MAX)
+    }
+
+    /// PrintCraft patch: the decoded data of the stream, for callers that budget what a page
+    /// holds. Flate, LZW and RunLength stop at `max` bytes (and at
+    /// [`crate::filter::MAX_DECODED_STREAM`] in any case). A stream without filters is returned
+    /// as it is; ASCIIHex and ASCII85 barely expand, and the image codecs stop at their own pixel
+    /// limits.
+    pub fn decoded_within(&self, max: usize) -> Result<Cow<'a, [u8]>, DecodeFailure> {
+        self.decode_within(&ImageDecodeParams::default(), max)
+            .map(|r| r.data)
+    }
+
+    fn decode_within(
+        &self,
+        image_params: &ImageDecodeParams,
+        max: usize,
+    ) -> Result<FilterResult<'a>, DecodeFailure> {
+        self.decode_raw_within(self.raw_data(), image_params, max)
+    }
+
+    /// PrintCraft patch: decode caller-supplied raw/decrypted bytes with the same filters and limits.
+    pub(crate) fn decoded_raw_within(
+        &self,
+        data: Cow<'a, [u8]>,
+        max: usize,
+    ) -> Result<Cow<'a, [u8]>, DecodeFailure> {
+        self.decode_raw_within(data, &ImageDecodeParams::default(), max)
+            .map(|r| r.data)
+    }
+
+    fn decode_raw_within(
+        &self,
+        data: Cow<'a, [u8]>,
+        image_params: &ImageDecodeParams,
+        max: usize,
+    ) -> Result<FilterResult<'a>, DecodeFailure> {
         let filters_and_params = self.filters_and_params();
+        let count = filters_and_params.filters.len();
 
         let mut current: Option<FilterResult<'a>> = None;
 
-        for (filter, params) in filters_and_params
+        for (i, (filter, params)) in filters_and_params
             .filters
             .iter()
             .zip(filters_and_params.params.iter())
+            .enumerate()
         {
+            // PrintCraft patch: see `filter::decode_limit`.
+            let limit = crate::filter::decode_limit(image_params, i + 1 == count).min(max);
             let new = filter.apply(
                 current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
                 params,
                 image_params,
+                limit,
             )?;
             current = Some(new);
         }

@@ -16,8 +16,7 @@ pub struct Word {
     pub rect: [f64; 4],
 }
 
-/// Shapes drawn on the page, in user space: rectangles (`re`) and straight horizontal
-/// segments.
+/// Shapes drawn on the page, in user space: axis-aligned rectangle paths and horizontal segments.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shapes {
     pub boxes: Vec<[f64; 4]>,
@@ -40,6 +39,60 @@ pub struct Candidate {
 }
 
 /// The rectangles and horizontal segments a page draws (stroked or filled), in user space.
+#[derive(Default)]
+struct DetectionPath {
+    points: Vec<[f64; 2]>,
+    rules: Vec<[f64; 4]>,
+    complex: bool,
+    closed: bool,
+}
+
+impl DetectionPath {
+    fn finish(&mut self, paths: &mut Vec<Self>) {
+        let path = std::mem::take(self);
+        if !path.rules.is_empty() || (!path.complex && path.points.len() >= 4) {
+            paths.push(path);
+        }
+    }
+
+    fn rectangle(&self, implicitly_closed: bool) -> Option<[f64; 4]> {
+        if self.complex {
+            return None;
+        }
+        if self.points.iter().flatten().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+        let mut points = self.points.as_slice();
+        let repeated_end = points.len() > 1 && near(points[0], *points.last()?);
+        if repeated_end {
+            points = &points[..points.len() - 1];
+        }
+        if points.len() != 4 || !(self.closed || implicitly_closed || repeated_end) {
+            return None;
+        }
+        let mut horizontal = [false; 4];
+        for i in 0..4 {
+            let (a, b) = (points[i], points[(i + 1) % 4]);
+            let h = (a[1] - b[1]).abs() < 1e-6;
+            let v = (a[0] - b[0]).abs() < 1e-6;
+            if h == v {
+                return None; // Diagonal or zero-length edge.
+            }
+            horizontal[i] = h;
+        }
+        if (0..4).any(|i| horizontal[i] == horizontal[(i + 1) % 4]) {
+            return None;
+        }
+        Some([
+            points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min),
+            points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
+            points.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max),
+            points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
+        ])
+    }
+}
+
 pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut out = Shapes::default();
     let Some(p) = printcraft_model::pages(doc).into_iter().nth(page) else { return out };
@@ -61,7 +114,8 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut ctm = Matrix::IDENTITY;
     let mut stack = Vec::new();
     let mut path_boxes: Vec<[f64; 4]> = Vec::new();
-    let mut path_rules: Vec<[f64; 4]> = Vec::new();
+    let mut subpaths: Vec<DetectionPath> = Vec::new();
+    let mut path = DetectionPath::default();
     let mut cur: Option<[f64; 2]> = None;
     for op in parse(&data).ops {
         match op.op.as_slice() {
@@ -73,27 +127,75 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
                 }
             }
             b"re" => {
+                path.finish(&mut subpaths);
                 if let Some([x, y, w, h]) = op.nums::<4>() {
                     path_boxes.push(ctm.bbox([x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]));
+                    let (x, y) = ctm.apply(x, y);
+                    cur = Some([x, y]);
+                    path.complex = true;
+                    path.points.push([x, y]);
                 }
             }
             b"m" => {
+                path.finish(&mut subpaths);
                 cur = op.nums::<2>().map(|[x, y]| {
                     let (a, b) = ctm.apply(x, y);
                     [a, b]
-                })
+                });
+                if let Some(p) = cur {
+                    path.points.push(p);
+                }
             }
             b"l" => {
                 if let (Some(a), Some([x, y])) = (cur, op.nums::<2>()) {
+                    // Continuing after closepath is not a single four-edge rectangle.
+                    if path.closed {
+                        path.complex = true;
+                    }
                     let (bx, by) = ctm.apply(x, y);
                     let b = [bx, by];
+                    if !path.complex {
+                        if path.points.len() >= 5 {
+                            path.complex = true;
+                        } else {
+                            if path.points.is_empty() {
+                                path.points.push(a);
+                            }
+                            path.points.push(b);
+                        }
+                    }
                     if (a[1] - b[1]).abs() < 0.5 && (a[0] - b[0]).abs() > 1.0 {
-                        path_rules.push([a[0].min(b[0]), a[1], a[0].max(b[0]), a[1]]);
+                        path.rules.push([a[0].min(b[0]), a[1], a[0].max(b[0]), a[1]]);
                     }
                     cur = Some(b);
                 }
             }
+            b"c" | b"v" | b"y" => {
+                path.complex = true;
+                let end = if op.op.as_slice() == b"c" { op.nums::<6>().map(|v| [v[4], v[5]]) } else { op.nums::<4>().map(|v| [v[2], v[3]]) };
+                if let Some([x, y]) = end {
+                    let (x, y) = ctm.apply(x, y);
+                    cur = Some([x, y]);
+                }
+            }
+            b"h" => {
+                path.closed = true;
+                cur = path.points.first().copied().or(cur);
+            }
             b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if matches!(op.op.as_slice(), b"s" | b"b" | b"b*") {
+                    path.closed = true;
+                }
+                path.finish(&mut subpaths);
+                let filled = !matches!(op.op.as_slice(), b"S" | b"s");
+                let mut path_rules = Vec::new();
+                for subpath in subpaths.drain(..) {
+                    if let Some(rect) = subpath.rectangle(filled) {
+                        path_boxes.push(rect);
+                    } else {
+                        path_rules.extend(subpath.rules);
+                    }
+                }
                 for r in path_boxes.drain(..) {
                     // A very flat filled rectangle is a rule.
                     if r[3] - r[1] < 1.5 && r[2] - r[0] > 1.0 {
@@ -107,7 +209,8 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
             }
             b"n" => {
                 path_boxes.clear();
-                path_rules.clear();
+                subpaths.clear();
+                path = DetectionPath::default();
                 cur = None;
             }
             _ => {}

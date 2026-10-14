@@ -17,7 +17,7 @@
 use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use printcraft_fonts::{helvetica_width, literal, win_ansi};
 
-use crate::{AnnotError, Meta, NewAnnotation, Rgb, Shape, Style, add_annotation, annots, n, num_array, page_ref, set_appearance};
+use crate::{AnnotError, LineEnding, Meta, NewAnnotation, Rgb, Shape, Style, add_annotation, annots, n, num_array, page_ref, set_appearance};
 
 /// Metres per PDF point on paper at 1:1 (1 pt = 1/72 in = 0.352 7̅ mm).
 pub const METRES_PER_POINT: f64 = 0.0254 / 72.0;
@@ -417,8 +417,8 @@ pub fn add_measurement(doc: &mut Document, m: &NewMeasurement, meta: &Meta) -> R
         }
     }
     let shape = match m.kind {
-        MeasureKind::Length if points.len() == 2 => Shape::Line { from: points[0], to: points[1], arrow: false },
-        MeasureKind::Length if points.len() > 2 => Shape::PolyLine { vertices: points.clone() },
+        MeasureKind::Length if points.len() == 2 => Shape::Line { from: points[0], to: points[1], start: LineEnding::None, end: LineEnding::None },
+        MeasureKind::Length if points.len() > 2 => Shape::PolyLine { vertices: points.clone(), start: LineEnding::None, end: LineEnding::None },
         MeasureKind::Length => return Err(AnnotError::Invalid("a length needs two points".into())),
         MeasureKind::Area if points.len() >= 3 && area(&points) > 0.0 => Shape::Polygon { vertices: points.clone(), cloud: false },
         MeasureKind::Area => return Err(AnnotError::Invalid("an area needs three points that enclose something".into())),

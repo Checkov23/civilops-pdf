@@ -7,8 +7,10 @@ use egui_kittest::kittest::Queryable;
 use printcraft_ui_egui::{PrintCraftApp, QuickTool};
 
 fn harness() -> Harness<'static, PrintCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
         let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
         app.set_option("zoom", "150").unwrap();
         app
@@ -156,6 +158,27 @@ fn appearance_tab_restyles_the_field() {
     h.get_by_label("Appearance").click();
     h.run_steps(2);
     h.get_by_label("Line Style:");
+    fn no_grid_id_warning(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().all(no_grid_id_warning),
+            egui::Shape::Text(text) => !text.galley.job.text.contains("Grid ID"),
+            _ => true,
+        }
+    }
+    // Check egui's actual painted diagnostics, rather than reproducing the ID formula.
+    assert!(h.output().shapes.iter().all(|shape| no_grid_id_warning(&shape.shape)), "palette grids must not share an ID");
+    let before = h.state().field_props.as_ref().unwrap().look.unwrap();
+    assert_eq!(h.get_all_by_label("No color").count(), 2);
+    h.get_all_by_label("No color").next().unwrap().click();
+    h.run_steps(2);
+    let border = h.state().field_props.as_ref().unwrap().look.as_ref().unwrap().border;
+    assert_eq!(border, if before.border.is_some() { None } else { Some([0.0; 3]) });
+    assert_eq!(h.state().field_props.as_ref().unwrap().look.as_ref().unwrap().fill, before.fill);
+    h.get_all_by_label("No color").nth(1).unwrap().click();
+    h.run_steps(2);
+    let look = h.state().field_props.as_ref().unwrap().look.as_ref().unwrap();
+    assert_eq!(look.border, border);
+    assert_eq!(look.fill, if before.fill.is_some() { None } else { Some([0.0; 3]) });
     {
         let d = h.state_mut().field_props.as_mut().unwrap();
         let l = d.look.as_mut().expect("a look");
@@ -168,6 +191,39 @@ fn appearance_tab_restyles_the_field() {
     let s = h.state();
     let l = s.session.get(s.views[0].id).unwrap().field_look("city").unwrap();
     assert_eq!((l.style, l.font, l.fill), (BorderStyle::Dashed, FieldFont::Courier, Some([1.0, 1.0, 0.8])));
+}
+
+#[test]
+fn position_tab_rotates_a_field() {
+    let mut h = harness();
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    let widget = |h: &Harness<'static, PrintCraftApp>| {
+        let s = h.state();
+        let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap();
+        f.widgets[0].clone()
+    };
+    let before = widget(&h);
+    assert_eq!(before.rotation, 0);
+    assert!(h.state().field_props.as_ref().unwrap().props().is_none(), "an unchanged draft is not an edit");
+    h.get_by_label("Position").click();
+    h.run_steps(2);
+    h.get_by_label("Rotation:");
+    h.state_mut().field_props.as_mut().unwrap().rotation = 90;
+    assert!(h.state().field_props.as_ref().unwrap().props().is_some());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let turned = widget(&h);
+    assert_eq!(turned.rotation, 90);
+    let [x0, y0, x1, y1] = before.rect;
+    let (cx, cy, w, ht) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0);
+    let expect = [cx - ht / 2.0, cy - w / 2.0, cx + ht / 2.0, cy + w / 2.0];
+    assert!(turned.rect.iter().zip(expect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} vs {expect:?}", turned.rect);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    let back = widget(&h);
+    assert_eq!(back.rotation, 0);
+    assert!(back.rect.iter().zip(before.rect).all(|(a, b)| (a - b).abs() < 0.05), "{:?} vs {:?}", back.rect, before.rect);
 }
 
 #[test]

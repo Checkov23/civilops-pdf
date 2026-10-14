@@ -23,6 +23,11 @@ pub use printcraft_fonts::helvetica_width;
 pub const DETECTION_MODEL: &str = "text-detection.rten";
 pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
 
+/// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
+/// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
+/// `€`, which made a scanned "€250" read as "E250".
+pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
 /// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
 pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
 
@@ -87,7 +92,9 @@ pub fn available() -> bool {
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
-    #[error("the text recognition models are not installed (run `cargo xtask models`, or set PRINTCRAFT_MODELS)")]
+    /// Shown to end users (release packages ship the models; a source build fetches them with
+    /// `cargo xtask models`). The UI catalogs key this exact text.
+    #[error("the text recognition models are not installed (reinstall CivilOps PDF, or set PRINTCRAFT_MODELS to the folder that holds them)")]
     NoModels,
     #[error("Windows can't read {0}: add the language with text recognition in Settings ▸ Time & language ▸ Language")]
     Language(String),
@@ -113,8 +120,8 @@ impl Models {
         (m.detection.is_file() && m.recognition.is_file()).then_some(m)
     }
 
-    /// Look for the models: `$PRINTCRAFT_MODELS`, then `models/` beside the executable (and
-    /// `Resources/models` in a macOS bundle), then the source tree's `assets/models/`.
+    /// Look for the models: `$PRINTCRAFT_MODELS`, then where the release packages install them
+    /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
     }
@@ -126,11 +133,20 @@ impl Models {
             dirs.push(PathBuf::from(d));
         }
         if let Some(exe) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
-            dirs.push(exe.join("models"));
-            dirs.push(exe.join("../Resources/models"));
+            dirs.extend(Self::dirs_beside_exe(&exe));
         }
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/models"));
         dirs
+    }
+
+    /// Where the release packages put the models, relative to the directory holding the
+    /// executable (packaging/*):
+    /// - `models/` beside it: the Windows MSI and portable zip;
+    /// - `../Resources/models`: the macOS app bundle (`Contents/MacOS` → `Contents/Resources`);
+    /// - `../share/printcraft/models`: the FHS-style trees (`bin/` → `share/`) of the Linux
+    ///   deb/rpm/tar.gz/AppImage/Flatpak and the FreeBSD tarball, wherever they are installed.
+    pub fn dirs_beside_exe(exe_dir: &Path) -> Vec<PathBuf> {
+        vec![exe_dir.join("models"), exe_dir.join("../Resources/models"), exe_dir.join("../share/printcraft/models")]
     }
 }
 
@@ -172,6 +188,7 @@ impl Ocr {
         let params = ocrs::OcrEngineParams {
             detection_model: Some(load(&models.detection)?),
             recognition_model: Some(load(&models.recognition)?),
+            alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
@@ -287,6 +304,23 @@ impl PlacedWord {
 /// Helvetica's ascender and descender (em fractions): a word box spans about this much.
 const BOX_EM: f64 = 0.93;
 const DESCENT: f64 = 0.21;
+/// Helvetica's cap height and x-height (em fractions).
+const CAP_HEIGHT: f64 = 0.718;
+const X_HEIGHT: f64 = 0.523;
+
+/// How far `text`'s ink reaches above and below the baseline, in em fractions: a word box is
+/// tight around the ink, so "DT" spans the cap height only, "sun" the x-height, and "gap" reaches
+/// down to the descender. Text without letters or digits keeps the full ascender-descender span.
+fn ink_extent(text: &str) -> (f64, f64) {
+    if !text.chars().any(char::is_alphanumeric) {
+        return (BOX_EM - DESCENT, -DESCENT);
+    }
+    let tall = text
+        .chars()
+        .any(|c| c.is_uppercase() || c.is_ascii_digit() || "bdfhijklt!?/\\()[]{}|'\"#$%&@".contains(c) || (c.is_alphabetic() && !c.is_ascii()));
+    let low = text.chars().any(|c| "gjpqy()[]{}|_".contains(c));
+    (if tall { CAP_HEIGHT } else { X_HEIGHT }, if low { -DESCENT } else { 0.0 })
+}
 
 fn num(v: f64) -> String {
     let s = format!("{:.4}", if v.abs() < 1e-9 { 0.0 } else { v });
@@ -305,10 +339,12 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
         if width <= 0.0 || height <= 0.0 {
             continue;
         }
-        // The em square: its height spans the box; its width is stretched to fit the word.
-        let em = [w.up[0] / BOX_EM, w.up[1] / BOX_EM];
+        // The em square: the word's own ink (cap height or x-height, descenders or not) spans the
+        // box, so the text is as tall as the scanned word; its width is stretched to fit the word.
+        let (top, bottom) = ink_extent(&w.text);
+        let em = [w.up[0] / (top - bottom), w.up[1] / (top - bottom)];
         let ax = [w.across[0] / width, w.across[1] / width];
-        let o = [w.origin[0] + em[0] * DESCENT, w.origin[1] + em[1] * DESCENT];
+        let o = [w.origin[0] - em[0] * bottom, w.origin[1] - em[1] * bottom];
         let m = [ax[0], ax[1], em[0], em[1], o[0], o[1]];
         let nums: Vec<String> = m.iter().map(|v| num(*v)).collect();
         out.extend_from_slice(nums.join(" ").as_bytes());
@@ -334,14 +370,40 @@ mod tests {
         assert_eq!(w.up, [0.0, 20.0]);
     }
 
+    /// The text layer is Helvetica in WinAnsiEncoding: every character the model can recognise
+    /// must be one it can hold, or recognised text would be saved as `?`. A model with a wider
+    /// alphabet (Chinese, for example) needs a text layer in another font first.
+    #[test]
+    fn the_model_alphabet_fits_the_text_layer_font() {
+        assert_eq!(printcraft_fonts::first_undrawable(ALPHABET), None);
+    }
+
     #[test]
     fn text_layer_is_invisible_text_fitted_to_each_box() {
         let w = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
         let s = String::from_utf8(text_layer(&[w])).unwrap();
         assert!(s.contains("3 Tr") && s.contains("/PCHelv 1 Tf"), "{s}");
         let width = helvetica_width("Hi", 1.0);
-        assert!(s.contains(&format!("{} 0 0 10 10 22.1 Tm (Hi) Tj", num(30.0 / width))), "{s}");
+        // "Hi" has no descender: its box spans the cap height, from the baseline up.
+        assert!(s.contains(&format!("{} 0 0 {} 10 20 Tm (Hi) Tj", num(30.0 / width), num(9.3 / CAP_HEIGHT))), "{s}");
         assert!(s.starts_with("/OCR BMC") && s.ends_with("EMC\n"));
+    }
+
+    /// A word box is tight around the ink, so the text's size and baseline come from the letters:
+    /// capitals, lowercase without ascenders, descenders.
+    #[test]
+    fn the_text_is_as_tall_as_the_scanned_word() {
+        assert_eq!(ink_extent("DT"), (CAP_HEIGHT, 0.0));
+        assert_eq!(ink_extent("402337"), (CAP_HEIGHT, 0.0));
+        assert_eq!(ink_extent("sun"), (X_HEIGHT, 0.0));
+        assert_eq!(ink_extent("gap"), (X_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("Gallus.Ze@camtel.cm"), (CAP_HEIGHT, 0.0));
+        assert_eq!(ink_extent("Corporation"), (CAP_HEIGHT, -DESCENT));
+        assert_eq!(ink_extent("--"), (BOX_EM - DESCENT, -DESCENT));
+        let w = PlacedWord { text: "gap".into(), origin: [0.0, 100.0], across: [20.0, 0.0], up: [0.0, 7.3] };
+        let s = String::from_utf8(text_layer(&[w])).unwrap();
+        let em = 7.3 / (X_HEIGHT + DESCENT);
+        assert!(s.contains(&format!(" 0 0 {} 0 {} Tm (gap) Tj", num(em), num(100.0 + em * DESCENT))), "{s}");
     }
 
     #[test]
@@ -385,6 +447,52 @@ mod tests {
         assert_eq!(gray(&[255, 0, 0], 1, 1).unwrap(), [76]);
         assert_eq!(gray(&[7], 1, 1).unwrap(), [7]);
         assert!(gray(&[1, 2], 1, 1).is_err());
+    }
+
+    /// #103: every release package's layout puts the models where the installed app looks.
+    /// Mirrors packaging/{windows/package.ps1,macos/package.sh,linux/package.sh,freebsd/package.sh}.
+    #[test]
+    fn finds_the_models_in_every_release_package_layout() {
+        let base = std::env::temp_dir().join(format!("printcraft-ocr-layouts-{}", std::process::id()));
+        let layouts = [
+            ("windows", "CivilOps PDF", "CivilOps PDF/models"),
+            ("macos", "CivilOps PDF.app/Contents/MacOS", "CivilOps PDF.app/Contents/Resources/models"),
+            ("linux-deb-rpm", "usr/bin", "usr/share/printcraft/models"),
+            ("linux-tar", "printcraft-1.0.0-linux-x86_64/bin", "printcraft-1.0.0-linux-x86_64/share/printcraft/models"),
+            ("appimage", "CivilOps PDF.AppDir/usr/bin", "CivilOps PDF.AppDir/usr/share/printcraft/models"),
+            ("flatpak", "app/bin", "app/share/printcraft/models"),
+            ("freebsd", "usr/local/bin", "usr/local/share/printcraft/models"),
+        ];
+        for (name, exe_dir, models_dir) in layouts {
+            let root = base.join(name);
+            let (exe_dir, models_dir) = (root.join(exe_dir), root.join(models_dir));
+            std::fs::create_dir_all(&exe_dir).unwrap();
+            std::fs::create_dir_all(&models_dir).unwrap();
+            let found = || Models::dirs_beside_exe(&exe_dir).iter().find_map(|d| Models::in_dir(d));
+            assert_eq!(found(), None, "{name}: no models yet");
+            for file in [DETECTION_MODEL, RECOGNITION_MODEL] {
+                std::fs::write(models_dir.join(file), b"model").unwrap();
+            }
+            let models = found().unwrap_or_else(|| panic!("{name}: models in {} not found", models_dir.display()));
+            assert_eq!(models.detection.canonicalize().unwrap(), models_dir.join(DETECTION_MODEL).canonicalize().unwrap(), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The message tells end users what to do; release builds have no cargo.
+    #[test]
+    fn the_alphabet_is_the_trained_one() {
+        let chars: Vec<char> = ALPHABET.chars().collect();
+        assert_eq!(chars.len(), 96);
+        // The euro sign follows the ASCII punctuation (class 44; 0 is the CTC blank), not a second E.
+        assert_eq!(chars.iter().position(|&c| c == '€'), Some(43));
+        assert_eq!(chars.iter().filter(|&&c| c == 'E').count(), 1);
+    }
+
+    #[test]
+    fn missing_models_message_is_for_end_users() {
+        let message = OcrError::NoModels.to_string();
+        assert!(!message.contains("cargo") && message.contains("PRINTCRAFT_MODELS"), "{message}");
     }
 
     /// End to end on rendered text, when the models are installed (`cargo xtask models`).

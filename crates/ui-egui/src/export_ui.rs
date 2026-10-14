@@ -43,24 +43,26 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
     let d = &mut app.export_draft;
     ui.label(
         egui::RichText::new(match kind {
-            ExportKind::Image => "Export to Image",
-            ExportKind::Text => "Export to Text",
-            ExportKind::AllImages => "Export All Images",
+            ExportKind::Image => tl!("Export to Image"),
+            ExportKind::Text => tl!("Export to Text"),
+            ExportKind::AllImages => tl!("Export All Images"),
         })
         .font(theme::semibold(18.0)),
     );
     ui.add_space(8.0);
     if kind == ExportKind::Image {
         ui.horizontal(|ui| {
-            ui.label("Resolution");
-            egui::ComboBox::from_id_salt("export-dpi").selected_text(format!("{} pixels/inch", d.dpi)).show_ui(ui, |ui| {
-                for dpi in [72.0, 96.0, 150.0, 300.0, 600.0] {
-                    ui.selectable_value(&mut d.dpi, dpi, format!("{dpi} pixels/inch"));
-                }
-            });
+            ui.label(tl!("Resolution"));
+            egui::ComboBox::from_id_salt("export-dpi")
+                .selected_text(crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &d.dpi.to_string())]))
+                .show_ui(ui, |ui| {
+                    for dpi in [72.0, 96.0, 150.0, 300.0, 600.0] {
+                        ui.selectable_value(&mut d.dpi, dpi, crate::i18n::fmt(tl!("{dpi} pixels/inch"), &[("dpi", &dpi.to_string())]));
+                    }
+                });
         });
         ui.horizontal(|ui| {
-            ui.label("Format");
+            ui.label(tl!("Format"));
             let mut quality = match d.format {
                 ImageFormat::Jpeg { quality } => quality,
                 _ => 85,
@@ -74,17 +76,23 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
                 }
             });
             if let ImageFormat::Jpeg { .. } = d.format {
-                ui.label("Quality");
+                ui.label(tl!("Quality"));
                 if ui.add(egui::Slider::new(&mut quality, 10..=100)).changed() {
                     d.format = ImageFormat::Jpeg { quality };
                 }
             }
         });
-        ui.label(egui::RichText::new(format!("One {} file per page, named after the document.", d.format.label())).small().color(t.text_faint));
+        ui.label(
+            egui::RichText::new(crate::i18n::fmt(tl!("One {f} file per page, named after the document."), &[("f", d.format.label())]))
+                .small()
+                .color(t.text_faint),
+        );
     } else if kind == ExportKind::AllImages {
         ui.horizontal(|ui| {
-            ui.label("Exclude images smaller than");
-            let label = |n: u32| if n == 0 { "No limit".to_string() } else { format!("{n} pixels") };
+            ui.label(tl!("Exclude images smaller than"));
+            let label = move |n: u32| {
+                if n == 0 { tl!("No limit").to_string() } else { crate::i18n::trn(crate::i18n::current(), u64::from(n), "{n} pixel", "{n} pixels") }
+            };
             egui::ComboBox::from_id_salt("export-min").selected_text(label(d.min_side)).show_ui(ui, |ui| {
                 for n in [0, 16, 32, 64, 128, 256] {
                     ui.selectable_value(&mut d.min_side, n, label(n));
@@ -92,24 +100,24 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
             });
         });
         ui.label(
-            egui::RichText::new("Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.")
+            egui::RichText::new(tl!("Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG."))
                 .small()
                 .color(t.text_faint),
         );
     } else {
-        ui.label(egui::RichText::new("Plain text in reading order; pages are separated by form feeds.").small().color(t.text_faint));
+        ui.label(egui::RichText::new(tl!("Plain text in reading order; pages are separated by form feeds.")).small().color(t.text_faint));
     }
     ui.add_space(6.0);
-    ui.label(egui::RichText::new("Pages").font(theme::semibold(12.5)));
+    ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(12.5)));
     d.range.ui(ui, count);
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         let ok = !d.range.pages(count).is_empty();
-        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, "Export", true)).inner.clicked() {
+        if ui.add_enabled_ui(ok, |ui| widgets::pill_button(ui, tl!("Export"), true)).inner.clicked() {
             apply = true;
         }
-        if widgets::pill_button(ui, "Cancel", false).clicked() {
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             cancel = true;
         }
     });
@@ -128,7 +136,10 @@ fn run(
     stem: String,
     mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>,
     status: &ExportStatus,
+    lang: crate::i18n::Lang,
 ) -> String {
+    // May run on a worker thread: messages are drawn in the UI's language.
+    crate::i18n::set_current(lang);
     let total = pages.len();
     let set = |done: usize, msg: Option<String>| {
         if let Ok(mut s) = status.lock() {
@@ -139,17 +150,24 @@ fn run(
         set(0, None);
         let out = match printcraft_engine::export::extract_images(&src, &pages, min_side) {
             Ok(o) => o,
-            Err(e) => return format!("Export stopped: {e}"),
+            Err(e) => return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]),
         };
         for (k, img) in out.images.iter().enumerate() {
             if let Err(e) = sink(&printcraft_engine::export::image_file_name(&stem, img, k + 1), img.data.clone()) {
-                return format!("Export stopped: {e}");
+                return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]);
             }
         }
         let n = out.images.len();
-        let mut msg = format!("Exported {n} image{}", if n == 1 { "" } else { "s" });
+        let mut msg = if n == 1 {
+            crate::i18n::fmt(tl!("Exported 1 image"), &[])
+        } else {
+            crate::i18n::fmt(tl!("Exported {n} images"), &[("n", &n.to_string())])
+        };
         if !out.skipped.is_empty() {
-            msg.push_str(&format!(" ({} not exported: {})", out.skipped.len(), out.skipped[0].2));
+            msg.push_str(&crate::i18n::fmt(
+                tl!(" ({s} not exported: {first})"),
+                &[("s", &out.skipped.len().to_string()), ("first", &out.skipped[0].2)],
+            ));
         }
         return msg;
     }
@@ -162,16 +180,36 @@ fn run(
                 set(k, None);
                 let result = ex.image(*p, dpi, format).and_then(|img| sink(&format!("{stem}_page_{}.{}", p + 1, format.extension()), img));
                 if let Err(e) = result {
-                    return format!("Export stopped: {e}");
+                    return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]);
                 }
             }
-            format!("Exported {total} image{}", if total == 1 { "" } else { "s" })
+            let mut msg = if total == 1 {
+                crate::i18n::fmt(tl!("Exported 1 image"), &[])
+            } else {
+                crate::i18n::fmt(tl!("Exported {n} images"), &[("n", &total.to_string())])
+            };
+            // Pages too large for the renderer at the chosen resolution are drawn at the most it
+            // allows: say so, rather than leave a smaller image unexplained.
+            let lowered: Vec<f64> = pages.iter().map(|p| ex.dpi_used(*p, dpi)).filter(|used| *used < dpi.clamp(18.0, 1200.0) - 0.5).collect();
+            if let Some(lowest) = lowered.iter().copied().reduce(f64::min) {
+                msg.push_str(&crate::i18n::fmt(
+                    tl!(" ({n} at {dpi} dpi, the largest size they can be drawn at)"),
+                    &[("n", &lowered.len().to_string()), ("dpi", &format!("{}", lowest.floor()))],
+                ));
+            }
+            msg
         }
         ExportKind::Text => {
             set(0, None);
             match ex.text_of(&pages).and_then(|text| sink(&format!("{stem}.txt"), text.into_bytes())) {
-                Ok(()) => format!("Exported the text of {total} page{}", if total == 1 { "" } else { "s" }),
-                Err(e) => format!("Export stopped: {e}"),
+                Ok(()) => {
+                    if total == 1 {
+                        crate::i18n::fmt(tl!("Exported the text of 1 page"), &[])
+                    } else {
+                        crate::i18n::fmt(tl!("Exported the text of {n} pages"), &[("n", &total.to_string())])
+                    }
+                }
+                Err(e) => crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]),
             }
         }
     }
@@ -180,7 +218,14 @@ fn run(
 impl PrintCraftApp {
     /// Start exporting the active document with the dialog's settings.
     pub(crate) fn start_export(&mut self, kind: ExportKind) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         let Some((_, id)) = self.active_ids() else { return };
+        if !self.may_copy(id) {
+            return;
+        }
         let Some(doc) = self.session.get(id) else { return };
         let src = doc.export_source();
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
@@ -191,37 +236,55 @@ impl PrintCraftApp {
         let status: ExportStatus = Arc::new(Mutex::new(Some((0, pages.len(), None))));
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let dir = match &self.export_dir_override {
-                Some(d) => Some(std::path::PathBuf::from(d)),
-                None => rfd::FileDialog::new().set_title("Choose a folder for the exported files").pick_folder(),
-            };
-            let Some(dir) = dir else { return };
-            let st = status.clone();
-            let shown = dir.display().to_string();
-            let work = move || {
-                let sink = |name: &str, bytes: Vec<u8>| {
-                    crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
+            let start = move |app: &mut Self, dir: std::path::PathBuf, inline: bool| {
+                let st = status.clone();
+                let shown = dir.display().to_string();
+                let lang = crate::i18n::current();
+                let work = move || {
+                    let sink = |name: &str, bytes: Vec<u8>| {
+                        crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
+                    };
+                    let msg = run(src, kind, dpi, format, min_side, pages, stem, sink, &st, lang);
+                    if let Ok(mut s) = st.lock() {
+                        let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
+                        let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
+                        *s = Some((done.max(total), total, Some(done_msg)));
+                    }
                 };
-                let msg = run(src, kind, dpi, format, min_side, pages, stem, sink, &st);
-                if let Ok(mut s) = st.lock() {
-                    let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
-                    *s = Some((done.max(total), total, Some(format!("{msg} to {shown}"))));
+                if inline {
+                    work(); // tests and automation: synchronous
+                } else {
+                    std::thread::Builder::new().name("printcraft-export".into()).spawn(work).ok();
                 }
+                app.export_status = Some(status);
             };
-            if self.export_dir_override.is_some() {
-                work(); // tests and automation: synchronous
-            } else {
-                std::thread::Builder::new().name("printcraft-export".into()).spawn(work).ok();
+            match self.export_dir_override.clone() {
+                Some(d) => start(self, d.into(), true),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Choose a folder for the exported files").to_string());
+                    self.ask_one(crate::pickers::Ask::Folder(dialog), None, move |app, dir| start(app, dir, false));
+                }
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let msg = run(src, kind, dpi, format, min_side, pages, stem, |name, bytes| crate::editing::download(name, &bytes), &status);
+            let msg = run(
+                src,
+                kind,
+                dpi,
+                format,
+                min_side,
+                pages,
+                stem,
+                |name, bytes| crate::editing::download(name, &bytes),
+                &status,
+                crate::i18n::current(),
+            );
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }
+            self.export_status = Some(status);
         }
-        self.export_status = Some(status);
     }
 
     /// Show export progress, and the result once it is done.
@@ -233,7 +296,10 @@ impl PrintCraftApp {
                 self.export_status = None;
                 self.notify(msg);
             }
-            Some((done, total, None)) if total > 1 => self.notify(format!("Exporting… {done} of {total}")),
+            Some((done, total, None)) if total > 1 => {
+                let m = crate::i18n::fmt(tl!("Exporting… {d} of {t}"), &[("d", &done.to_string()), ("t", &total.to_string())]);
+                self.notify(m);
+            }
             _ => {}
         }
         if let Some(ctx) = &self.ctx {

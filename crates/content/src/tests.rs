@@ -48,6 +48,36 @@ fn damage_is_skipped_not_fatal() {
     assert!(parse(b"BI /W 1").ops.len() == 1);
 }
 
+/// Issue #1318: an inline image whose dictionary can't be read is skipped up to its `EI`, counted,
+/// and what follows it is parsed.
+#[test]
+fn an_unreadable_inline_image_is_skipped_to_its_end() {
+    let src = b"q BI /W 4 H 4 ID aa EI Q BT (After) Tj ET";
+    let p = parse(src);
+    let names: Vec<&[u8]> = p.ops.iter().map(|o| o.op.as_slice()).collect();
+    assert_eq!(names, [&b"q"[..], b"Q", b"BT", b"Tj", b"ET"]);
+    assert_eq!(p.skipped, b"BI /W 4 H 4 ID aa EI".len());
+    let control = parse(b"q BI /W 4 /H 4 ID aa EI Q BT (After) Tj ET");
+    assert_eq!(control.skipped, 0);
+    assert_eq!(control.ops.len(), 6);
+}
+
+/// Issue #1318, follow-up: without an `EI`, an unreadable inline image runs to the end of the
+/// stream, and those bytes are counted. A readable one whose data is cut short is kept, data and
+/// all, so nothing of it is skipped.
+#[test]
+fn an_unreadable_inline_image_without_ei_is_counted() {
+    let p = parse(b"q BI /W 4 H 4 ID aa");
+    let names: Vec<&[u8]> = p.ops.iter().map(|o| o.op.as_slice()).collect();
+    assert_eq!(names, [&b"q"[..]]);
+    assert_eq!(p.skipped, b"BI /W 4 H 4 ID aa".len());
+    let control = parse(b"q BI /W 4 /H 4 ID aa");
+    assert_eq!(control.skipped, 0);
+    let names: Vec<&[u8]> = control.ops.iter().map(|o| o.op.as_slice()).collect();
+    assert_eq!(names, [&b"q"[..], b"BI"]);
+    assert_eq!(control.ops[1].inline.as_ref().map(|(_, data)| data.as_slice()), Some(&b"aa"[..]));
+}
+
 #[test]
 fn matrices_compose_and_invert() {
     let a = Matrix([2.0, 0.0, 0.0, 3.0, 10.0, 20.0]);
@@ -62,4 +92,29 @@ fn matrices_compose_and_invert() {
     assert_eq!(Matrix([2.0, 0.0, 0.0, 2.0, 1.0, 1.0]).bbox([0.0, 0.0, 1.0, 1.0]), [1.0, 1.0, 3.0, 3.0]);
     assert!(overlaps([0.0, 0.0, 10.0, 10.0], [5.0, 5.0, 20.0, 20.0], 0.0));
     assert!(!overlaps([0.0, 0.0, 10.0, 10.0], [10.0, 0.0, 20.0, 10.0], 0.0));
+}
+
+#[test]
+fn pieces_parse_as_one_stream_and_splice_back() {
+    // An operator's operands end one piece and its keyword starts the next (§7.8.2).
+    let pieces = Pieces::join(&[&b"BT 72 700 Td [(After) -20 (wards)]"[..], b"TJ ET", b"q Q"]);
+    assert_eq!(pieces.len(), 3);
+    let ops = pieces.parse().ops;
+    let names: Vec<&[u8]> = ops.iter().map(|o| o.op.as_slice()).collect();
+    assert_eq!(names, [&b"BT"[..], b"Td", b"TJ", b"ET", b"q", b"Q"]);
+    assert_eq!(pieces.pieces_of(&ops[2]), (0, 1));
+    assert_eq!(pieces.pieces_of(&ops[3]), (1, 1));
+    assert_eq!(pieces.piece_of(usize::MAX), 2);
+    // Nothing changed: the pieces come back byte for byte.
+    assert_eq!(pieces.splice([]), [&b"BT 72 700 Td [(After) -20 (wards)]"[..], b"TJ ET", b"q Q"]);
+    // Replacing the split TJ rewrites both pieces it spans; the third is untouched.
+    let out = pieces.splice([(ops[2].span.clone(), b"(New) Tj".to_vec())]);
+    assert_eq!(out, [&b"BT 72 700 Td (New) Tj"[..], b" ET", b"q Q"]);
+    // Removing it leaves no stray operands or keyword.
+    let out = pieces.splice([(ops[2].span.clone(), Vec::new())]);
+    assert_eq!(out, [&b"BT 72 700 Td "[..], b" ET", b"q Q"]);
+    // Out-of-range or reversed edits are clamped, never a panic.
+    let out = pieces.splice([(std::ops::Range { start: 10, end: 5 }, b"x".to_vec()), (1000..2000, Vec::new())]);
+    assert_eq!(out.len(), 3);
+    assert!(Pieces::join::<&[u8]>(&[]).splice([(0..1, b"x".to_vec())]).is_empty());
 }
