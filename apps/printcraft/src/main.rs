@@ -66,6 +66,21 @@ fn settings_dir() -> Option<std::path::PathBuf> {
     eframe::storage_dir("CivilOps PDF")
 }
 
+/// CivilOps PDF: up to 0.2.1 the portable zip kept its settings in the user folder. Its first start
+/// with the data folder beside `current/` copies `app.ron` from there once (signatures, stamps,
+/// recent files), when the data folder has none yet.
+fn take_over_user_settings(data_dir: &std::path::Path, user_dir: Option<&std::path::Path>) {
+    let target = data_dir.join("app.ron");
+    let Some(source) = user_dir.map(|d| d.join("app.ron")).filter(|s| s.is_file()) else { return };
+    if target.exists() {
+        return;
+    }
+    match std::fs::copy(&source, &target) {
+        Ok(_) => log::info!("portable zip: settings taken over from {}", source.display()),
+        Err(e) => log::warn!("portable zip: settings not taken over from {}: {e}", source.display()),
+    }
+}
+
 /// Desktop launchers (GNOME Files, KDE Dolphin…) only recognise an app as the default handler for a
 /// mime type if its `Exec` takes URIs (`%u`/`%U`), not just paths (`%F`); the packaged `.desktop`
 /// file uses `%U` accordingly (packaging/linux/ai.storyteller.printcraft.desktop). Decode a local
@@ -283,6 +298,11 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     if app_frame {
         // The tab strip is the title bar (printcraft_ui_egui::window_controls).
         viewport = viewport.with_decorations(false);
+    }
+    if printcraft_ui_egui::portable::current().zip
+        && let Some(dir) = printcraft_ui_egui::portable::data_dir()
+    {
+        take_over_user_settings(dir, eframe::storage_dir("CivilOps PDF").as_deref());
     }
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
@@ -736,6 +756,28 @@ mod tests {
     fn gpu() -> std::sync::MutexGuard<'static, ()> {
         // A test that panicked while holding it leaves nothing to clean up.
         GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn the_portable_zip_takes_over_the_user_settings_once() {
+        let base = std::env::temp_dir().join(format!("civilops-pdf-take-over-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (data, user) = (base.join("CivilOpsPDFData"), base.join("user"));
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        // Nothing in the user folder: nothing to take over.
+        super::take_over_user_settings(&data, Some(&user));
+        super::take_over_user_settings(&data, None);
+        assert!(!data.join("app.ron").exists());
+        // First start in the data folder: copied.
+        std::fs::write(user.join("app.ron"), b"(user)").unwrap();
+        super::take_over_user_settings(&data, Some(&user));
+        assert_eq!(std::fs::read(data.join("app.ron")).unwrap(), b"(user)");
+        // Later starts keep what the portable copy saved since.
+        std::fs::write(data.join("app.ron"), b"(portable)").unwrap();
+        super::take_over_user_settings(&data, Some(&user));
+        assert_eq!(std::fs::read(data.join("app.ron")).unwrap(), b"(portable)");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

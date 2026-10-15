@@ -33,6 +33,8 @@ zusammenstellen, unterschreiben und drucken. Läuft lokal unter Windows, ohne Ko
   laufende Programm. Auf der Startseite lassen sich Ordner anheften (zum Beispiel der des
   Scanners), die ihre neuesten PDFs zeigen.
 - **Spenden**: Hilfe ▸ Spenden, im Fenster „Über“ und auf der Startseite (PayPal).
+- **Ohne Installation**: Die ZIP-Fassung läuft aus jedem Ordner, auch vom USB-Stick, und hält ihre
+  Einstellungen im eigenen Ordner (`CivilOpsPDFData` neben `CivilOps PDF.exe`, bleibt bei Updates).
 - **Installer und Updates** (Velopack): Installation pro Benutzer ohne Adminrechte. Beim ersten
   Start fragt das Programm, ob es beim Start nach Updates suchen darf (abschaltbar unter
   Einstellungen); eine neuere Fassung lädt es im Hintergrund und meldet sie, eingespielt wird

@@ -9,8 +9,11 @@ CivilOps-PDF-<Version>-Setup.exe doppelklicken: Das Programm wird für den angem
 Benutzer eingerichtet (ohne Adminrechte, nach %LOCALAPPDATA%\CivilOpsPDF), mit Verknüpfung
 auf dem Desktop und im Startmenü. Windows fragt beim ersten Mal eventuell nach, weil das
 Programm noch nicht signiert ist: „Weitere Informationen“ > „Trotzdem ausführen“.
-Ohne Installation: CivilOps-PDF-<Version>-Portable.zip entpacken und „CivilOps PDF.exe“
-starten. Auch diese Fassung aktualisiert sich selbst.
+Ohne Installation: CivilOps-PDF-<Version>-Portable.zip in einen beliebigen Ordner entpacken,
+auch auf einen USB-Stick, und „CivilOps PDF.exe“ starten. Auch diese Fassung aktualisiert sich
+selbst. Ihre Einstellungen liegen im Unterordner „CivilOpsPDFData“ neben „CivilOps PDF.exe“ und
+bleiben bei Updates erhalten; beim ersten Start übernimmt sie vorhandene Einstellungen aus dem
+Windows-Benutzerprofil.
 Eine PDF öffnen: über „Öffnen“ oder einfach ins Fenster ziehen. Läuft das Programm schon,
 kommen weitere Dateien (Doppelklick im Explorer, Anhang in Outlook) als neuer Reiter dazu.
 Auf der Startseite lassen sich Ordner anheften, zum Beispiel der Ordner des Scanners: Dort

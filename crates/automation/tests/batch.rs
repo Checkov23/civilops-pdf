@@ -107,12 +107,14 @@ fn explicitly_selected_subfolder_is_processed_without_recursive() {
 #[test]
 fn explicit_file_can_write_a_numbered_copy_beside_its_source() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("page.pdf"), pdf()).unwrap();
+    // One fixture: it carries its creation time (see batch_output_collisions_are_safe_under_concurrent_writers).
+    let original = pdf();
+    std::fs::write(dir.path().join("page.pdf"), &original).unwrap();
     let mut auto = Automation::new().with_root(dir.path()).unwrap();
     let report = result(&mut auto, json!({"paths":["page.pdf"],"steps":["convert"],"out_dir":"."}));
     assert_eq!(report["completed"], 1, "{report}");
-    assert_eq!(std::fs::read(dir.path().join("page.pdf")).unwrap(), pdf());
-    assert_eq!(std::fs::read(dir.path().join("page (2).pdf")).unwrap(), pdf());
+    assert_eq!(std::fs::read(dir.path().join("page.pdf")).unwrap(), original);
+    assert_eq!(std::fs::read(dir.path().join("page (2).pdf")).unwrap(), original);
 }
 
 #[cfg(unix)]
@@ -165,7 +167,10 @@ fn batch_ocr_uses_existing_models_or_reports_the_missing_models_per_file() {
 #[test]
 fn batch_output_collisions_are_safe_under_concurrent_writers() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("page.pdf"), pdf()).unwrap();
+    // CivilOps PDF: one fixture for the input and the comparison; it carries its creation time,
+    // which can tick on between two calls on a busy machine.
+    let original = pdf();
+    std::fs::write(dir.path().join("page.pdf"), &original).unwrap();
     let barrier = std::sync::Barrier::new(2);
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..2)
@@ -182,7 +187,7 @@ fn batch_output_collisions_are_safe_under_concurrent_writers() {
         assert_ne!(reports[0]["files"][0]["output"], reports[1]["files"][0]["output"]);
     });
     for name in ["page.pdf", "page (2).pdf"] {
-        assert_eq!(std::fs::read(dir.path().join("out").join(name)).unwrap(), pdf());
+        assert_eq!(std::fs::read(dir.path().join("out").join(name)).unwrap(), original);
     }
     assert_eq!(std::fs::read_dir(dir.path().join("out")).unwrap().count(), 2, "no staging files remain");
 }
