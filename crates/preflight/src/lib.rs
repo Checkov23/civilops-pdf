@@ -24,7 +24,7 @@
 pub mod icc;
 mod xmp;
 
-use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, is_whitespace};
+use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// The PDF/A part and conformance level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,7 +165,7 @@ fn metadata(doc: &Document) -> Option<String> {
     let cat = catalog(doc);
     let m = doc.resolve(cat.get(b"Metadata")?);
     match &*m {
-        Object::Stream(s) => s.decoded().ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+        Object::Stream(s) => s.decoded_within(xmp::MAX_XMP_BYTES).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
     }
 }
@@ -174,10 +174,10 @@ fn metadata(doc: &Document) -> Option<String> {
 pub fn declared(doc: &Document) -> Declared {
     let mut d = Declared::default();
     if let Some(x) = metadata(doc) {
-        let part = xmp::value(&x, "pdfaid:part").and_then(|p| p.parse().ok());
-        let conf = xmp::value(&x, "pdfaid:conformance").unwrap_or_default();
+        let part = xmp::identifier(&x, xmp::PDFA_ID, "part").and_then(|p| p.parse().ok());
+        let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance").unwrap_or_default();
         d.pdfa = part.map(|p| (p, conf.to_uppercase()));
-        d.pdfua = xmp::value(&x, "pdfuaid:part").and_then(|p| p.parse().ok());
+        d.pdfua = xmp::identifier(&x, xmp::PDFUA_ID, "part").and_then(|p| p.parse().ok());
     }
     let cat = catalog(doc);
     if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
@@ -255,12 +255,124 @@ impl DeviceColour {
     fn any(self) -> bool {
         self.gray || self.rgb || self.cmyk
     }
+
+    /// Note the device colour space `name`, if it is one. Inline images may also use the
+    /// abbreviations (`G`, `RGB`, `CMYK`); anywhere else those are resource names.
+    fn mark(&mut self, name: &[u8], inline: bool) {
+        match name {
+            b"DeviceGray" => self.gray = true,
+            b"DeviceRGB" => self.rgb = true,
+            b"DeviceCMYK" => self.cmyk = true,
+            b"G" if inline => self.gray = true,
+            b"RGB" if inline => self.rgb = true,
+            b"CMYK" if inline => self.cmyk = true,
+            _ => {}
+        }
+    }
+}
+
+/// How deep [`type3_procs`] looks into an object's direct dictionaries and arrays.
+const MAX_DIRECT_DEPTH: u8 = 8;
+
+/// The glyph procedures of every Type 3 font in `d`: `d` itself, or a font held directly inside
+/// it (a font can sit inline in a resource dictionary).
+fn type3_procs(doc: &Document, d: &Dict, depth: u8, out: &mut std::collections::HashSet<ObjRef>) {
+    if d.name(b"Subtype") == Some(b"Type3")
+        && let Some(procs) = d.get(b"CharProcs").map(|c| doc.resolve(c))
+        && let Some(procs) = procs.as_dict()
+    {
+        out.extend(procs.iter().filter_map(|(_, p)| p.as_ref()));
+    }
+    for (_, v) in d.iter() {
+        type3_procs_within(doc, v, depth.saturating_add(1), out);
+    }
+}
+
+fn type3_procs_within(doc: &Document, o: &Object, depth: u8, out: &mut std::collections::HashSet<ObjRef>) {
+    if depth > MAX_DIRECT_DEPTH {
+        return;
+    }
+    match o {
+        Object::Dict(d) => type3_procs(doc, d, depth, out),
+        Object::Array(a) => {
+            for v in a {
+                type3_procs_within(doc, v, depth.saturating_add(1), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The content streams that only a reference identifies, their dictionaries saying nothing: the
+/// pages' `/Contents` and Type 3 glyph procedures.
+fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
+    let mut out = std::collections::HashSet::new();
+    for p in printcraft_model::pages(doc) {
+        let contents = match p.dict.get(b"Contents") {
+            Some(Object::Ref(r)) => match &*doc.get(*r) {
+                Object::Array(a) => a.clone(),
+                _ => vec![Object::Ref(*r)],
+            },
+            Some(Object::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        };
+        out.extend(contents.iter().filter_map(Object::as_ref));
+    }
+    for (_, o) in objs {
+        if let Some(d) = dict_of(o) {
+            type3_procs(doc, d, 0, &mut out);
+        }
+    }
+    out
+}
+
+/// Whether a stream's own dictionary says it holds content: a form XObject, or a stream with a
+/// `/BBox` and no `/Subtype` (a tiling pattern, or an appearance stream that leaves out
+/// `/Subtype /Form`). Mesh shadings may carry a `/BBox` too, but their data isn't content.
+fn is_content(d: &Dict) -> bool {
+    match d.name(b"Subtype") {
+        Some(t) => t == b"Form",
+        None => d.get(b"BBox").is_some() && d.get(b"ShadingType").is_none(),
+    }
+}
+
+/// The device colour a content stream sets. It is read operator by operator, so the bytes of a
+/// string, a comment or an inline image are never taken for an operator, and an operator right
+/// before a delimiter (`1 k/GS0 gs`) is still found.
+fn content_colour(data: &[u8], used: &mut DeviceColour) {
+    for op in printcraft_content::parse(data).ops {
+        match op.op.as_slice() {
+            b"g" | b"G" => used.gray = true,
+            b"rg" | b"RG" => used.rgb = true,
+            b"k" | b"K" => used.cmyk = true,
+            b"cs" | b"CS" => {
+                if let Some(name) = op.name(0) {
+                    used.mark(name, false);
+                }
+            }
+            b"BI" => {
+                let Some((image, _)) = &op.inline else { continue };
+                match image.get(b"CS").or_else(|| image.get(b"ColorSpace")) {
+                    Some(Object::Name(n)) => used.mark(n, true),
+                    // An indexed space draws in its base: `[/I /DeviceRGB 1 <…>]`.
+                    Some(Object::Array(a)) if a.first().and_then(Object::as_name).is_some_and(|n| n == b"I" || n == b"Indexed") => {
+                        if let Some(base) = a.get(1).and_then(Object::as_name) {
+                            used.mark(base, true);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Whether any content or object uses a device colour space.
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let mut used = DeviceColour::default();
-    for (_, o) in objs {
+    let referenced = referenced_content(doc, objs);
+    for (r, o) in objs {
         let Some(d) = dict_of(o) else { continue };
         // A resource dictionary's /ColorSpace, whether it is this object or the page's inline
         // /Resources.
@@ -281,20 +393,14 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
                 _ => {}
             }
         }
-        if let Object::Stream(s) = &**o
-            && d.get(b"Type").is_none()
-            && d.get(b"Subtype").is_none_or(|t| t.as_name() == Some(b"Form"))
+        // Content streams only: a font program or an ICC profile is data, whatever bytes it holds.
+        // Parsing is the expensive part, so once content has used all three spaces no more is read.
+        if !(used.gray && used.rgb && used.cmyk)
+            && let Object::Stream(s) = &**o
+            && (referenced.contains(r) || is_content(&s.dict))
             && let Ok(data) = s.decoded()
         {
-            // Content streams: rg/RG/g/G/k/K operators.
-            for token in data.split(|b| is_whitespace(*b)) {
-                match token {
-                    b"g" | b"G" => used.gray = true,
-                    b"rg" | b"RG" => used.rgb = true,
-                    b"k" | b"K" => used.cmyk = true,
-                    _ => {}
-                }
-            }
+            content_colour(&data, &mut used);
         }
     }
     used
@@ -317,8 +423,8 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     match metadata(doc) {
         None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
         Some(x) => {
-            let part = xmp::value(&x, "pdfaid:part");
-            let conf = xmp::value(&x, "pdfaid:conformance");
+            let part = xmp::identifier(&x, xmp::PDFA_ID, "part");
+            let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
             if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }

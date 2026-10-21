@@ -59,11 +59,23 @@ impl Unit {
         *SYSTEM.get_or_init(|| detect().unwrap_or_default())
     }
 
-    /// A page size given in points, e.g. "210.0 × 297.0 mm".
+    /// A page size given in points, e.g. "210.0 × 297.0 mm". CivilOps PDF: with a decimal comma
+    /// in the interface languages that write one ("210,0 × 297,0 mm" in German).
     pub fn size(self, width_pt: f64, height_pt: f64) -> String {
         let (k, d) = (self.per_point(), self.decimals());
-        format!("{:.d$} × {:.d$} {}", width_pt * k, height_pt * k, self.label())
+        local_decimal(format!("{:.d$} × {:.d$} {}", width_pt * k, height_pt * k, self.label()))
     }
+}
+
+/// CivilOps PDF: numbers formatted with a decimal point, as the interface language writes them
+/// (a decimal comma in German and the other languages that use one).
+pub(crate) fn local_decimal(text: String) -> String {
+    if decimal_comma(crate::i18n::current().code()) { text.replace('.', ",") } else { text }
+}
+
+/// CivilOps PDF: whether the interface language `code` writes decimals with a comma.
+fn decimal_comma(code: &str) -> bool {
+    matches!(code, "de" | "es" | "fr" | "ru" | "kk" | "bg" | "cs" | "pt-br" | "hu" | "uk" | "it" | "pl" | "sl" | "el" | "tr" | "lt" | "vi")
 }
 
 /// The unit for a locale tag's region: `en_US.UTF-8`, `en-US`, `bg-BG`, `zh-Hans-CN`, `en_GB@euro`.
@@ -182,6 +194,16 @@ mod tests {
         assert_eq!(Unit::Centimetres.size(595.276, 841.89), "21.00 × 29.70 cm");
         assert_eq!(Unit::Inches.size(612.0, 792.0), "8.50 × 11.00 in");
         assert_eq!(Unit::Points.size(612.0, 792.0), "612.0 × 792.0 pt");
+    }
+
+    /// CivilOps PDF: German writes the page size with a decimal comma, as its measurements.
+    #[test]
+    fn german_page_sizes_have_a_decimal_comma() {
+        let before = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::from_code("de").unwrap());
+        assert_eq!(Unit::Millimetres.size(595.276, 841.89), "210,0 × 297,0 mm");
+        crate::i18n::set_current(before);
+        assert_eq!(Unit::Millimetres.size(595.276, 841.89), "210.0 × 297.0 mm");
     }
 
     #[test]

@@ -60,6 +60,10 @@ pub struct Parsed {
     pub ops: Vec<Op>,
     /// Bytes that could not be read as operands or operators.
     pub skipped: usize,
+    /// For [`Pieces::parse`]: per piece, whether a comment runs into it from the piece before
+    /// and whether one runs out of it into the next. Only boundaries are recorded, so the size
+    /// depends on the number of pieces, not of comments.
+    comment_edges: Vec<(bool, bool)>,
 }
 
 fn is_ws(b: u8) -> bool {
@@ -72,12 +76,25 @@ fn is_delim(b: u8) -> bool {
 
 /// Parse a (decoded) content stream.
 pub fn parse(data: &[u8]) -> Parsed {
-    let mut out = Parsed::default();
+    parse_pieces(data, &[])
+}
+
+/// Parse `data`, recording which of the piece boundaries `ends` (as in [`Pieces`]) a comment
+/// crosses.
+fn parse_pieces(data: &[u8], ends: &[usize]) -> Parsed {
+    let mut out = Parsed { comment_edges: vec![(false, false); ends.len()], ..Parsed::default() };
+    let mut boundary = 0;
     let mut lx = Lexer::new(data, 0);
     let mut operands: Vec<Object> = Vec::new();
     let mut start: Option<usize> = None;
     loop {
+        let trivia = lx.pos;
         lx.skip_ws();
+        // Only the whitespace the lexer skips here holds top-level comments: a `%` inside a
+        // string, a name, an array or dictionary operand or inline image data is not one.
+        if boundary < ends.len() {
+            comment_edges(data, trivia..lx.pos, ends, &mut boundary, &mut out.comment_edges);
+        }
         let Some(&b) = data.get(lx.pos) else { break };
         let at = lx.pos;
         let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
@@ -148,6 +165,39 @@ pub fn parse(data: &[u8]) -> Parsed {
     out
 }
 
+/// Record the piece boundaries crossed by the comments in `trivia` (skipped whitespace and
+/// comments). `boundary` is the first boundary not yet passed; boundaries only move forward.
+fn comment_edges(data: &[u8], trivia: std::ops::Range<usize>, ends: &[usize], boundary: &mut usize, edges: &mut [(bool, bool)]) {
+    let mut at = trivia.start;
+    while at < trivia.end {
+        if data.get(at) != Some(&b'%') {
+            at += 1;
+            continue;
+        }
+        let comment = at;
+        while at < trivia.end && !matches!(data.get(at), Some(b'\r' | b'\n')) {
+            at += 1;
+        }
+        // The separator of piece `boundary` is the last byte before its end.
+        while let Some(&end) = ends.get(*boundary) {
+            let separator = end.saturating_sub(1);
+            if separator >= at {
+                break;
+            }
+            if separator >= comment {
+                if let Some(edge) = edges.get_mut(*boundary) {
+                    edge.1 = true;
+                }
+                // Includes a comment whose end of line is the next piece's first byte.
+                if let Some(edge) = edges.get_mut(boundary.saturating_add(1)) {
+                    edge.0 = true;
+                }
+            }
+            *boundary += 1;
+        }
+    }
+}
+
 /// Read an inline image starting after `BI`: (parameters, data, position after `EI`). `Err` holds
 /// the position after the `EI` (or the end of the stream) of an image whose parameters can't be read.
 fn inline_image(data: &[u8], pos: usize) -> Result<(Dict, Vec<u8>, usize), usize> {
@@ -175,10 +225,81 @@ fn inline_image(data: &[u8], pos: usize) -> Result<(Dict, Vec<u8>, usize), usize
     }
     // One whitespace byte separates ID from the data.
     let begin = (lx.pos + 1).min(data.len());
-    Ok(match end_of_image(data, begin) {
+    let end = unfiltered_image_end(data, begin, &dict).or_else(|| end_of_image(data, begin));
+    Ok(match end {
         Some((end_data, end)) => (dict, data[begin..end_data].to_vec(), end),
         None => (dict, data[begin..].to_vec(), data.len()),
     })
+}
+
+/// An unfiltered image's samples determine its length, including byte padding per row.
+/// Binary samples may themselves contain whitespace + `EI` + whitespace, so use the known
+/// length when the actual terminator follows it. Unknown or damaged layouts keep the heuristic.
+fn unfiltered_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize, usize)> {
+    for key in [b"Filter".as_slice(), b"F"] {
+        if let Some(filter) = dict.get(key)
+            && !matches!(filter, Object::Null)
+            && !matches!(filter, Object::Array(filters) if filters.is_empty())
+        {
+            return None;
+        }
+    }
+    for (full, short) in
+        [(b"Width".as_slice(), b"W".as_slice()), (b"Height", b"H"), (b"ColorSpace", b"CS"), (b"BitsPerComponent", b"BPC"), (b"ImageMask", b"IM")]
+    {
+        if let (Some(full), Some(short)) = (dict.get(full), dict.get(short))
+            && full != short
+        {
+            return None;
+        }
+    }
+    let get = |full: &[u8], short: &[u8]| dict.get(full).or_else(|| dict.get(short));
+    let width = usize::try_from(get(b"Width", b"W")?.as_int()?).ok().filter(|n| *n > 0)?;
+    let height = usize::try_from(get(b"Height", b"H")?.as_int()?).ok().filter(|n| *n > 0)?;
+    let mask = match get(b"ImageMask", b"IM") {
+        None | Some(Object::Null | Object::Bool(false)) => false,
+        Some(Object::Bool(true)) => true,
+        _ => return None,
+    };
+    let bits = match get(b"BitsPerComponent", b"BPC") {
+        None | Some(Object::Null) => None,
+        Some(value) => Some(value.as_int()?),
+    };
+    let (components, bits) = if mask {
+        if bits.is_some_and(|bits| bits != 1) {
+            return None;
+        }
+        (1usize, 1usize)
+    } else {
+        let (components, max_bits) = match get(b"ColorSpace", b"CS")? {
+            Object::Name(name) => match name.as_slice() {
+                b"DeviceGray" | b"G" => (1, 16),
+                b"DeviceRGB" | b"RGB" => (3, 16),
+                b"DeviceCMYK" | b"CMYK" => (4, 16),
+                _ => return None,
+            },
+            Object::Array(space) if space.len() == 4 && matches!(space.first().and_then(Object::as_name), Some(b"Indexed" | b"I")) => (1, 8),
+            _ => return None,
+        };
+        let bits = match bits? {
+            bits @ (1 | 2 | 4 | 8 | 16) => bits as usize,
+            _ => return None,
+        };
+        if bits > max_bits {
+            return None;
+        }
+        (components, bits)
+    };
+    let row = width.checked_mul(components)?.checked_mul(bits)?.div_ceil(8);
+    let end_data = begin.checked_add(row.checked_mul(height)?)?;
+    let after = data.get(end_data..)?;
+    if !after.first().is_some_and(|b| is_ws(*b)) {
+        return None;
+    }
+    let separator = after.iter().position(|b| !is_ws(*b))?;
+    let ei = end_data.checked_add(separator)?;
+    let end = ei.checked_add(2)?;
+    if data.get(ei..end) == Some(b"EI") && data.get(end).is_none_or(|b| is_ws(*b) || is_delim(*b)) { Some((end_data, end)) } else { None }
 }
 
 /// Where inline image data starting at `begin` ends: (end of the data, position after `EI`). The
@@ -234,7 +355,9 @@ pub fn serialize_ops(ops: &[Op]) -> Vec<u8> {
 /// A page's content streams joined into the one stream they are. Writers may split it between
 /// any two tokens (ISO 32000-2 §7.8.2), so an operator's operands can end one piece and its
 /// keyword start the next: parse the pieces joined ([`Pieces::parse`]) and map positions back
-/// with [`Pieces::piece_of`]. A newline separates the pieces so tokens never run together.
+/// with [`Pieces::piece_of`]. A space separates the pieces, as renderers join them (hayro,
+/// MuPDF and Poppler alike): tokens never run together, and a comment at the end of a piece
+/// runs on into the next one, up to its first end of line.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Pieces {
     data: Vec<u8>,
@@ -248,7 +371,7 @@ impl Pieces {
         let mut ends = Vec::with_capacity(pieces.len());
         for p in pieces {
             data.extend_from_slice(p.as_ref());
-            data.push(b'\n');
+            data.push(b' ');
             ends.push(data.len());
         }
         Pieces { data, ends }
@@ -270,12 +393,22 @@ impl Pieces {
 
     /// Parse the pieces as one stream.
     pub fn parse(&self) -> Parsed {
-        parse(&self.data)
+        parse_pieces(&self.data, &self.ends)
+    }
+
+    /// Per piece, from `parsed` (this piece set's [`Pieces::parse`]): whether a comment runs
+    /// into it from the piece before, and whether one runs out of it into the next. A writer
+    /// that rewrites a piece without its comments must keep both: end the incoming comment
+    /// before its first operator, and leave a comment open at its end.
+    pub fn comment_edges(&self, parsed: &Parsed) -> Vec<(bool, bool)> {
+        let mut edges = parsed.comment_edges.clone();
+        edges.resize(self.len(), (false, false));
+        edges
     }
 
     /// The piece holding joined position `at` (the last piece for positions past the end).
     pub fn piece_of(&self, at: usize) -> usize {
-        self.ends.iter().position(|&e| at < e).unwrap_or(self.ends.len().saturating_sub(1))
+        self.ends.partition_point(|&e| e <= at).min(self.ends.len().saturating_sub(1))
     }
 
     /// The pieces an operator spans: (the one its first token is in, the one its keyword is in).

@@ -2,7 +2,7 @@
 //! cover page, a scroll position per tab.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{By, Queryable};
 use printcraft_ui_egui::{Dialog, PrintCraftApp};
 
 /// `n` pages of 200×300; page i says "Page i+1" plus "page" and "Pages" for find tests.
@@ -128,7 +128,11 @@ fn view_history_select_all_and_find_options() {
     assert_eq!(h.state().views[0].find.as_ref().unwrap().matches.len(), 0, "\"page\" alone, lower case, appears nowhere");
     h.state_mut().views[0].find.as_mut().unwrap().query = "PAGE".into();
     h.state_mut().views[0].rerun_find();
-    h.run_steps(2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline && h.state().views[0].find.as_ref().unwrap().matches.len() < 5 {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert_eq!(h.state().views[0].find.as_ref().unwrap().matches.len(), 5);
 }
 
@@ -169,6 +173,36 @@ fn find_shortcuts_advance_and_retreat_matches() {
     h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::G);
     h.run_steps(2);
     assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some((start + n - 1) % n));
+}
+
+/// #2669: ⌘G and ⇧⌘G step through the matches while the find field still has the focus.
+#[test]
+fn find_shortcuts_work_from_the_find_field() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.state_mut().views[0].open_find();
+    h.state_mut().views[0].find.as_mut().unwrap().query = "page".into();
+    h.state_mut().views[0].rerun_find();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        if h.state().views[0].find.as_ref().unwrap().matches.len() >= 15 {
+            break;
+        }
+    }
+    let n = h.state().views[0].find.as_ref().unwrap().matches.len();
+    assert_eq!(n, 15);
+    assert!(h.ctx.egui_wants_keyboard_input(), "the find field has the focus");
+    let start = h.state().views[0].find.as_ref().unwrap().current.unwrap();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::G);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some((start + 1) % n));
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::G);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].find.as_ref().unwrap().current, Some(start));
+    assert!(h.ctx.egui_wants_keyboard_input(), "and keeps it");
 }
 
 #[test]
@@ -300,6 +334,359 @@ fn layouts_fit_height_labels_and_system_theme() {
     // Follow the system theme.
     h.state_mut().set_option("theme", "system").unwrap();
     assert_eq!(h.state().theme_preference, printcraft_ui_egui::theme::ThemePreference::System);
+}
+
+fn page_input_focused(h: &Harness<'static, PrintCraftApp>) -> bool {
+    let focused = h.ctx.memory(|m| m.focused());
+    let view = &h.state().views[h.state().active.unwrap()];
+    // Also identifies the original editor when running this test-only patch on the baseline.
+    focused == Some(egui::Id::new(("page-input", view.id.0))) || focused == Some(egui::Id::new("page-input"))
+}
+
+/// Exercise the real navigation editor, including its focus and Enter handling.
+fn focus_page_input(h: &mut Harness<'static, PrintCraftApp>) {
+    let text = h.state().views[h.state().active.unwrap()].page_input.clone();
+    h.get(By::new().role(egui::accesskit::Role::TextInput).value(&text)).focus();
+    h.run_steps(1);
+    assert!(page_input_focused(h), "the actual page editor has focus");
+}
+
+fn type_page_input(h: &mut Harness<'static, PrintCraftApp>, text: &str) {
+    focus_page_input(h);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    let old = h.state().views[h.state().active.unwrap()].page_input.clone();
+    h.get(By::new().role(egui::accesskit::Role::TextInput).value(&old)).type_text(text);
+    h.run_steps(2);
+}
+
+fn restart_page_labels(h: &mut Harness<'static, PrintCraftApp>) {
+    use printcraft_engine::{Edit, LabelStyle};
+    let session = std::mem::take(&mut h.state_mut().session);
+    h.state_mut().session = session.with_clock(|| 1_700_000_000);
+    h.state_mut().active = Some(0);
+    for (from, to, style, first) in [(0, 1, LabelStyle::LowerRoman, 1), (2, 4, LabelStyle::Decimal, 1)] {
+        h.state_mut().apply_edit(Edit::NumberPages { from, to, style, prefix: String::new(), first });
+    }
+    h.run_steps(3);
+}
+
+#[test]
+fn page_label_input_keeps_current_page_when_submitted_unchanged() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    // Physical page 3 has logical label 1. The old editor showed 3, then interpreted it as
+    // logical label 3 (physical page 5) when Enter was pressed without changing anything.
+    h.state_mut().views[0].go_to_page(2);
+    h.run_steps(3);
+    focus_page_input(&mut h);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 2, "unchanged Enter must stay on the current physical page");
+
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap();
+    let undo = before.can_undo().map(str::to_owned);
+    let dirty = before.dirty;
+    let before_bytes = h.state().session.save_bytes(id).unwrap();
+    for (page, label) in ["i", "ii", "1", "2", "3"].into_iter().enumerate() {
+        h.state_mut().views[0].go_to_page(page);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].page_input, label);
+        focus_page_input(&mut h);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].current, page, "{label}");
+        assert_eq!(h.state().views[0].page_input, label);
+    }
+    let after = h.state().session.get(id).unwrap();
+    assert_eq!(after.can_undo().map(str::to_owned), undo);
+    assert_eq!(after.dirty, dirty, "navigation does not edit the PDF");
+    assert_eq!(h.state().session.save_bytes(id).unwrap(), before_bytes, "navigation preserves saved PDF bytes");
+    let mut empty = printcraft_ui_egui::canvas::DocView::new(printcraft_engine::DocId(0), &Default::default(), Default::default());
+    assert!(!empty.go_to_typed("1", &[]), "an empty view has no current page to retain");
+}
+
+#[test]
+fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
+    use printcraft_engine::{Edit, LabelStyle};
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.state_mut().apply_edit(Edit::NumberPages { from: 4, to: 4, style: LabelStyle::Decimal, prefix: "A-".into(), first: 8 });
+    h.run_steps(3);
+    for (typed, page, displayed) in [("ii", 1, "ii"), ("2", 3, "2"), ("A-8", 4, "A-8"), ("3", 2, "1"), ("missing", 2, "1")] {
+        type_page_input(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].current, page, "{typed}");
+        assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
+    }
+    // Scripted page selection remains physical and one-based even when a numeric label differs.
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (1, "ii"));
+
+    h.state_mut().apply_edit(Edit::NumberPages { from: 0, to: 1, style: LabelStyle::None, prefix: "Appendix".into(), first: 1 });
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].page_input, "Appendix");
+    focus_page_input(&mut h);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 1, "a duplicate current label must not resolve to its first occurrence");
+    h.state_mut().views[0].go_to_page(2);
+    h.run_steps(3);
+    type_page_input(&mut h, "Appendix");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0, "a changed label keeps the existing first-match lookup");
+
+    h.state_mut().views[0].go_to_page(0);
+    h.state_mut().apply_edit(Edit::NumberPages { from: 0, to: 0, style: LabelStyle::None, prefix: String::new(), first: 1 });
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].page_input, "1", "an empty label falls back to the physical number");
+    focus_page_input(&mut h);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0, "the current fallback number must not jump to another page labelled 1");
+}
+
+#[test]
+fn page_label_input_preserves_literal_whitespace_before_trimmed_lookup() {
+    use printcraft_render::{DocInfo, PageInfo};
+    use printcraft_ui_egui::canvas::DocView;
+    // The importer trims label prefixes, so supply literal labels directly to the view.
+    for label in [" 1", "1 "] {
+        let info = DocInfo {
+            pages: [label, "ii", "1"]
+                .into_iter()
+                .map(|label| PageInfo { width: 200.0, height: 300.0, label: label.into(), crop: [0.0, 0.0, 200.0, 300.0], rotation: 0 })
+                .collect(),
+            ..Default::default()
+        };
+        let labels: Vec<String> = info.pages.iter().map(|page| page.label.clone()).collect();
+        let mut view = DocView::new(printcraft_engine::DocId(0), &info, Default::default());
+        view.document_replaced(&info);
+        assert_eq!(view.page_input, label, "the displayed label retains its literal whitespace");
+        let unchanged = view.page_input.clone();
+        assert!(view.go_to_typed(&unchanged, &labels));
+        assert_eq!(view.current, 0, "unchanged spaces in {label:?} belong to the label");
+        assert!(view.go_to_typed("1", &labels));
+        assert_eq!(view.current, 2, "changed input keeps the existing trimmed label lookup");
+    }
+}
+
+#[test]
+fn page_label_input_focus_command_refreshes_same_frame_navigation_and_preserves_a_draft() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    assert_eq!(h.state().views[0].page_input, "i");
+    // No frame between navigation and the real command: it must not focus the old label.
+    h.state_mut().set_option("page", "3").unwrap();
+    assert!(h.state_mut().execute("view.focus_page_input"));
+    h.run_steps(3);
+    assert!(page_input_focused(&h));
+    assert_eq!(h.state().views[0].page_input, "1");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 2, "the focus command selects the new current label");
+
+    type_page_input(&mut h, "draft");
+    h.state_mut().set_option("page", "4").unwrap();
+    assert!(h.state_mut().execute("view.focus_page_input"));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 3);
+    assert_eq!(h.state().views[0].page_input, "draft", "re-focusing keeps text already being edited");
+}
+
+#[test]
+fn page_label_input_new_document_does_not_inherit_or_commit_the_previous_draft() {
+    use printcraft_engine::{Edit, LabelStyle, Session};
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.state_mut().views[0].go_to_page(3);
+    h.run_steps(3);
+    type_page_input(&mut h, "ii");
+    let original_id = h.state().views[0].id;
+    let original_bytes = h.state().session.save_bytes(original_id).unwrap();
+
+    let mut source = Session::new().with_clock(|| 1_700_000_000);
+    let source_id = source.open("new-labels.pdf", None, std::sync::Arc::new(fixture(5)), None).unwrap();
+    for (from, to, style) in [(0, 1, LabelStyle::LowerRoman), (2, 4, LabelStyle::Decimal)] {
+        source.apply(source_id, Edit::NumberPages { from, to, style, prefix: String::new(), first: 1 }).unwrap();
+    }
+    h.state_mut().open_bytes("new-labels.pdf", None, source.save_bytes(source_id).unwrap().as_ref().clone()).unwrap();
+    // Enter arriving with the switch must not submit the previous editor into this document.
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let next = h.state().active.unwrap();
+    assert_ne!(h.state().views[next].id, original_id);
+    assert_eq!((h.state().views[next].current, h.state().views[next].page_input.as_str()), (0, "i"));
+    assert!(!page_input_focused(&h), "the new document's editor starts idle");
+    assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "ii"), "the hidden valid draft is not committed");
+    focus_page_input(&mut h);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().views[next].current, 0, "unchanged Enter stays on the new document's first page");
+
+    h.get_by_label("a.pdf (edited)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(0));
+    assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "2"));
+    assert_eq!(h.state().session.save_bytes(original_id).unwrap(), original_bytes, "tab switching never edits the original PDF");
+}
+
+#[test]
+fn page_label_input_preserves_typing_and_refreshes_after_navigation_and_tab_changes() {
+    let mut h = harness();
+    restart_page_labels(&mut h);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(3);
+    type_page_input(&mut h, "draft");
+    h.state_mut().views[0].go_to_page(3);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].page_input, "draft", "paging must not overwrite the focused editor");
+    let editor_id = h.ctx.memory(|m| m.focused()).expect("focused page editor");
+    h.ctx.memory_mut(|m| m.surrender_focus(editor_id));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].page_input, "2", "an idle editor follows the current page");
+
+    type_page_input(&mut h, "unsent");
+    h.get_by_label("b.pdf").click();
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(1));
+    assert_eq!(h.state().views[0].page_input, "unsent", "switching tabs keeps the hidden document's draft");
+    assert_eq!(h.state().views[1].page_input, "1", "the new document displays its own label");
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    focus_page_input(&mut h);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!((h.state().views[1].current, h.state().views[1].page_input.as_str()), (1, "2"), "default labels still work");
+    h.get_by_label("a.pdf (edited)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].page_input, "2", "returning to a document refreshes its idle label");
+
+    assert!(h.state_mut().views[0].view_history(false));
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].page_input, "i", "history navigation refreshes the label");
+}
+
+#[test]
+fn page_label_input_same_document_replacement_refreshes_the_focused_label() {
+    use printcraft_engine::{Edit, LabelStyle, Session};
+    use std::sync::Arc;
+    for (pages, roman, page, label) in [(5, false, 3, "4"), (5, true, 3, "iv"), (3, false, 2, "3")] {
+        let mut h = harness();
+        h.state_mut().active = Some(0);
+        h.state_mut().views[0].go_to_page(3);
+        h.run_steps(3);
+        assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "4"));
+        focus_page_input(&mut h);
+        let editor_id = h.ctx.memory(|m| m.focused()).expect("focused page editor");
+        let id = h.state().views[0].id;
+        let before = h.state().session.get(id).unwrap();
+        assert!(!before.dirty);
+        assert_eq!((before.can_undo(), before.can_redo()), (None, None));
+
+        let replacement = if roman {
+            let mut source = Session::new().with_clock(|| 1_700_000_000);
+            let source_id = source.open("replacement.pdf", None, Arc::new(fixture(pages)), None).unwrap();
+            source
+                .apply(source_id, Edit::NumberPages { from: 0, to: pages - 1, style: LabelStyle::LowerRoman, prefix: String::new(), first: 1 })
+                .unwrap();
+            source.save_bytes(source_id).unwrap()
+        } else {
+            Arc::new(fixture(pages))
+        };
+        // The file watcher uses this same reload/replacement path without changing DocId.
+        let app = h.state_mut();
+        app.session.reload(id, replacement.clone()).unwrap();
+        let doc = app.session.get(id).unwrap();
+        app.views[0].document_replaced(&doc.info);
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].id, id);
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(editor_id), "reload retains the actual editor's focus");
+        assert!(page_input_focused(&h));
+        assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (page, label), "replacement labels and page-count clamping");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(
+            (h.state().views[0].current, h.state().views[0].page_input.as_str()),
+            (page, label),
+            "unchanged Enter retains the replacement's physical page"
+        );
+        assert_eq!(h.state().views[0].id, id);
+        let after = h.state().session.get(id).unwrap();
+        assert!(!after.dirty, "navigation does not edit the replacement");
+        assert_eq!((after.can_undo(), after.can_redo()), (None, None));
+        assert_eq!(h.state().session.save_bytes(id).unwrap(), replacement, "navigation preserves replacement PDF bytes");
+    }
+}
+
+#[test]
+fn page_label_input_same_document_replacement_keeps_full_label_selected_for_typing() {
+    use printcraft_engine::{Edit, LabelStyle, Session};
+    use std::sync::Arc;
+    for settling_frames in [3, 0] {
+        let mut h = harness();
+        h.state_mut().active = Some(0);
+        h.state_mut().views[0].go_to_page(3);
+        h.run_steps(3);
+        assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "4"));
+        assert!(h.state_mut().execute("view.focus_page_input"));
+        h.run_steps(3);
+        assert!(page_input_focused(&h), "the real focus command focuses the page editor");
+        let editor_id = h.ctx.memory(|m| m.focused()).expect("focused page editor");
+        let range = egui::TextEdit::load_state(&h.ctx, editor_id).unwrap().cursor.char_range().unwrap();
+        let ends = [range.primary.index, range.secondary.index];
+        assert!(ends.contains(&egui::text::CCursor::new(0).index), "the old label selection starts at zero");
+        assert!(ends.contains(&egui::text::CCursor::new(1).index), "the entire old one-character label is selected");
+        let id = h.state().views[0].id;
+        let original = h.state().session.get(id).unwrap();
+        assert!(!original.dirty);
+        assert_eq!((original.can_undo(), original.can_redo()), (None, None));
+
+        let mut source = Session::new().with_clock(|| 1_700_000_000);
+        let source_id = source.open("replacement.pdf", None, Arc::new(fixture(5)), None).unwrap();
+        source.apply(source_id, Edit::NumberPages { from: 0, to: 4, style: LabelStyle::LowerRoman, prefix: String::new(), first: 1 }).unwrap();
+        let replacement = source.save_bytes(source_id).unwrap();
+        let app = h.state_mut();
+        app.session.reload(id, replacement.clone()).unwrap();
+        let doc = app.session.get(id).unwrap();
+        app.views[0].document_replaced(&doc.info);
+        // Cover the reproduced settled case and typing before the replacement's first frame.
+        if settling_frames > 0 {
+            h.run_steps(settling_frames);
+        }
+        assert_eq!(h.state().views[0].id, id);
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(editor_id), "same-DocId reload retains the actual focused editor");
+        assert!(page_input_focused(&h));
+        assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "iv"));
+
+        // Ordinary typing must replace the whole refreshed label without another focus or select-all.
+        h.event(egui::Event::Text("2".into()));
+        h.run_steps(if settling_frames == 0 { 1 } else { 2 });
+        assert!(page_input_focused(&h));
+        assert_eq!(h.state().views[0].current, 3, "typing has not submitted navigation yet");
+        assert_eq!(h.state().views[0].page_input, "2", "typing replaces the entire replacement label");
+        // Selection synchronization is consumed once: later input appends at the caret.
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(1);
+        assert!(page_input_focused(&h));
+        assert_eq!(h.state().views[0].page_input, "2x", "a second character appends without selecting the label again");
+        h.key_press(egui::Key::Backspace);
+        h.run_steps(1);
+        assert_eq!(h.state().views[0].page_input, "2", "Backspace removes only the second character");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (1, "ii"), "Enter goes to physical page two");
+        assert_eq!(h.state().views[0].id, id);
+        let after = h.state().session.get(id).unwrap();
+        assert!(!after.dirty, "navigation does not edit the replacement PDF");
+        assert_eq!((after.can_undo(), after.can_redo()), (None, None));
+        assert_eq!(h.state().session.save_bytes(id).unwrap(), replacement, "typing and navigation preserve replacement PDF bytes");
+    }
 }
 
 #[test]
@@ -500,6 +887,113 @@ fn an_earlier_revision_opens_from_document_properties() {
     let doc = s.session.get(s.views[s.active.unwrap()].id).unwrap();
     assert_eq!(doc.name, "updated (revision 1).pdf");
     assert_eq!(doc.info_value("Title"), None, "as it was before the update");
+    // A repeat reuses the revision tab instead of opening another identical one.
+    let views = s.views.len();
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let original = {
+        let s = h.state();
+        ids.iter().position(|id| s.session.get(*id).is_some_and(|d| d.name == "updated.pdf")).unwrap()
+    };
+    h.state_mut().active = Some(original);
+    h.state_mut().open_revision(1);
+    h.run_steps(1);
+    let s = h.state();
+    assert_eq!(s.views.len(), views);
+    assert!(
+        s.views[s.active.unwrap()]
+            .snapshot
+            .as_ref()
+            .is_some_and(|snap| snap.kind == printcraft_ui_egui::canvas::SnapshotKind::Revision && snap.revision == 1)
+    );
+    // An unknown revision errors without opening a tab.
+    h.state_mut().active = Some(original);
+    h.state_mut().open_revision(99);
+    h.run_steps(1);
+    let s = h.state();
+    assert_eq!(s.views.len(), views);
+    assert!(h.state().toast.as_ref().is_some_and(|t| t.0.starts_with("Couldn't open revision 99")), "unknown revisions error without opening a tab");
+    // Another tab over the same original shares the snapshot: b.pdf's first revision is
+    // byte-identical to updated.pdf's (incremental saves append), so it reuses the tab.
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let other = {
+        let s = h.state();
+        ids.iter().position(|id| s.session.get(*id).is_some_and(|d| d.name == "b.pdf")).unwrap()
+    };
+    h.state_mut().active = Some(other);
+    h.state_mut().open_revision(1);
+    h.run_steps(1);
+    let s = h.state();
+    assert_eq!(s.views.len(), views);
+    assert!(
+        s.views[s.active.unwrap()]
+            .snapshot
+            .as_ref()
+            .is_some_and(|snap| snap.kind == printcraft_ui_egui::canvas::SnapshotKind::Revision && snap.revision == 1)
+    );
+}
+
+#[test]
+fn wrapped_revision_buttons_stay_above_binding_and_open_the_saved_revision() {
+    use printcraft_engine::{Edit, Session};
+    let mut bytes = std::sync::Arc::new(fixture(1));
+    // Reopen each save so the next edit appends to the preceding saved revision.
+    for revision in 2..=13 {
+        let mut source = Session::new().with_clock(|| 1_700_000_000);
+        let id = source.open("revisions.pdf", None, bytes, None).unwrap();
+        source.apply(id, Edit::SetInfo { key: "Title".into(), value: format!("Revision {revision}") }).unwrap();
+        bytes = source.save_bytes(id).unwrap();
+    }
+    for width in [1400.0, 720.0] {
+        let pdf = bytes.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).build_eframe(move |_cc| {
+            let mut app = PrintCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("revisions.pdf", None, pdf.to_vec()).unwrap();
+            app
+        });
+        let s = h.state();
+        let doc = s.session.get(s.views[s.active.unwrap()].id).unwrap();
+        assert_eq!(doc.revision_ends().len(), 13, "the fixture contains thirteen saved revisions");
+        h.state_mut().dialog = Some(Dialog::Properties(printcraft_ui_egui::PropsTab::Advanced));
+        // Let the grid and the centered dialog settle before measuring or clicking.
+        h.run_steps(6);
+        let buttons: Vec<_> = (1..13).map(|n| (n, h.get_by_label(&format!("View revision {n}")).rect())).collect();
+        let first_row = h.get_by_label("View revision 12").rect();
+        let lower_revision = buttons
+            .iter()
+            .find(|(n, rect)| *n > 1 && rect.top() > first_row.bottom())
+            .map(|(n, _)| *n)
+            .expect("revision buttons wrap to a lower row");
+        let binding = h.get_by_label("Binding").rect();
+        let left = h.get_by_label("Left Edge").rect();
+        let right = h.get_by_label("Right Edge").rect();
+        // Properties requests a fixed width. Measure its card in each viewport.
+        let card = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("dialog").with("card"))).expect("Properties is shown");
+        for (n, rect) in &buttons {
+            for (label, below) in [("Binding", binding), ("Left Edge", left), ("Right Edge", right)] {
+                assert!(rect.bottom() <= below.top(), "revision {n} overlaps {label} at viewport width {width}: {rect:?}, {below:?}");
+            }
+        }
+        for (n, rect) in &buttons {
+            assert!(
+                rect.left() >= card.left() && rect.right() <= card.right(),
+                "revision {n} escapes Properties horizontally at viewport width {width}: {rect:?}, measured card {card:?}"
+            );
+        }
+        h.get_by_label(&format!("View revision {lower_revision}")).scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label(&format!("View revision {lower_revision}")).click();
+        h.run_steps(3);
+        let s = h.state();
+        assert!(s.dialog.is_none(), "opening a revision closes Properties");
+        let view = &s.views[s.active.unwrap()];
+        let doc = s.session.get(view.id).unwrap();
+        assert_eq!(doc.name, format!("revisions (revision {lower_revision}).pdf"));
+        assert_eq!(doc.info_value("Title"), Some(format!("Revision {lower_revision}")));
+        let snapshot = view.snapshot.as_ref().expect("the saved revision opens as a snapshot");
+        assert_eq!(snapshot.kind, printcraft_ui_egui::canvas::SnapshotKind::Revision);
+        assert_eq!(snapshot.revision, lower_revision);
+    }
 }
 
 #[test]
@@ -545,6 +1039,22 @@ fn optimizer_audits_space_usage() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::Optimize), "back to the optimizer");
+}
+
+#[test]
+fn space_audit_numbers_line_up_under_their_headers() {
+    // The percentages were drawn at the dialog's far edge, away from their header and the
+    // striped rows: a right-to-left layout in a grid's last column takes the rest of the window.
+    let mut h = harness();
+    assert!(h.state_mut().execute("optimize.advanced"));
+    h.run_steps(2);
+    h.get_by_label("Audit space usage…").click();
+    h.run_steps(3);
+    let total = h.state().space_audit.iter().map(|r| r.bytes).sum::<u64>().to_string();
+    let right = |label: &str| h.get_by_label(label).rect().right();
+    assert!((right("Percentage") - right("100.00%")).abs() < 1.0, "{} vs {}", right("Percentage"), right("100.00%"));
+    assert!((right("Bytes") - right(&total)).abs() < 1.0, "{} vs {}", right("Bytes"), right(&total));
+    assert!(right("100.00%") < right("OK") + 1.0, "the table stays inside the dialog");
 }
 
 #[test]
@@ -888,6 +1398,70 @@ fn pages_panel_thumbnails_have_a_context_menu() {
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![2]));
 }
 
+/// Where the Pages panel draws page `n`'s thumbnail.
+fn thumbnail_rect(h: &Harness<'static, PrintCraftApp>, n: usize) -> egui::Rect {
+    h.get_all_by_label(&format!("Page {n}")).find(|t| t.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect()
+}
+
+/// Whether `r` lies wholly in the part of the Pages panel in view.
+fn in_panel_view(h: &Harness<'static, PrintCraftApp>, r: egui::Rect) -> bool {
+    h.state().views[0].pages_panel.expect("the Pages panel is shown").contains_rect(r)
+}
+
+/// #2781: as in Acrobat, going to a page whose thumbnail is out of sight scrolls the Pages
+/// panel to show it.
+#[test]
+fn going_to_a_far_page_scrolls_its_thumbnail_into_view() {
+    let mut h = pages_panel_harness(&[(200, 300); 30]);
+    assert!(!in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 starts out of sight");
+    h.state_mut().views[0].go_to_page(24);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 24);
+    assert!(in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25's thumbnail is shown");
+}
+
+/// #2781: a page whose thumbnail is already in view leaves the panel where it is, rather than
+/// centring the thumbnail on every page change.
+#[test]
+fn going_to_a_page_in_view_leaves_the_pages_panel_still() {
+    // Landscape pages, so several thumbnails share the panel.
+    let mut h = pages_panel_harness(&[(300, 200); 30]);
+    h.state_mut().views[0].go_to_page(14);
+    h.run_steps(4);
+    let clip = h.state().views[0].pages_panel.expect("the Pages panel is shown");
+    // The topmost thumbnail wholly in view, other than the current page's.
+    let (n, before) =
+        (1..=30).map(|n| (n, thumbnail_rect(&h, n))).find(|(n, r)| *n != 15 && in_panel_view(&h, *r)).expect("another thumbnail in view");
+    assert!(
+        (before.center().y - clip.center().y).abs() > 50.0,
+        "page {n} at {before:?} is away from the middle of {clip:?}, where centring would move it"
+    );
+    h.state_mut().views[0].go_to_page(n - 1);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, n - 1);
+    assert_eq!(thumbnail_rect(&h, n), before, "page {n}'s thumbnail stayed put");
+}
+
+/// #2781: while the user drags thumbnails, a page change does not pull the panel away from
+/// where they are being dropped.
+#[test]
+fn a_page_change_while_thumbnails_are_dragged_does_not_scroll_the_pages_panel() {
+    let mut h = pages_panel_harness(&[(200, 300); 30]);
+    let first = thumbnail_rect(&h, 1);
+    let at = first.center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    h.hover_at(at + egui::vec2(0.0, 30.0));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].panel_drag, Some(vec![0]), "page 1 is being dragged");
+    h.state_mut().views[0].go_to_page(24);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 24);
+    assert_eq!(thumbnail_rect(&h, 1), first, "the panel stays put under the drag");
+}
+
 /// #444, #186: a mouse-wheel notch scrolls as far as the scroll speed preference says;
 /// trackpad (point) scrolling keeps its own speed. The choice is saved.
 #[test]
@@ -924,12 +1498,17 @@ fn the_scroll_speed_preference_scales_mouse_wheel_notches() {
 
 /// A 40 × 30 picture (one red corner) and a harness showing a PDF of it.
 fn picture_harness() -> (image::RgbaImage, Harness<'static, PrintCraftApp>) {
+    picture_harness_sized(egui::vec2(1400.0, 900.0))
+}
+
+/// [`picture_harness`] in a window of this size.
+fn picture_harness_sized(size: egui::Vec2) -> (image::RgbaImage, Harness<'static, PrintCraftApp>) {
     let mut px = image::RgbaImage::from_pixel(40, 30, image::Rgba([10, 200, 30, 255]));
     px.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
     let mut png = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(px.clone()).write_to(&mut png, image::ImageFormat::Png).unwrap();
     let pdf = printcraft_engine::Session::new().create_from_images(&[("p.png".into(), png.into_inner())]).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+    let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
         let mut app = PrintCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("pic.pdf", None, pdf.to_vec()).unwrap();
@@ -960,6 +1539,55 @@ fn a_clicked_picture_is_selected_and_copied_in_its_original_format() {
     // Escape deselects.
     h.key_press(egui::Key::Escape);
     h.run_steps(1);
+    assert_eq!(h.state().views[i].picked_image, None);
+}
+
+/// A picture picked with the Select tool, then deleted in Edit text & images, leaves no highlight
+/// behind on the empty spot where it was.
+#[test]
+fn a_picked_picture_that_is_deleted_in_edit_mode_loses_its_highlight() {
+    let (_, mut h) = picture_harness();
+    let i = h.state().active.unwrap();
+    let id = h.state().views[i].id;
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert!(h.state().views[i].picked_image.is_some(), "picked with the Select tool");
+    // Edit text & images: click the picture, delete it with the Delete key.
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    // One frame, no more input: the highlight goes at once, it does not wait for a click.
+    h.run_steps(1);
+    assert!(h.state().session.get(id).unwrap().page_images(0).is_empty(), "the picture is gone");
+    assert_eq!(h.state().views[i].picked_image, None, "and so is its highlight");
+}
+
+/// The highlight goes in the very edit that removes the picture, not on a later frame: the window
+/// only redraws on the next input, so waiting for one leaves the highlight on screen until a click.
+#[test]
+fn an_edit_clears_the_picked_picture_at_once() {
+    let (_, mut h) = picture_harness();
+    let i = h.state().active.unwrap();
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert!(h.state().views[i].picked_image.is_some(), "picked with the Select tool");
+    let delete = printcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: printcraft_engine::ImageEdit::Delete };
+    assert!(h.state_mut().apply_edit(delete));
+    // No frame has run since the edit.
     assert_eq!(h.state().views[i].picked_image, None);
 }
 
@@ -1044,6 +1672,91 @@ fn a_picture_inside_form_artwork_under_text_is_selected_and_copied() {
     let png = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap().into_rgba8();
     assert_eq!(png.into_raw(), vec![255, 0, 0, 255, 0, 0, 255, 255]);
 }
+
+/// A picture in Edit text & images, right-clicked so its menu is open (in a tall window, so the
+/// whole menu is on screen).
+fn picture_menu() -> (image::RgbaImage, Harness<'static, PrintCraftApp>) {
+    let (px, mut h) = picture_harness_sized(egui::vec2(1400.0, 1500.0));
+    h.state_mut().set_option("quick", "edit-text").unwrap();
+    h.run_steps(3);
+    let i = h.state().active.unwrap();
+    let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    (px, h)
+}
+
+fn picture_count(h: &Harness<'static, PrintCraftApp>) -> usize {
+    let s = h.state();
+    s.session.get(s.active_ids().unwrap().1).unwrap().page_images(0).len()
+}
+
+#[test]
+fn the_picture_menu_cuts_a_picture_to_the_clipboard_and_removes_it() {
+    let (px, mut h) = picture_menu();
+    assert_eq!(picture_count(&h), 1);
+    h.get_by_label("Cut Image").click();
+    h.run_steps(3);
+    let (w, hgt, rgba) = h.state().last_copied_image.clone().expect("the image was copied first");
+    assert_eq!((w, hgt), (40, 30));
+    assert_eq!(rgba, px.into_raw());
+    assert_eq!(picture_count(&h), 0, "then taken off the page");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(picture_count(&h), 1, "one undo step puts it back");
+}
+
+#[test]
+fn the_picture_menu_marks_a_picture_for_redaction() {
+    let (_, mut h) = picture_menu();
+    let marks = |h: &Harness<'static, PrintCraftApp>| {
+        let s = h.state();
+        s.session.get(s.active_ids().unwrap().1).unwrap().redaction_marks()
+    };
+    assert_eq!(marks(&h), 0);
+    h.get_by_label("Redact Image").click();
+    h.run_steps(3);
+    assert_eq!(marks(&h), 1);
+    assert_eq!(picture_count(&h), 1, "marked, not yet removed: Redact a PDF applies it");
+}
+
+#[test]
+fn the_picture_menu_opens_link_properties_and_recognize_text_for_the_picture() {
+    let (_, mut h) = picture_menu();
+    h.get_by_label("Create Link…").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(printcraft_ui_egui::Dialog::LinkProps)));
+    let draft = h.state().link_draft.clone().expect("the link draft");
+    assert_eq!(draft.page, 0);
+    assert!(draft.rect[2] > draft.rect[0] && draft.rect[3] > draft.rect[1], "over the picture: {:?}", draft.rect);
+
+    let (_, mut h) = picture_menu();
+    h.get_by_label("Recognize Text…").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(printcraft_ui_egui::Dialog::RecognizeText)));
+    let d = &h.state().ocr_draft;
+    assert_eq!((format!("{:?}", d.pages), d.from, d.to), ("Range".to_string(), 1, 1));
+}
+
+/// The menu is longer than the picture is tall, so most items lie outside it: the pointer moving
+/// onto them must not close the menu (it used to be drawn only while the pointer was over the
+/// picture, so Delete and the items below the page could not be clicked).
+#[test]
+fn every_item_of_the_picture_menu_can_be_clicked_outside_the_picture() {
+    let (_, mut h) = picture_menu();
+    let s = h.state();
+    let page = s.views[s.active.unwrap()].page_screen_rect(0).expect("on screen");
+    let delete = h.get_by_label("Delete").rect();
+    assert!(delete.center().y > page.bottom(), "Delete lies below the page: {delete:?} vs {page:?}");
+    assert_eq!(picture_count(&h), 1);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert_eq!(picture_count(&h), 0);
+}
+
 #[test]
 fn mouse_wheel_scrolls_while_selecting_text() {
     let mut h = harness();
@@ -1206,6 +1919,9 @@ fn selection_mouse_wheel_resumes_after_point_scrolling() {
         });
         h.run_steps(delay);
         let before = h.state().views[view].page_screen_rect(0).unwrap().top();
+        // One Line notch follows this platform's configured speed. A Point tail can
+        // still add travel in the one-frame case, so require at least the whole notch.
+        let expected = h.ctx.options(|o| o.input_options.line_scroll_speed);
         h.event(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, -1.0),
@@ -1215,6 +1931,84 @@ fn selection_mouse_wheel_resumes_after_point_scrolling() {
         h.run_steps(40);
         let after = h.state().views[view].page_screen_rect(0).unwrap().top();
         eprintln!("Point-to-Line delay={delay}: point={}, line={}", start - before, before - after);
-        assert!(before - after > 50.0, "Line input must resume after Point: {before} -> {after}");
+        let travelled = before - after;
+        assert!(travelled >= expected - 1.0, "Line input must resume after Point at the configured speed: {travelled} vs {expected}");
+        if delay >= 16 {
+            assert!((travelled - expected).abs() < 1.0, "settled Line travel must match its configured speed: {travelled} vs {expected}");
+        }
     }
+}
+
+#[test]
+fn page_command_without_selection_acts_on_the_page_pressed() {
+    let mut h = harness(); // b.pdf (2 pages) is active
+    h.state_mut().set_option("zoom", "50").unwrap();
+    h.run_steps(3);
+    // Page 2 was gone to earlier; both pages show whole, so it stays current.
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(5);
+    let at = |h: &Harness<'static, PrintCraftApp>, page: usize| {
+        let v = &h.state().views[h.state().active.unwrap()];
+        v.page_screen_rect(page).expect("page on screen").center()
+    };
+    let first = at(&h, 0);
+    h.event(egui::Event::PointerMoved(first));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: first, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: first, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert_eq!(h.state().views[h.state().active.unwrap()].current, 0, "the pressed page is the current one");
+    h.state_mut().execute("page.rotate");
+    h.run_steps(3);
+    let s = h.state();
+    let d = s.session.get(s.views[s.active.unwrap()].id).unwrap();
+    assert_eq!(d.info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [90, 0]);
+}
+
+/// ↓ / ↑ follow the Scroll speed preference as the wheel does (#985): Fast reaches the next page
+/// in about half the presses of Normal, and Slow takes about twice as many.
+#[test]
+fn arrow_keys_follow_the_scroll_speed_preference() {
+    use egui::Key;
+    let lines_to_page_2 = |speed: &str| {
+        let mut h = harness();
+        h.state_mut().active = Some(0);
+        h.state_mut().set_option("scroll_speed", speed).unwrap();
+        h.run_steps(4);
+        let mut n = 0;
+        while h.state().views[0].current == 0 {
+            h.key_press(Key::ArrowDown);
+            h.run_steps(2);
+            n += 1;
+            assert!(n < 1000, "↓ never reached page 2 at {speed}");
+        }
+        n
+    };
+    let (slow, normal, fast) = (lines_to_page_2("slow"), lines_to_page_2("normal"), lines_to_page_2("fast"));
+    assert!(fast * 3 < normal * 2 && normal * 3 < slow * 2, "presses to page 2: slow {slow}, normal {normal}, fast {fast}");
+}
+
+/// #2665: next to a very wide page the normal pages sit far to its right, outside the window.
+/// Going to one changed the page counter but kept the horizontal scroll, so it stayed out of
+/// sight; as in Acrobat, it is brought into view.
+#[test]
+fn go_to_page_brings_the_page_into_view_horizontally() {
+    use printcraft_ui_egui::canvas::Fit;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PrintCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("wide.pdf", None, sized_fixture(&[(595, 842), (595, 842), (595, 842), (6000, 2000)])).unwrap();
+        app.views[0].fit = Fit::None;
+        app.views[0].zoom = 1.0;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 starts off-screen, right of the window");
+    h.state_mut().views[0].go_to_page(2);
+    h.run_steps(4);
+    let v = &h.state().views[0];
+    assert_eq!(v.current, 2);
+    let (r, vp) = (v.page_screen_rect(2).expect("page 3 on screen"), v.viewport_rect());
+    assert!(r.left() >= vp.left() && r.right() <= vp.right(), "page 3 at {r:?}, viewport {vp:?}");
 }

@@ -27,7 +27,7 @@ fn harness() -> Harness<'static, PrintCraftApp> {
 
 fn marks(h: &Harness<'static, PrintCraftApp>) -> Vec<MarkKind> {
     let s = h.state();
-    s.session.get(s.views[0].id).unwrap().marks.clone()
+    s.session.get(s.views[0].id).unwrap().marks().to_vec()
 }
 
 #[test]
@@ -95,4 +95,38 @@ fn backgrounds_and_watermarks_from_a_file() {
     assert_eq!(marks(&h), vec![MarkKind::Background]);
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add background"));
+}
+
+/// Pages from 1 to 1 stays one page: the dialog used to turn "to" back into the last page on
+/// every frame while both were 1, so only page 1 could not be chosen alone. The field starts on
+/// the last page.
+#[test]
+fn page_range_from_one_to_one_selects_only_the_first_page() {
+    let mut h = harness();
+    h.state_mut().execute("edit.background");
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.range.pages(3), [0, 1, 2]);
+    h.get_by_label("Pages from").click();
+    h.run_steps(2);
+    let range = h.state().marks_draft.range;
+    assert_eq!((range.from, range.to), (1, 3), "from the first page to the last");
+    h.state_mut().marks_draft.range.to = 1;
+    h.run_steps(3);
+    let range = h.state().marks_draft.range;
+    assert_eq!((range.from, range.to), (1, 1), "the range stays as typed");
+    h.get_by_label("Applies to 1 page");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.marks(), [MarkKind::Background]);
+    // Rendered: page 1 has the (default cream) background, page 2 is still blank.
+    let mut r = printcraft_render::PageRenderer::new(doc.bytes.clone(), printcraft_render::RenderConfig::default());
+    let corner = |r: &mut printcraft_render::PageRenderer, page: usize| {
+        let p = r.render(printcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        p.rgba[..4].to_vec()
+    };
+    assert_eq!(corner(&mut r, 0), vec![255, 255, 217, 255], "page 1 has the background");
+    assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
 }

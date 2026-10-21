@@ -1,6 +1,8 @@
 //! Addresses a document asks to open (links, button URI actions, `app.launchURL`) wait for the
 //! user's permission, and anything but a web or email address is refused (#90, #91).
 
+mod support;
+
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use printcraft_ui_egui::{LinkOrigin, PendingLink, PrintCraftApp};
@@ -175,6 +177,7 @@ fn a_local_gotor_link_opens_in_a_tab_and_applies_its_destination() {
     std::fs::write(dir.join("target.pdf"), linked_pages(2, None)).unwrap();
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /FitH 200]");
     click_remote_link(&mut h);
+    support::wait_until(&mut h, "remote document", |app| app.views.len() == 2);
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().active, Some(1));
     assert_eq!(h.state().views[1].current, 1, "the remote page destination is applied");
@@ -192,16 +195,24 @@ fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {
 
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /Fit]");
     click_remote_link(&mut h);
+    support::wait_until(&mut h, "remote password prompt", |app| app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf"));
     assert!(h.state().password_prompt.is_some());
     assert_eq!(h.state().views.len(), 1);
     h.state_mut().submit_password(Some("wrong-password".into()));
+    support::wait_until(&mut h, "wrong-password reply", |app| {
+        app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf" && p.error.as_deref() == Some("Incorrect password. Try again."))
+    });
     assert!(h.state().password_prompt.as_ref().is_some_and(|p| p.error.is_some()));
     h.state_mut().submit_password(Some("test-password".into()));
+    support::wait_until(&mut h, "authenticated remote document", |app| app.views.len() == 2 && app.password_prompt.is_none());
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().views[1].current, 1, "the destination survives a wrong-password retry");
 
     let mut cancelled = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "[1 /Fit]");
     click_remote_link(&mut cancelled);
+    support::wait_until(&mut cancelled, "cancelled target password prompt", |app| {
+        app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf")
+    });
     cancelled.state_mut().submit_password(None);
     assert_eq!(cancelled.state().views.len(), 1, "cancelling does not leave a half-open target tab");
 }
@@ -225,6 +236,7 @@ fn a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it() {
     for target in targets {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), target, "[0 /Fit]");
         click_remote_link(&mut h);
+        support::wait_until(&mut h, "relative invalid target refusal", |app| app.toast.is_some());
         assert_eq!(h.state().views.len(), 1, "{target} opens no tab");
         let toast = &h.state().toast.as_ref().unwrap().0;
         assert!(toast.contains("not a regular file"), "{target}: {toast}");
@@ -414,17 +426,21 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
     assert!(h.state().toast.is_none(), "the nonexistent target is not accessed before consent");
     assert!(h.state().password_prompt.is_none());
     // The target only appears AFTER the confirmation is displayed.
-    std::fs::write(&target, linked_pages(2, None)).unwrap();
+    let target_bytes = linked_pages(2, None);
+    std::fs::write(&target, &target_bytes).unwrap();
     h.state_mut().open_bytes("other.pdf", None, fixture()).unwrap();
     assert_eq!(h.state().active, Some(1));
     h.run_steps(3);
     h.get_by_label("Allow").click();
-    h.run_steps(3);
+    support::wait_until(&mut h, "approved absolute target", |app| app.views.len() == 3);
     assert!(h.state().pending_remote_link.is_none());
     assert_eq!(h.state().views.len(), 3);
     assert_eq!(h.state().views[2].current, 1);
     assert_eq!(h.state().views[2].fit, printcraft_ui_egui::canvas::Fit::Width);
     assert_eq!(h.state().active, Some(2));
+    let target_doc = h.state().session.get(h.state().views[2].id).unwrap();
+    assert_eq!(target_doc.path.as_deref(), Some(file));
+    assert_eq!(target_doc.bytes.as_slice(), target_bytes.as_slice());
     assert!(!h.state().session.get(source).unwrap().dirty);
     assert_eq!(h.state().last_opened_url, None);
     std::fs::remove_dir_all(dir).unwrap();
@@ -471,25 +487,43 @@ fn consenting_to_absolute_gotor_still_validates_the_target() {
     std::fs::write(dir.join("notes.txt"), b"text").unwrap();
     std::fs::write(dir.join("broken.pdf"), b"not a PDF").unwrap();
     #[cfg_attr(not(unix), allow(unused_mut))]
-    let mut cases = vec!["missing.pdf", "folder.pdf", "notes.txt", "broken.pdf"];
+    let mut cases = vec![
+        ("missing.pdf", "Couldn't follow linked PDF: the linked file couldn't be read:"),
+        ("folder.pdf", "Couldn't follow linked PDF: the linked path is not a regular file"),
+        ("notes.txt", "Couldn't follow linked PDF: the linked file is not a .pdf file"),
+        ("broken.pdf", "Couldn't open broken.pdf: the file is not a readable PDF:"),
+    ];
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink("/dev/zero", dir.join("zero.pdf")).unwrap();
-        cases.push("zero.pdf");
+        cases.push(("zero.pdf", "Couldn't follow linked PDF: the linked path is not a regular file"));
         std::fs::File::create(dir.join("large.pdf")).unwrap().set_len(printcraft_engine::MAX_REMOTE_DOCUMENT_BYTES + 1).unwrap();
-        cases.push("large.pdf");
+        cases.push(("large.pdf", "Couldn't follow linked PDF: the linked file is too large to open"));
     }
-    for name in cases {
+    for (name, expected_error) in cases {
         let target = dir.join(name);
         let mut h = remote_harness(None, target.to_str().unwrap(), "[0 /Fit]");
+        let source = h.state().views[0].id;
+        let before = h.state().session.get(source).unwrap().bytes.clone();
         click_remote_link(&mut h);
         assert!(h.state().pending_remote_link.is_some());
         assert!(h.state().toast.is_none(), "{name} isn't checked before consent");
         h.get_by_label("Allow").click();
-        h.run_steps(3);
+        support::wait_until(&mut h, "approved invalid target refusal", |app| {
+            app.toast.as_ref().is_some_and(|(message, _)| message.starts_with(expected_error))
+        });
         assert!(h.state().pending_remote_link.is_none());
         assert_eq!(h.state().views.len(), 1, "{name}");
         assert!(h.state().toast.is_some(), "{name} is refused after consent");
+        assert_eq!(h.state().session.docs().len(), 1);
+        assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(source));
+        assert_eq!(h.state().views[0].current, 0);
+        let doc = h.state().session.get(source).unwrap();
+        assert_eq!(doc.bytes, before);
+        assert!(!doc.dirty);
+        assert!(doc.can_undo().is_none());
+        assert!(h.state().password_prompt.is_none());
+        assert!(h.state().last_opened_url.is_none());
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -508,16 +542,23 @@ fn an_approved_absolute_gotor_preserves_password_retries_and_cancellation() {
         click_remote_link(&mut h);
         assert!(h.state().password_prompt.is_none());
         h.get_by_label("Allow").click();
-        h.run_steps(3);
+        support::wait_until(&mut h, "approved encrypted target prompt", |app| {
+            app.password_prompt.as_ref().is_some_and(|p| p.name == "encrypted.pdf")
+        });
         assert!(h.state().password_prompt.is_some());
         h.state_mut().submit_password(Some("wrong-password".into()));
+        support::wait_until(&mut h, "absolute target wrong-password reply", |app| {
+            app.password_prompt.as_ref().is_some_and(|p| p.name == "encrypted.pdf" && p.error.as_deref() == Some("Incorrect password. Try again."))
+        });
         assert!(h.state().password_prompt.as_ref().unwrap().error.is_some());
         assert_eq!(h.state().views.len(), 1);
         if cancel {
             h.state_mut().submit_password(None);
+            assert!(h.state().password_prompt.is_none());
             assert_eq!(h.state().views.len(), 1);
         } else {
             h.state_mut().submit_password(Some("test-password".into()));
+            support::wait_until(&mut h, "authenticated absolute target", |app| app.password_prompt.is_none() && app.views.len() == 2);
             assert_eq!(h.state().views.len(), 2);
             assert_eq!(h.state().views[1].current, 1);
         }

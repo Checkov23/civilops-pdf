@@ -17,6 +17,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(feature = "mcp")]
+mod automation_args;
 mod batch;
 
 use std::io::Write;
@@ -33,8 +35,14 @@ use printcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, 
 macro_rules! mcp_usage {
     () => {
         "\
-printcraft-cli mcp    [--root DIR] [--compact]              MCP server on stdin/stdout (opt-in)
+printcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
+                                                           MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
+                                                           --automation-read-root / --automation-write-root confine the files the
+                                                           agent's tools read (open, combine, import, fonts, certificates…) and
+                                                           write (save, export, extract, split, reports…) to DIR, links followed;
+                                                           a root left out grants none of its access. --root, when also given,
+                                                           applies as well
 "
     };
 }
@@ -49,13 +57,14 @@ macro_rules! mcp_usage {
 const USAGE: &str = concat!(
     "\
 printcraft-cli info   <file.pdf> [--password PW]            document summary as JSON
+                                                          (includes any declared PDF/A or PDF/UA level)
 printcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 printcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
 printcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
                       (options run in order; page numbers refer to the document after the earlier options)
 printcraft-cli combine <a.pdf> <b.pdf> … --out combined.pdf
-printcraft-cli extract <in.pdf> --pages 1,3,5 --out out.pdf
+printcraft-cli extract <in.pdf> --pages 1,3,5-8 --out out.pdf    (pages and ranges, in the order given)
 printcraft-cli split   <in.pdf> (--every N | --before 3,7) [--out-dir DIR]
 printcraft-cli check  <files or dirs…> [--timeout 20] [--dpi 36] [--json out.json]
 printcraft-cli audit  <file.pdf> [--password PW]            find faux redactions (fails when found)
@@ -64,7 +73,8 @@ printcraft-cli batch <files or dirs...> --steps convert,ocr,optimize --out-dir D
                       [--ppi 150] [--quality 60] [--dpi 300] [--language en] [--ocr-all-pages]
 printcraft-cli tools                                       automation tools and their JSON Schemas
 printcraft-cli run    <tool> [key=value …] [--root DIR] [--out image.png]
-printcraft-cli run    --script steps.json [--root DIR]      [{\"tool\": \"doc_open\", \"args\": {…}}, …]
+printcraft-cli run    --script steps.json [--root DIR] [--report]
+                      [{\"tool\": \"doc_open\", \"args\": {…}}, …]; --report prints one JSON document for the run
 ",
     mcp_usage!(),
     "\
@@ -161,15 +171,20 @@ fn audit(args: &[String]) -> Result<(), CliError> {
     validate_options("audit", args, AUDIT_OPTIONS)?;
     let path = *positional(args).first().ok_or("audit: missing file")?;
     let bytes = read(path)?;
-    let doc = printcraft_cos::Document::open_with_password(bytes, flag(args, "--password")).map_err(|e| format!("{path}: {e}"))?;
+    let password = flag(args, "--password");
+    let doc = printcraft_cos::Document::open_with_password(bytes.clone(), password).map_err(|e| format!("{path}: {e}"))?;
     let findings = printcraft_audit::audit_redactions(&doc).map_err(|e| format!("{path}: {e}"))?;
+    // Rectangles in points from the top-left of the displayed page, as `doc_audit_redactions`
+    // reports them; the page geometry is read only when there is something to place.
+    let info = if findings.is_empty() { None } else { Some(inspect(bytes, password).map_err(|e| format!("{path}: {e}"))?) };
     let items: Vec<serde_json::Value> = findings
         .into_iter()
         .map(|f| {
+            let rect = f.rect.map(|v| v as f32);
             serde_json::json!({
                 "page": f.page + 1,
                 "kind": f.kind.id(),
-                "rect": f.rect,
+                "rect": info.as_ref().map_or(rect, |i| printcraft_automation::view_rect(i, f.page, rect)),
                 "covered_text": f.covered_text,
             })
         })
@@ -251,6 +266,7 @@ const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--root", takes_value: true },
     OptionSpec { name: "--script", takes_value: true },
     OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--report", takes_value: false },
 ];
 const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
 
@@ -283,28 +299,45 @@ fn info(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args).first().ok_or("info: missing file")?;
     let bytes = read(path)?;
     let password = flag(args, "--password");
-    let info = inspect(bytes.clone(), password).map_err(|e| e.to_string())?;
+    let mut info = inspect(bytes.clone(), password).map_err(|e| e.to_string())?;
+    let pdf_pages = info.pages.len();
+    let acroform_fields = info.fields.len();
     // Dynamic XFA forms: say what laying the template out gives (what the app shows).
     let xfa_layout = (info.xfa == Some(printcraft_render::Xfa::Dynamic))
         .then(|| {
             let mut s = printcraft_engine::Session::new();
             let id = s.open("info.pdf", None, bytes.clone(), password).ok()?;
             let d = s.get(id)?;
-            d.xfa.as_ref().map(|x| serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings }))
+            d.xfa.as_ref().map(|x| {
+                info = d.info.clone();
+                // The in-memory layout is an appended revision, not the file being inspected.
+                info.file_size = bytes.len();
+                serde_json::json!({ "pages": x.pages, "fields": x.fields, "warnings": x.warnings })
+            })
         })
         .flatten();
+    // What the document declares as a standard, read the way the Standards panel reads it, so
+    // `info` and the app agree. A file that declares nothing leaves these null and empty.
+    let declared =
+        printcraft_cos::Document::open_with_password(bytes.clone(), password).map(|doc| printcraft_preflight::declared(&doc)).unwrap_or_default();
     let json = serde_json::json!({
         "file": path,
         "pdf_version": info.pdf_version,
         "file_size": info.file_size,
         "pages": info.pages.len(),
+        "pdf_pages": pdf_pages, "acroform_fields": acroform_fields,
         "first_page_pt": info.pages.first().map(|p| [p.width, p.height]),
         "title": info.title, "author": info.author, "producer": info.producer, "creator": info.creator,
         "encrypted": info.encrypted, "tagged": info.tagged, "javascript": info.has_javascript,
+        "pdfa": declared.pdfa.as_ref().map(|(part, conformance)| format!("PDF/A-{part}{}", conformance.to_lowercase())),
+        "pdfua": declared.pdfua,
+        "output_intents": declared.output_intents,
         "xfa": info.xfa.map(|x| match x { printcraft_render::Xfa::Static => "static", printcraft_render::Xfa::Dynamic => "dynamic" }),
         "xfa_layout": xfa_layout,
         "bookmarks": info.outline.len(), "annotations": info.annotations.len(), "fields": info.fields.len(),
         "links": info.links.len(), "layers": info.layers.len(), "attachments": info.attachments.len(),
+        "transitions": info.transitions.len(),
+        "custom_properties": info.custom.len(),
         "page_labels": info.pages.iter().take(8).map(|p| p.label.clone()).collect::<Vec<_>>(),
         "warnings": info.warnings,
     });
@@ -332,7 +365,19 @@ fn text(args: &[String]) -> Result<(), CliError> {
         }
     }
     let password = flag(args, "--password");
-    let bytes = read(path)?;
+    let mut bytes = read(path)?;
+    // Printing the text is copying it, so ask what `text_extract` asks (#1645): without the
+    // permissions password, a document that doesn't allow copying gives no text.
+    let mut session = printcraft_engine::Session::new();
+    if let Some(doc) = session.open(path, None, bytes.clone(), password).ok().and_then(|id| session.get(id)) {
+        // The engine's hint is about editing in the app; on the command line the way in is
+        // `--password`.
+        doc.check_copying()
+            .map_err(|_| "text: the document's permissions don't allow copying its text; pass the owner password with --password to extract it")?;
+        if doc.xfa.is_some() {
+            bytes = doc.display.clone();
+        }
+    }
     let mut r = PageRenderer::new(bytes.clone(), RenderConfig { password: password.map(Arc::from), ..Default::default() });
     // A document the renderer could not open (wrong or missing password, unparseable file) has
     // no pages, and "extract every page" of nothing would print nothing and exit 0 (#132). Ask
@@ -342,15 +387,6 @@ fn text(args: &[String]) -> Result<(), CliError> {
         if !info.pages.is_empty() {
             return Err("text: the document could not be parsed".into());
         }
-    }
-    // Printing the text is copying it, so ask what `text_extract` asks (#1645): without the
-    // permissions password, a document that doesn't allow copying gives no text.
-    let mut session = printcraft_engine::Session::new();
-    if let Some(doc) = session.open(path, None, bytes, password).ok().and_then(|id| session.get(id)) {
-        // The engine's hint is about editing in the app; on the command line the way in is
-        // `--password`.
-        doc.check_copying()
-            .map_err(|_| "text: the document's permissions don't allow copying its text; pass the owner password with --password to extract it")?;
     }
     let pages: Vec<usize> = match selected_page {
         Some(page) => vec![page],
@@ -376,9 +412,30 @@ fn text(args: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// 1-based page list ("1,3,5") → 0-based indices.
+/// The most pages one `A-B` range may name: a bound on what a typed range can allocate.
+const MAX_RANGE: usize = 1_000_000;
+
+/// 1-based pages ("1,3,5-8": single pages and inclusive ranges, in the order given) → 0-based
+/// indices (#1923).
 fn page_list(s: &str) -> Result<Vec<usize>, String> {
-    s.split(',').map(|p| p.trim().parse::<usize>().ok().filter(|n| *n > 0).map(|n| n - 1).ok_or(format!("bad page number {p:?}"))).collect()
+    let number = |t: &str, item: &str| t.trim().parse::<usize>().ok().filter(|n| *n > 0).ok_or_else(|| format!("bad page number {item:?}"));
+    let mut out = Vec::new();
+    for item in s.split(',').map(str::trim) {
+        match item.split_once('-') {
+            Some((from, to)) => {
+                let (from, to) = (number(from, item)?, number(to, item)?);
+                if to < from {
+                    return Err(format!("bad page range {item:?}: it ends before it starts"));
+                }
+                if to - from >= MAX_RANGE {
+                    return Err(format!("bad page range {item:?}: more than {MAX_RANGE} pages"));
+                }
+                out.extend(from - 1..to);
+            }
+            None => out.push(number(item, item)? - 1),
+        }
+    }
+    Ok(out)
 }
 
 /// The options `edit` understands, for its "unknown option" message.
@@ -469,7 +526,16 @@ fn edit(args: &[String]) -> Result<(), CliError> {
         session.apply(id, e).map_err(|e| e.to_string())?;
     }
     let bytes = if full { session.save_full_bytes(id) } else { session.save_bytes(id) }.map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    // As the app's Save: the file must reopen with its pages before it replaces anything (#1698).
+    session.check_save(id, &bytes).map_err(|e| e.to_string())?;
+    write_pdf(Path::new(out), &bytes)
+}
+
+/// Write a PDF a command produced, through a staging file beside the target (#2166): a write
+/// that fails, or `--out` naming the input, never leaves a truncated file where a good one was.
+fn write_pdf(out: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    use printcraft_platform::staging::{StagingName, write_atomically};
+    write_atomically(out, bytes, StagingName::SuffixThenTag).map_err(|e| format!("{}: {e}", out.display()).into())
 }
 
 fn file_stem(path: &str) -> String {
@@ -485,7 +551,7 @@ fn combine(args: &[String]) -> Result<(), CliError> {
     }
     let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
     let bytes = printcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    write_pdf(Path::new(out), &bytes)
 }
 
 fn extract(args: &[String]) -> Result<(), CliError> {
@@ -496,7 +562,7 @@ fn extract(args: &[String]) -> Result<(), CliError> {
     let mut session = printcraft_engine::Session::new();
     let id = session.open(path, None, read(path)?, flag(args, "--password")).map_err(|e| e.to_string())?;
     let bytes = session.extract(id, &pages).map_err(|e| e.to_string())?;
-    std::fs::write(out, bytes.as_slice()).map_err(|e| format!("{out}: {e}").into())
+    write_pdf(Path::new(out), &bytes)
 }
 
 fn split(args: &[String]) -> Result<(), CliError> {
@@ -518,7 +584,7 @@ fn split(args: &[String]) -> Result<(), CliError> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("split: --out-dir {}: {e}", dir.display()))?;
     for (a, b, bytes) in parts {
         let name = dir.join(if a == b { format!("{stem}-p{a}.pdf") } else { format!("{stem}-p{a}-{b}.pdf") });
-        std::fs::write(&name, bytes.as_slice()).map_err(|e| format!("{}: {e}", name.display()))?;
+        write_pdf(&name, &bytes)?;
         stdout_line(format_args!("{}", name.display()))?;
     }
     Ok(())
@@ -539,16 +605,25 @@ fn render(args: &[String]) -> Result<(), CliError> {
         Some("pam") => None,
         _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
     };
-    let mut r = PageRenderer::new(
-        read(path)?,
-        RenderConfig { password: flag(args, "--password").map(Arc::from), reject_oversize: true, ..Default::default() },
-    );
+    // The app renders a display copy that draws comments missing their /AP streams; the CLI
+    // must agree with it (and with independent viewers), while keeping the file it reads intact.
+    let bytes = read(path)?;
+    let password = flag(args, "--password");
+    let display = if inspect(bytes.clone(), password).is_ok_and(|info| info.xfa == Some(printcraft_render::Xfa::Dynamic)) {
+        let mut session = printcraft_engine::Session::new();
+        let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
+        session.get(id).ok_or("render: the document could not be opened")?.display.clone()
+    } else {
+        printcraft_engine::display_bytes_for(bytes, password)
+    };
+    let mut r = PageRenderer::new(display, RenderConfig { password: password.map(Arc::from), reject_oversize: true, ..Default::default() });
     let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
     if let Some(e) = p.error {
         return Err(e.into());
     }
     let bytes = match format {
-        Some(f) => printcraft_engine::export::encode_image(p.width, p.height, &p.rgba, f)?,
+        // With `reject_oversize` the page is drawn at `--dpi` or not at all, so the file can say so.
+        Some(f) => printcraft_engine::export::encode_image(p.width, p.height, &p.rgba, f, f64::from(dpi))?,
         None => {
             // PAM (netpbm RGB_ALPHA): the raw premultiplied pixels, for tools that read it.
             let mut pam = format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", p.width, p.height).into_bytes();
@@ -757,22 +832,88 @@ fn print_output(auto: &printcraft_automation::Automation, content: Vec<printcraf
                     let written = auto.write_output(path, &data).map_err(|e| e.to_string())?;
                     stdout_line(format_args!("{}", serde_json::json!({ "image": written.to_string_lossy(), "width": width, "height": height })))?;
                 }
-                None => stdout_line(format_args!(
-                    "{}",
-                    serde_json::json!({ "image": "png", "width": width, "height": height, "bytes": data.len(), "hint": "pass --out file.png to save it" })
-                ))?,
+                None => stdout_line(format_args!("{}", png_summary(&data, width, height)))?,
             },
         }
     }
     Ok(())
 }
 
+/// What a PNG result is reported as when it isn't written to a file.
+fn png_summary(data: &[u8], width: u32, height: u32) -> serde_json::Value {
+    serde_json::json!({ "image": "png", "width": width, "height": height, "bytes": data.len(), "hint": "pass --out file.png to save it" })
+}
+
+/// A tool's result as JSON values, for the `--report` of a script. Same content as
+/// [`print_output`], collected instead of printed.
+fn output_values(
+    auto: &printcraft_automation::Automation,
+    content: Vec<printcraft_automation::Content>,
+    out: Option<&str>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut values = Vec::new();
+    for c in content {
+        values.push(match c {
+            printcraft_automation::Content::Json(v) => v,
+            printcraft_automation::Content::Png { data, width, height } => match out {
+                Some(path) => {
+                    let written = auto.write_output(path, &data).map_err(|e| e.to_string())?;
+                    serde_json::json!({ "image": written.to_string_lossy(), "width": width, "height": height })
+                }
+                None => png_summary(&data, width, height),
+            },
+        });
+    }
+    Ok(values)
+}
+
+/// Run a script and print one JSON document: per step its number, tool and `ok`/`error`/`skipped`
+/// with the result or the message. The first failing step ends the run, as without `--report`;
+/// the steps after it are listed as skipped and the exit status is the same.
+fn run_script_report(auto: &mut printcraft_automation::Automation, steps: &[serde_json::Value]) -> Result<(), CliError> {
+    let mut report = Vec::with_capacity(steps.len());
+    let mut failure: Option<String> = None;
+    for (i, step) in steps.iter().enumerate() {
+        let n = i + 1;
+        let tool = step["tool"].as_str();
+        if failure.is_some() {
+            report.push(serde_json::json!({ "step": n, "tool": tool, "status": "skipped" }));
+            continue;
+        }
+        let outcome = match tool {
+            None => Err(format!("step {n}: missing \"tool\"")),
+            Some(t) => auto
+                .call(t, &step["args"])
+                .map_err(|e| e.to_string())
+                .and_then(|content| output_values(auto, content, step["out"].as_str()))
+                .map_err(|e| format!("step {n} ({t}): {e}")),
+        };
+        match outcome {
+            Ok(result) => report.push(serde_json::json!({ "step": n, "tool": tool, "status": "ok", "result": result })),
+            Err(message) => {
+                report.push(serde_json::json!({ "step": n, "tool": tool, "status": "error", "error": message }));
+                failure = Some(message);
+            }
+        }
+    }
+    let document = serde_json::json!({ "ok": failure.is_none(), "steps": report });
+    stdout_line(format_args!("{}", serde_json::to_string_pretty(&document).unwrap_or_default()))?;
+    failure.map_or(Ok(()), |message| Err(CliError::Message(message)))
+}
+
 fn run(args: &[String]) -> Result<(), CliError> {
     validate_options("run", args, RUN_OPTIONS)?;
+    let report = args.iter().any(|a| a == "--report");
+    if report && flag(args, "--script").is_none() {
+        return Err("run: --report needs --script".to_string().into());
+    }
     let mut auto = automation(args)?;
     if let Some(script) = flag(args, "--script") {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
         let steps: Vec<serde_json::Value> = serde_json::from_str(&text).map_err(|e| format!("{script}: {e}"))?;
+        if report {
+            return run_script_report(&mut auto, &steps);
+        }
         for (i, step) in steps.iter().enumerate() {
             let tool = step["tool"].as_str().ok_or(format!("step {}: missing \"tool\"", i + 1))?;
             let content = auto.call(tool, &step["args"]).map_err(|e| format!("step {} ({tool}): {e}", i + 1))?;
@@ -794,11 +935,45 @@ fn run(args: &[String]) -> Result<(), CliError> {
     print_output(&auto, content, flag(args, "--out"))
 }
 
+/// Take `--automation-read-root` / `--automation-write-root` (each `--flag DIR` or `--flag=DIR`,
+/// once) out of `args`, and open the roots, which must be existing folders. Returns the arguments
+/// that are left. A malformed root flag is an error, never a root silently left out.
+#[cfg(feature = "mcp")]
+fn automation_roots(
+    command: &str,
+    args: &[String],
+) -> Result<(Option<Arc<printcraft_automation::file_access::AutomationRoots>>, Vec<String>), String> {
+    let mut found = automation_args::AutomationArgs::new(None, None);
+    let mut left = Vec::new();
+    let mut it = args.iter().cloned();
+    while let Some(arg) = it.next() {
+        if !found.consume(&arg, &mut it).map_err(|e| format!("{command}: {e}"))? {
+            left.push(arg);
+        }
+    }
+    let roots = printcraft_automation::file_access::AutomationRoots::new(found.read_root.as_deref(), found.write_root.as_deref())
+        .map_err(|e| format!("{command}: {e}"))?;
+    Ok((roots, left))
+}
+
 #[cfg(feature = "mcp")]
 fn mcp(args: &[String]) -> Result<(), CliError> {
+    let (roots, args) = automation_roots("mcp", args)?;
+    let args = args.as_slice();
     validate_options("mcp", args, MCP_OPTIONS)?;
     let compact = args.iter().any(|a| a == "--compact");
-    let mut server = printcraft_automation::mcp::McpServer::new(automation(args)?).with_compact(compact);
+    let mut auto = automation(args)?;
+    if let Some(roots) = roots {
+        let show = |root: Option<&Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "printcraft-cli: files confined: read root {}, write root {}",
+            show(roots.read_root()),
+            show(roots.write_root())
+        );
+        auto = auto.with_automation_roots(Some(roots));
+    }
+    let mut server = printcraft_automation::mcp::McpServer::new(auto).with_compact(compact);
     let _ = writeln!(
         std::io::stderr().lock(),
         "printcraft-cli: MCP server on stdio (protocol {}{}); close stdin to stop",

@@ -1207,6 +1207,13 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             }
             border(&mut d);
             rich_text(&mut d);
+            // The text is laid out for the page as displayed, like a stamp's label.
+            if !matches!(new.shape, Shape::Callout { .. }) {
+                let turn = printcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+                if matches!(turn, 90 | 180 | 270) {
+                    d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
+                }
+            }
         }
         _ => {}
     }
@@ -1940,13 +1947,53 @@ pub fn set_style(
     redraw_or_restore(doc, r, before)
 }
 
-/// Whether a comment of this subtype has an interior that can be filled (`/IC`: rectangles,
-/// ovals, polygons and clouds, §12.5.6.8–9).
-pub fn fillable(subtype: &str) -> bool {
-    matches!(subtype, "Square" | "Circle" | "Polygon")
+/// Change the font size of a text box, typewriter text or callout (`/DA` keeps its colour; the
+/// rich-text strings follow) and redraw it. The box grows to hold the wrapped text at the new
+/// size and never shrinks, so a box the user drew large stays large. Sizes are 1 to 400 pt.
+pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font size".into()));
+    }
+    if !size.is_finite() || !(1.0..=400.0).contains(&size) {
+        return Err(AnnotError::Invalid("font size must be 1\u{2013}400 pt".into()));
+    }
+    refuse_foreign_text(doc, &d)?;
+    let before = d;
+    doc.update_dict(r, |d| {
+        let (col, _) = appearance::parse_da(d);
+        d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(col[0]), n(col[1]), n(col[2]), n(size)).into_bytes()));
+        rich_text(d);
+        touch(d, meta);
+    })?;
+    let text = text_value(doc, &annot_dict(doc, r), b"Contents").unwrap_or_default();
+    let result = match fitted_box(doc, r, &text) {
+        Some(fit) => {
+            let cur = annot_dict(doc, r);
+            let nums: Vec<f64> =
+                cur.get(b"Rect").and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default();
+            // Keep the top and sides; only the bottom edge moves, and only downwards.
+            match four(&nums).map(normalize) {
+                Some(old) if !cur.contains(b"CL") => apply_text_box(doc, r, [fit[0], fit[1].min(old[1]), fit[2], fit[3]], meta, false),
+                _ => apply_text_box(doc, r, fit, meta, false),
+            }
+        }
+        None => redraw_or_restore(doc, r, before.clone()),
+    };
+    if result.is_err() {
+        doc.set(r, Object::Dict(before));
+    }
+    result
 }
 
-/// Fill a rectangle, oval or polygon comment with `fill`, or remove its fill (`None`), and
+/// Whether a comment has a fill: `/IC` for shapes, `/C` for FreeText (§12.5.6).
+pub fn fillable(subtype: &str) -> bool {
+    matches!(subtype, "Square" | "Circle" | "Polygon" | "FreeText")
+}
+
+/// Fill a shape or FreeText comment with `fill`, or remove its fill (`None`), and
 /// redraw its appearance (Acrobat: Properties ▸ Fill Color).
 pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
@@ -1954,7 +2001,7 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     if !fillable(&subtype) {
-        return Err(AnnotError::Invalid("only rectangles, ovals and polygons can be filled".into()));
+        return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes can be filled".into()));
     }
     // Check before changing anything: a stale appearance would contradict the new fill.
     if appearance::build(&d).is_none() {
@@ -1966,10 +2013,11 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
     refuse_foreign_text(doc, &d)?;
     let before = d;
     doc.update_dict(r, |d| {
+        let key: &[u8] = if subtype == "FreeText" { b"C" } else { b"IC" };
         match fill {
-            Some(c) => d.set(b"IC".to_vec(), rgb(c)),
+            Some(c) => d.set(key.to_vec(), rgb(c)),
             None => {
-                d.remove(b"IC");
+                d.remove(key);
             }
         }
         touch(d, meta);
@@ -2158,7 +2206,7 @@ pub struct Props {
     pub subject: String,
     pub color: Option<Rgb>,
     pub opacity: f64,
-    /// Border / line width, for shapes, lines and drawings.
+    /// Border / line width, for shapes, lines, drawings and text boxes.
     pub width: Option<f64>,
     /// Notes only.
     pub icon: Option<NoteIcon>,
@@ -2170,10 +2218,12 @@ pub struct Props {
     pub locked: bool,
     /// `/LE`: two names for a line or polyline (`None` when unset), one for a callout.
     pub endings: Option<Vec<LineEnding>>,
-    /// Rectangles, ovals and polygons: their interior can be filled (see [`fillable`]).
+    /// Whether the comment has a fill control (see [`fillable`]).
     pub fillable: bool,
-    /// `/IC`, the interior colour (`None`: no fill).
+    /// The interior colour (`None`: no fill).
     pub fill: Option<Rgb>,
+    /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
+    pub font_size: Option<f64>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -2185,8 +2235,13 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
     let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
-    let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine")
-        .then(|| d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0));
+    let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
+        if subtype == "FreeText" {
+            if !d.contains(b"BS") && !d.contains(b"Border") { 0.0 } else { appearance::border_width(d) }
+        } else {
+            d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0)
+        }
+    });
     Some(Props {
         author: text_value(doc, d, b"T").unwrap_or_default(),
         subject: text_value(doc, d, b"Subj").unwrap_or_default(),
@@ -2199,14 +2254,16 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
+        font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
         subtype,
         endings: line_endings_of(d),
     })
 }
 
-/// `/IC` as an RGB colour. An empty array means no fill; grey and CMYK fills are converted.
+/// A shape’s `/IC` or FreeText `/C` as RGB. Grey and CMYK fills are converted.
 fn fill_of(d: &Dict) -> Option<Rgb> {
-    let c: Vec<f64> = d.get(b"IC")?.as_array()?.iter().filter_map(|x| x.as_f64()).collect();
+    let key: &[u8] = if d.name(b"Subtype") == Some(b"FreeText") { b"C" } else { b"IC" };
+    let c: Vec<f64> = d.get(key)?.as_array()?.iter().filter_map(|x| x.as_f64()).collect();
     let rgb = match c.as_slice() {
         [g] => [*g; 3],
         [r, g, b] => [*r, *g, *b],
@@ -2232,6 +2289,11 @@ fn line_endings_of(d: &Dict) -> Option<Vec<LineEnding>> {
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the
 /// struck text holding `replacement`, grouped with the strikeout (`/IRT` + `/RT /Group`) so they
 /// move, list and delete as one. Returns the strikeout's index.
+///
+/// The two annotations need their own `/NM`: XFDF names a reply by the `/NM` of what it replies
+/// to, so one id for both writes `inreplyto` equal to the caret's own `name`, and a reader that
+/// resolves names (Acrobat, and our own importer) loses the pair. `caret_meta` is a second id
+/// from the caller, so the edit stays deterministic.
 #[allow(clippy::too_many_arguments)]
 pub fn add_text_replacement(
     doc: &mut Document,
@@ -2242,6 +2304,7 @@ pub fn add_text_replacement(
     strike: &Style,
     caret: &Style,
     meta: &Meta,
+    caret_meta: &Meta,
 ) -> Result<usize, AnnotError> {
     let last = *quads.last().ok_or_else(|| AnnotError::Invalid("select the text to replace first".into()))?;
     let s = add_annotation(
@@ -2267,7 +2330,7 @@ pub fn add_text_replacement(
     let c = add_annotation(
         doc,
         &NewAnnotation { page, shape: Shape::Caret { rect }, style: caret.clone(), contents: replacement.into(), author: author.into() },
-        meta,
+        caret_meta,
     )?;
     let (_, cr) = annot_ref(doc, page, c)?;
     doc.update_dict(cr, |d| {

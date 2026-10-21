@@ -18,7 +18,9 @@ serde_json = { workspace = true }
 printcraft-engine = { workspace = true }
 printcraft-audit = { workspace = true }
 printcraft-cos = { workspace = true }
+printcraft-preflight = { workspace = true }
 printcraft-automation = { workspace = true }
+printcraft-platform = { workspace = true }
 base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]

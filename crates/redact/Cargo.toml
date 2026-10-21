@@ -16,6 +16,8 @@ printcraft-model = { workspace = true }
 printcraft-forms = { workspace = true }
 printcraft-edit = { workspace = true }
 printcraft-annot = { workspace = true }
+printcraft-xfa = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+printcraft-testkit = { workspace = true }

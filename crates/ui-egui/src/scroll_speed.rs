@@ -1,4 +1,4 @@
-//! How far a mouse-wheel notch scrolls (#444, #186).
+//! How far a mouse-wheel notch scrolls (#444, #186), and ↓ / ↑ with it (#985).
 //!
 //! egui scrolls `line_scroll_speed` points per wheel line: 40 on the desktop, 8 on the web.
 //! macOS already accelerates line deltas, and browsers there scroll about that far per line,
@@ -18,7 +18,7 @@ pub enum ScrollSpeed {
 }
 
 /// egui's own `line_scroll_speed`, which its wheel zoom rate is tuned against.
-const EGUI_LINE_POINTS: f32 = if cfg!(target_arch = "wasm32") { 8.0 } else { 40.0 };
+pub(crate) const EGUI_LINE_POINTS: f32 = if cfg!(target_arch = "wasm32") { 8.0 } else { 40.0 };
 
 /// Points one wheel line scrolls at Normal speed.
 const NORMAL_LINE_POINTS: f32 = if cfg!(target_arch = "wasm32") {
@@ -41,14 +41,18 @@ impl ScrollSpeed {
         }
     }
 
+    /// This speed relative to Normal.
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Slow => 0.5,
+            Self::Normal => 1.0,
+            Self::Fast => 2.0,
+        }
+    }
+
     /// Points one wheel line scrolls.
     pub fn line_points(self) -> f32 {
-        NORMAL_LINE_POINTS
-            * match self {
-                Self::Slow => 0.5,
-                Self::Normal => 1.0,
-                Self::Fast => 2.0,
-            }
+        NORMAL_LINE_POINTS * self.factor()
     }
 
     /// Makes egui scroll this far per wheel line, from this frame's input on (call it before egui

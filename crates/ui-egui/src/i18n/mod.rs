@@ -154,7 +154,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 22] = [
+pub static LANGUAGES: [LangInfo; 23] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -214,6 +214,9 @@ pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "tr", name: "Türkçe", source: include_str!("tr.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Lithuanian; every `lt-*` locale (`lt-LT`, `lt_LT.UTF-8`) resolves here. Three plural forms (one, few, other).
     LangInfo { code: "lt", name: "Lietuvių", source: include_str!("lt.tsv"), plural: plural_lithuanian, rtl: false, catalog: OnceLock::new() },
+    // Vietnamese; every `vi-*` locale (`vi-VN`, `vi_VN.UTF-8`) resolves here. CLDR `vi` counts have
+    // one form ("other"), so `@plural` entries list a single form.
+    LangInfo { code: "vi", name: "Tiếng Việt", source: include_str!("vi.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -394,9 +397,23 @@ fn first_supported(list: &str) -> Option<Lang> {
     list.split(['(', ')', ',', '"', '\n']).map(str::trim).filter(|s| !s.is_empty()).find_map(lang_from_tag)
 }
 
+/// The first supported language among BCP 47 tags in preference order, as the browser lists them
+/// in `navigator.languages` (#2954). Only the first few tags are looked at: the list is short in
+/// practice, and a page can't make Auto walk an unbounded one.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn first_supported_tag<S: AsRef<str>>(tags: impl IntoIterator<Item = S>) -> Option<Lang> {
+    tags.into_iter().take(32).find_map(|tag| lang_from_tag(tag.as_ref().trim()))
+}
+
+/// The browser's preferred languages, as the desktop builds use the system's: `navigator.languages`
+/// in order, then `navigator.language` (kept within the 32 tags `first_supported_tag` reads).
+/// English when the browser offers none we have a catalog for.
 #[cfg(target_arch = "wasm32")]
 fn detect_system_lang() -> Lang {
-    Lang::EN
+    let Some(navigator) = web_sys::window().map(|w| w.navigator()) else { return Lang::EN };
+    let mut tags: Vec<String> = navigator.languages().iter().take(31).filter_map(|v| v.as_string()).collect();
+    tags.extend(navigator.language());
+    first_supported_tag(&tags).unwrap_or(Lang::EN)
 }
 
 thread_local! {
@@ -415,7 +432,38 @@ pub fn set_current(lang: Lang) {
 /// `label` as it reads inside a sentence ("add a text box"): lowercased, except in languages
 /// that capitalise nouns (German), where lowercasing would misspell it.
 pub fn in_sentence(label: &str) -> std::borrow::Cow<'_, str> {
-    if current().code() == "de" { std::borrow::Cow::Borrowed(label) } else { std::borrow::Cow::Owned(label.to_lowercase()) }
+    match current().code() {
+        "de" => std::borrow::Cow::Borrowed(label),
+        "tr" => std::borrow::Cow::Owned(label.chars().flat_map(lower_turkish).collect()),
+        _ => std::borrow::Cow::Owned(label.to_lowercase()),
+    }
+}
+
+/// The translation of `english` in upper case, for section titles. Rust's case mapping knows no
+/// language, and Turkish has a dotted and a dotless i (`i` ↔ `İ`, `ı` ↔ `I`): "Gelişmiş" must
+/// become "GELİŞMİŞ", not "GELIŞMIŞ". A label without a Turkish row is still English and keeps
+/// the English rule.
+pub fn upper_label(english: &str) -> String {
+    let lang = current();
+    let shown = tr(lang, english);
+    if lang.code() == "tr" && has(lang, english) { shown.chars().flat_map(upper_turkish).collect() } else { shown.to_uppercase() }
+}
+
+fn upper_turkish(c: char) -> std::char::ToUppercase {
+    match c {
+        'i' => 'İ'.to_uppercase(),
+        'ı' => 'I'.to_uppercase(),
+        c => c.to_uppercase(),
+    }
+}
+
+fn lower_turkish(c: char) -> std::char::ToLowercase {
+    match c {
+        // `İ`.to_lowercase() is "i" plus a combining dot above.
+        'İ' => 'i'.to_lowercase(),
+        'I' => 'ı'.to_lowercase(),
+        c => c.to_lowercase(),
+    }
 }
 
 pub fn current() -> Lang {
@@ -549,9 +597,15 @@ pub fn edit_label(label: &printcraft_engine::Label) -> String {
 /// whose word order doesn't put the verb first translates "Undo {action}" and "Redo {action}"
 /// as whole phrases; otherwise the translated verb goes before the action.
 pub fn command_label(text: &str) -> String {
-    // CivilOps PDF: ours first ("Rückgängig: Seite drehen").
-    if let Some(ours) = (current().code() == "de").then(|| de_civilops::translate(text)).flatten() {
-        return ours;
+    // CivilOps PDF: ours first ("Rückgängig: Seite drehen"), but a whole label the catalog has
+    // comes before our templates ("Create PDF from multiple files…" is not "Create {what}").
+    if current().code() == "de" {
+        if let Some(whole) = de_civilops::exact(text).or_else(|| current().catalog().plain(text)) {
+            return whole.to_owned();
+        }
+        if let Some(ours) = de_civilops::translate(text) {
+            return ours;
+        }
     }
     for (prefix, template) in [("Undo", "Undo {action}"), ("Redo", "Redo {action}")] {
         if let Some(action) = text.strip_prefix(prefix).and_then(|tail| tail.strip_prefix(' ')) {
@@ -645,6 +699,21 @@ mod tests {
         assert_eq!(first_supported("(\n    \"ja-JP\",\n    \"en-US\"\n)\n"), Some(JA()));
         assert_eq!(first_supported("(\n    \"fr-FR\",\n    \"en-US\"\n)\n"), Lang::from_code("fr"));
         assert_eq!(first_supported("("), None);
+    }
+
+    /// #2954: the web build's Auto language follows the browser's preferred languages in order,
+    /// skipping ones without a catalog, and is English only when none is supported.
+    #[test]
+    fn browser_language_list_is_followed_in_order() {
+        assert_eq!(first_supported_tag(["it-IT", "en-US"]), Lang::from_code("it"));
+        assert_eq!(first_supported_tag(["xx-YY", "ja", "fr-FR"]), Some(JA()));
+        assert_eq!(first_supported_tag(["zh-TW"]), Lang::from_code("zh-hant"));
+        assert_eq!(first_supported_tag(["en-GB", "fr-FR"]), Some(Lang::EN));
+        assert_eq!(first_supported_tag([" pt-PT "]), Lang::from_code("pt-br"));
+        assert_eq!(first_supported_tag(["", "xx"]), None);
+        assert_eq!(first_supported_tag(Vec::<String>::new()), None);
+        let long = std::iter::repeat_n("xx", 10_000).chain(["fr"]);
+        assert_eq!(first_supported_tag(long), None, "only the first tags are read");
     }
 
     #[test]
@@ -970,6 +1039,26 @@ mod tests {
         }
     }
 
+    /// Every catalog says the labels of a visible signature, which are looked up by the sign
+    /// crate's own English words (so the `tl!` scan can't see them), and the note shown when they
+    /// fall back to English. Each label that runs into its value keeps a separator at its end.
+    #[test]
+    fn signature_appearance_labels_are_in_every_catalog() {
+        let english = printcraft_engine::sign::AppearanceLabels::default();
+        let note = "The labels are in English: the signature's font can't draw them in this language.";
+        for language in LANGUAGES.iter().filter(|language| !language.source.is_empty()) {
+            let lang = Lang::from_code(language.code).expect("registered language");
+            assert!(has(lang, note), "{} lacks the labels note", language.code);
+            for (field, label) in english.fields() {
+                assert!(has(lang, label), "{} lacks the signature label {field}: {label:?}", language.code);
+                let said = tr(lang, label);
+                if field != "signed_by" && !lang.rtl() {
+                    assert!(said.ends_with(' ') || said.ends_with('：'), "{}: the {field} label runs into its value: {said:?}", language.code);
+                }
+            }
+        }
+    }
+
     /// Japanese translates every `tl!("…")` literal in the UI source, so a new string can't ship in
     /// English by accident (the same check French, German, Russian and Simplified Chinese have).
     #[test]
@@ -1195,6 +1284,8 @@ mod tests {
         assert_eq!(tr(es, "Informe del usuario.pdf"), "Informe del usuario.pdf");
         assert_eq!(trn(es, 1, "{n} page", "{n} pages"), "1 página");
         assert_eq!(trn(es, 3, "{n} page", "{n} pages"), "3 páginas");
+        // The signature pad's Type is the verb (type your name), not the noun "Tipo".
+        assert_eq!(tr_ctx(es, "signature pad", "Type"), "Escribir");
         let mut app = crate::PrintCraftApp::default();
         app.set_option("language", "es").unwrap();
         assert_eq!(app.language, "es");
@@ -1209,6 +1300,9 @@ mod tests {
         let es = Lang::from_code("es").expect("es registered");
         for command in printcraft_engine::commands::COMMANDS {
             assert!(has(es, command.label), "missing command: {}", command.label);
+            if let Some(menu) = command.menu {
+                assert!(has(es, menu), "missing menu: {menu}");
+            }
         }
         for group in printcraft_engine::catalog::TOOL_GROUPS {
             assert!(has(es, group.label), "missing group: {}", group.label);
@@ -1219,6 +1313,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// New tl!("literal") labels must not silently fall back to English in Spanish.
+    #[test]
+    fn spanish_covers_ui_literals() {
+        let es = Lang::from_code("es").expect("es registered");
+        let literals = ui_literals();
+        assert!(literals.len() > 900, "source scan found only {} literals", literals.len());
+        let missing: Vec<_> = literals.iter().filter(|label| !has(es, label)).collect();
+        assert!(missing.is_empty(), "untranslated Spanish UI literals: {missing:#?}");
     }
 
     /// Spanish says everything the layers below word for themselves: what the accessibility
@@ -1315,8 +1419,9 @@ mod tests {
         let te = Lang::from_code("te").expect("te registered");
         assert_eq!(tr_ctx(te, "signature pad", "Type"), "టైప్ చేయి");
         assert_eq!(tr(te, "Type"), "రకం");
+        // A context no catalog defines, so the fallback stays tested as catalogs fill their gaps.
         let es = Lang::from_code("es").expect("es registered");
-        assert_eq!(tr_ctx(es, "signature pad", "Type"), tr(es, "Type"));
+        assert_eq!(tr_ctx(es, "no such context", "Type"), tr(es, "Type"));
     }
 
     /// Telugu translates every registered command and every All tools group, section and item.
@@ -1399,6 +1504,8 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            // The distinguished name of a certificate, abbreviated as in X.500.
+            "DN: ",
         ];
         let (entries, errors) = parse_entries(cs.0.source, cs.0.plural_forms());
         assert!(errors.is_empty(), "{errors:?}");
@@ -1511,6 +1618,8 @@ mod tests {
             "−Bin",
             "Model",
             "Home / End",
+            // The distinguished name of a certificate, abbreviated as in X.500.
+            "DN: ",
         ];
         let (entries, errors) = parse_entries(tr_lang.0.source, tr_lang.0.plural_forms());
         assert!(errors.is_empty(), "Turkish catalog errors: {errors:?}");
@@ -1915,6 +2024,20 @@ mod tests {
     }
 
     #[test]
+    fn turkish_keeps_its_dotted_and_dotless_i_when_changing_case() {
+        set_current(Lang::from_code("tr").expect("tr registered"));
+        assert_eq!(upper_label("Advanced"), "GELİŞMİŞ");
+        assert_eq!(upper_label("Signatures"), "İMZALAR");
+        // A label with no Turkish row is still English and keeps the English rule.
+        assert_eq!(upper_label("Untranslated title"), "UNTRANSLATED TITLE");
+        assert_eq!(in_sentence("İmza Alanı"), "imza alanı");
+        assert_eq!(in_sentence("Işık"), "ışık");
+        set_current(Lang::EN);
+        assert_eq!(upper_label("Advanced"), "ADVANCED");
+        assert_eq!(in_sentence("Image"), "image");
+    }
+
+    #[test]
     fn german_certificate_subject_has_a_distinct_context() {
         let de = Lang::from_code("de").expect("de registered");
         assert_eq!(tr(de, "Subject"), "Betreff", "CivilOps PDF's German comes first");
@@ -2242,6 +2365,228 @@ mod tests {
             tr(lt, "The fonts CivilOps PDF writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.")
                 .contains("visose PDF žiūryklėse")
         );
+    }
+
+    #[test]
+    fn vietnamese_is_registered_and_persists() {
+        let vi = Lang::from_code("vi").expect("vi registered");
+        assert_eq!(vi.name(), "Tiếng Việt");
+        assert_eq!(normalize_pref("Vi"), Some("vi"));
+        for tag in ["vi", "vi-VN", "vi_VN.UTF-8", "VI-vn"] {
+            assert_eq!(lang_from_tag(tag), Some(vi), "{tag}");
+        }
+        assert_eq!(first_supported("vi-VN\r\nen-US"), Some(vi));
+        assert_eq!(tr(vi, "File"), "Tệp");
+        assert_eq!(tr(vi, "Edit"), "Chỉnh sửa");
+        assert_eq!(tr(vi, "Save"), "Lưu");
+        assert_eq!(tr(vi, "Save as…"), "Lưu thành…");
+        assert_eq!(tr(vi, "Bookmarks"), "Dấu trang");
+        assert_eq!(tr(vi, "Fill & Sign"), "Điền & Ký");
+        assert_eq!(tr(vi, "Interface language"), "Ngôn ngữ giao diện");
+        assert_eq!((0..=3).map(|n| (vi.0.plural)(n)).collect::<Vec<_>>(), [0, 0, 0, 0]);
+        for n in [0, 1, 2, 5] {
+            assert_eq!(trn(vi, n, "{n} page", "{n} pages"), format!("{n} trang"));
+            assert_eq!(trn(vi, n, "{n} field", "{n} fields"), format!("{n} trường"));
+        }
+        let mut app = crate::PrintCraftApp::default();
+        app.set_option("language", "vi").unwrap();
+        assert_eq!(app.language, "vi");
+        let mut restored = crate::PrintCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, "vi");
+        assert!(restored.set_option("language", "xx").is_err());
+        assert_eq!(restored.language, "vi");
+    }
+
+    #[test]
+    fn vietnamese_covers_commands_and_catalogue() {
+        let vi = Lang::from_code("vi").expect("vi registered");
+        let mut missing = std::collections::BTreeSet::new();
+        for command in printcraft_engine::commands::COMMANDS {
+            if !has(vi, command.label) {
+                missing.insert(command.label);
+            }
+            if let Some(menu) = command.menu
+                && !has(vi, menu)
+            {
+                missing.insert(menu);
+            }
+        }
+        for group in printcraft_engine::catalog::TOOL_GROUPS {
+            if !has(vi, group.label) {
+                missing.insert(group.label);
+            }
+            for section in group.sections {
+                if !has(vi, section.title) {
+                    missing.insert(section.title);
+                }
+                for item in section.items {
+                    if !has(vi, item.label) {
+                        missing.insert(item.label);
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "Vietnamese misses commands/tools: {missing:#?}");
+    }
+
+    #[test]
+    fn vietnamese_covers_ui_literals() {
+        let vi = Lang::from_code("vi").expect("vi registered");
+        let literals = scan_ui_literals(true);
+        let missing: Vec<_> = literals.iter().filter(|label| !has(vi, label)).collect();
+        assert!(missing.is_empty(), "Untranslated Vietnamese UI labels: {missing:#?}");
+    }
+
+    #[test]
+    fn vietnamese_covers_contextual_calendar_certificate_and_preference_labels() {
+        let vi = Lang::from_code("vi").expect("vi registered");
+        assert_eq!(tr_ctx(vi, "comment menu", "Edit"), "Sửa");
+        assert_eq!(tr_ctx(vi, "signature pad", "Type"), "Nhập chữ");
+        assert_eq!(tr_ctx(vi, "action wizard", "Start"), "Bắt đầu");
+        assert_eq!(["Slow", "Normal", "Fast"].map(|label| tr_ctx(vi, "scroll speed", label)), ["Chậm", "Bình thường", "Nhanh"]);
+        let months = [
+            ("January", "Tháng 1", "tháng 1"),
+            ("February", "Tháng 2", "tháng 2"),
+            ("March", "Tháng 3", "tháng 3"),
+            ("April", "Tháng 4", "tháng 4"),
+            ("May", "Tháng 5", "tháng 5"),
+            ("June", "Tháng 6", "tháng 6"),
+            ("July", "Tháng 7", "tháng 7"),
+            ("August", "Tháng 8", "tháng 8"),
+            ("September", "Tháng 9", "tháng 9"),
+            ("October", "Tháng 10", "tháng 10"),
+            ("November", "Tháng 11", "tháng 11"),
+            ("December", "Tháng 12", "tháng 12"),
+        ];
+        for (source, standalone, in_date) in months {
+            assert_eq!(tr(vi, source), standalone);
+            assert_eq!(tr_ctx(vi, "calendar date", source), in_date);
+        }
+        assert_eq!(
+            ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map(|day| tr_ctx(vi, "calendar weekday", day)),
+            ["CN", "T2", "T3", "T4", "T5", "T6", "T7"]
+        );
+        assert_eq!(tr_ctx(vi, "certificate", "Subject"), "Chủ thể chứng chỉ");
+        assert_eq!(tr(vi, "Subject"), "Chủ đề");
+        // Appearance: object/comment/signature look vs Preferences theme section.
+        assert_eq!(tr(vi, "Appearance"), "Diện mạo");
+        assert_eq!(tr_ctx(vi, "theme", "Appearance"), "Giao diện");
+        // PDF form Field — never the visual-box sense "ô".
+        assert_eq!(tr(vi, "Field"), "Trường");
+        assert_eq!(tr(vi, "Fields"), "Các trường");
+        assert_eq!(tr(vi, "Form fields"), "Các trường biểu mẫu");
+        assert_eq!(tr(vi, "Text field"), "Trường văn bản");
+        assert_eq!(tr(vi, "Date field"), "Trường ngày");
+        assert_eq!(tr(vi, "Image field"), "Trường hình ảnh");
+        assert_eq!(tr(vi, "Field properties"), "Thuộc tính trường");
+        assert_eq!(tr(vi, "Field list"), "Danh sách trường");
+        assert_eq!(tr(vi, "{kind} field"), "Trường {kind}");
+        // Redaction: permanent removal, not temporary cover.
+        assert_eq!(tr(vi, "Mark for redaction"), "Đánh dấu để xóa");
+        assert_eq!(tr(vi, "Apply redactions"), "Xóa vĩnh viễn nội dung đã đánh dấu");
+        assert_eq!(tr(vi, "Redact text and images"), "Xóa nội dung nhạy cảm trong văn bản và hình ảnh");
+        assert_eq!(tr(vi, "Clear form"), "Xóa dữ liệu biểu mẫu");
+        // Fill & Sign tool section title — fill-in, not paint fill.
+        assert_eq!(tr(vi, "Fill"), "Điền");
+        assert_eq!(tr(vi, "Fill & Sign"), "Điền & Ký");
+        assert_eq!(
+            tr(vi, "Remove \"{name}\" from this list? The file itself is not deleted."),
+            "Gỡ \"{name}\" khỏi danh sách này? Bản thân tệp không bị xóa."
+        );
+        for field in [
+            "Issued to",
+            "Issued by",
+            "Valid from",
+            "Valid to",
+            "Intended usage",
+            "Serial number",
+            "Issuer",
+            "Validity starts",
+            "Validity ends",
+            "Public key",
+            "Basic constraints",
+            "Key usage",
+            "Self-signed",
+            "SHA-1 digest",
+            "SHA-256 digest",
+        ] {
+            assert_ne!(tr_ctx(vi, "certificate", field), field, "certificate field remains untranslated: {field}");
+        }
+    }
+
+    #[test]
+    fn vietnamese_covers_bundled_catalog_keys() {
+        let vi = Lang::from_code("vi").expect("vi registered");
+        let mut missing = std::collections::BTreeSet::new();
+        for reference in LANGUAGES.iter().filter(|language| language.code != "vi") {
+            let (entries, errors) = catalog::parse_entries(reference.source, reference.plural_forms());
+            assert!(errors.is_empty(), "{}: invalid reference catalog: {errors:?}", reference.code);
+            for entry in entries {
+                let translated = match entry.context.as_str() {
+                    "" => vi.catalog().plain(&entry.source),
+                    "@id" => vi.catalog().id(&entry.source),
+                    "@plural" => entry.source.split_once('|').and_then(|(one, other)| vi.catalog().plural(one, other, 0)),
+                    context => vi.catalog().contextual(context, &entry.source),
+                };
+                if translated.is_none() {
+                    missing.insert((entry.context, entry.source));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "Vietnamese misses bundled catalog keys: {missing:#?}");
+    }
+
+    #[test]
+    fn vietnamese_leaves_no_unapproved_english_fallbacks() {
+        let vi = Lang::from_code("vi").expect("vi registered");
+        // Authoritative allowlist for intentional English-identical Vietnamese rows.
+        const KEEP_AS_IS: &[&str] = &[
+            "OK",
+            "Digital ID",
+            "ZIP",
+            "JavaScript",
+            "Microsoft Word (.docx)",
+            "PDF/A…",
+            "PostScript / EPS",
+            "Rich Text Format (.rtf)",
+            "CheckBox",
+            "Combo",
+            "Home / End",
+            "PushButton",
+            "Radio",
+            "Standard Business",
+            "Keychain  ·  ",
+            "{0}: {1}",
+            "{field}: {e}",
+            "{month} {y}",
+            "{n} {kind}",
+            "{rule} - {status}",
+            "+LOC",
+            "−LOC",
+            "ΔLOC",
+            "+Bin",
+            "−Bin",
+            "`{command}` {when}",
+            "English",
+        ];
+        const KEY_CAPS: &[&str] = &["Ctrl", "Shift", "Delete", "Esc", "Home", "End", "Space"];
+        let (entries, errors) = catalog::parse_entries(vi.0.source, vi.0.plural_forms());
+        assert!(errors.is_empty(), "{errors:?}");
+        let edges = |s: &str| (s.len() - s.trim_start().len(), s.len() - s.trim_end().len());
+        let mut unchanged = Vec::new();
+        for e in &entries {
+            let key_cap = e.context == "key" && KEY_CAPS.contains(&e.source.as_str());
+            if e.source == e.translation && !KEEP_AS_IS.contains(&e.source.as_str()) && !key_cap {
+                unchanged.push((e.context.clone(), e.source.clone()));
+            }
+            assert!(!e.translation.contains("..."), "use … rather than three dots: {:?}", e.translation);
+            assert_eq!(edges(&e.translation), edges(&e.source), "stray whitespace: {:?}", e.translation);
+            if e.context == "@plural" {
+                assert!(!e.translation.contains('|'), "Vietnamese @plural is one form: {:?}", e.translation);
+            }
+        }
+        assert!(unchanged.is_empty(), "unapproved English Vietnamese catalog entries: {unchanged:#?}");
     }
 
     #[test]
@@ -2679,6 +3024,8 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            // The distinguished name of a certificate, abbreviated as in X.500.
+            "DN: ",
         ];
         let unchanged: Vec<_> = entries
             .iter()
@@ -2757,6 +3104,8 @@ mod tests {
             "ΔLOC",
             "+Bin",
             "−Bin",
+            // The distinguished name of a certificate, abbreviated as in X.500.
+            "DN: ",
         ];
         let unchanged: Vec<_> = entries
             .iter()
@@ -3033,6 +3382,17 @@ mod tests {
         let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
         let dates: Vec<(&str, &str)> = printcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
         assert_eq!(dates, interface);
+    }
+
+    /// CivilOps PDF: a menu label the German catalog has whole is not run through one of our
+    /// templates ("PDF from multiple files… erstellen").
+    #[test]
+    fn german_menu_labels_prefer_the_whole_catalog_label() {
+        let before = current();
+        set_current(Lang::from_code("de").expect("de registered"));
+        assert_eq!(menu_label("create.multiple", "Create PDF from multiple files…"), "PDF aus mehreren Dateien erstellen…");
+        assert_eq!(menu_label("create.multiple_separate", "Create separate PDFs…"), "Separate PDFs erstellen…");
+        set_current(before);
     }
 
     /// CivilOps PDF: the German interface says "Sie" and "Kennwort". A German catalog entry that

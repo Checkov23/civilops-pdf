@@ -11,7 +11,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
 
@@ -29,6 +29,8 @@ pub enum DataError {
     Malformed(String),
     #[error("nothing in the file matches this document")]
     NothingImported,
+    #[error("FDF export exceeds the {0} limit; no data was exported")]
+    ExportLimit(&'static str),
     #[error(transparent)]
     Cos(#[from] printcraft_cos::CosError),
 }
@@ -197,8 +199,13 @@ fn esc(s: &str) -> String {
             '<' => o.push_str("&lt;"),
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
+            // XML 1.0 §3.3.3 normalizes literal attribute whitespace, but not references.
+            '\t' => o.push_str("&#9;"),
+            '\n' => o.push_str("&#10;"),
             '\r' => o.push_str("&#13;"),
             c if (c as u32) < 0x20 && c != '\n' && c != '\t' => {}
+            // XML 1.0 noncharacters are not allowed even as raw text.
+            '\u{FFFE}' | '\u{FFFF}' => {}
             c => o.push(c),
         }
     }
@@ -462,18 +469,222 @@ fn pdf_string(s: &str) -> Vec<u8> {
     v
 }
 
+// Keep aliases as aliases instead of expanding a shared graph once per use. References are
+// queued, not followed recursively, so cycles and long indirect chains cost linear work.
+const MAX_FDF_OBJECTS: usize = 100_000;
+const MAX_FDF_BYTES: usize = 64 * 1024 * 1024;
+
+/// Direct values stay borrowed: `Document::resolve` would deep-clone them. Only
+/// indirect values need an owner, and annotation bodies are never retained in discovery.
+enum FdfValue<'a> {
+    Borrowed(&'a Object),
+    Indirect(std::sync::Arc<Object>),
+}
+
+impl<'a> FdfValue<'a> {
+    fn resolve(doc: &Document, value: &'a Object) -> Self {
+        match value {
+            Object::Ref(_) => Self::Indirect(doc.resolve(value)),
+            _ => Self::Borrowed(value),
+        }
+    }
+
+    fn object(&self) -> &Object {
+        match self {
+            Self::Borrowed(value) => value,
+            Self::Indirect(value) => value.as_ref(),
+        }
+    }
+}
+
+struct FdfCopy<'a> {
+    doc: &'a Document,
+    objects: Vec<Object>,
+    numbers: HashMap<ObjRef, u32>,
+    pending: Vec<(ObjRef, usize)>,
+    nodes: usize,
+    bytes: usize,
+}
+
+impl<'a> FdfCopy<'a> {
+    fn new(doc: &'a Document) -> Self {
+        Self { doc, objects: Vec::new(), numbers: HashMap::new(), pending: Vec::new(), nodes: MAX_FDF_OBJECTS, bytes: MAX_FDF_BYTES }
+    }
+
+    fn charge(&mut self, bytes: usize) -> Result<(), DataError> {
+        self.bytes = self.bytes.checked_sub(bytes).ok_or(DataError::ExportLimit("64 MiB data"))?;
+        Ok(())
+    }
+
+    fn slot(&mut self) -> Result<(usize, u32), DataError> {
+        if self.objects.len() >= MAX_FDF_OBJECTS {
+            return Err(DataError::ExportLimit("100,000 objects"));
+        }
+        // Object 1 is the FDF root; arena indices start at object 2. The arena is capped above.
+        let index = self.objects.len();
+        let number = index as u32 + 2;
+        self.charge(100)?; // indirect-object and xref overhead
+        self.objects.push(Object::Null);
+        Ok((index, number))
+    }
+
+    fn dict(&mut self, dict: &Dict, depth: usize) -> Result<Dict, DataError> {
+        if dict.len() > self.nodes {
+            return Err(DataError::ExportLimit("100,000 values"));
+        }
+        let mut out = Dict::new();
+        for (key, value) in dict.iter() {
+            self.dict_entry(&mut out, key, value, depth + 1)?;
+        }
+        Ok(out)
+    }
+
+    fn dict_entry(&mut self, out: &mut Dict, key: &[u8], value: &Object, depth: usize) -> Result<(), DataError> {
+        self.charge(key.len().saturating_mul(3).saturating_add(2))?;
+        let value = self.copy(value, depth)?;
+        out.set(key.to_vec(), value);
+        Ok(())
+    }
+
+    /// Skip source-document links and appearances without cloning their values. The
+    /// dictionary and every retained entry are charged before any owned copy is made.
+    fn annotation_dict(&mut self, dict: &Dict) -> Result<Dict, DataError> {
+        self.charge_value(0)?;
+        let mut out = Dict::new();
+        for (key, value) in dict.iter() {
+            if matches!(key.as_slice(), b"P" | b"AP" | b"Popup" | b"IRT" | b"Parent" | b"FS" | b"Sound") {
+                continue;
+            }
+            self.dict_entry(&mut out, key, value, 1)?;
+        }
+        Ok(out)
+    }
+
+    fn charge_value(&mut self, depth: usize) -> Result<(), DataError> {
+        if depth > MAX_DEPTH {
+            return Err(DataError::ExportLimit("64 direct nesting levels"));
+        }
+        self.nodes = self.nodes.checked_sub(1).ok_or(DataError::ExportLimit("100,000 values"))?;
+        // Includes delimiters, spacing and even the longest finite f64 in plain decimal form.
+        self.charge(330)?;
+        Ok(())
+    }
+
+    fn is_source_page(&self, dict: &Dict) -> Result<bool, DataError> {
+        let Some(value) = dict.get(b"Type") else { return Ok(false) };
+        let mut value = FdfValue::Borrowed(value);
+        let mut seen = HashSet::new();
+        for hops in 0..=MAX_DEPTH {
+            match value.object() {
+                Object::Name(name) => return Ok(matches!(name.as_slice(), b"Page" | b"Pages")),
+                Object::Ref(reference) => {
+                    if self.doc.generation(reference.num) != reference.generation || !seen.insert(*reference) {
+                        return Ok(false);
+                    }
+                    if hops == MAX_DEPTH {
+                        return Err(DataError::ExportLimit("64 Type reference levels"));
+                    }
+                    value = FdfValue::Indirect(self.doc.get(*reference));
+                }
+                _ => return Ok(false),
+            }
+        }
+        Err(DataError::ExportLimit("64 Type reference levels"))
+    }
+
+    fn copy(&mut self, value: &Object, depth: usize) -> Result<Object, DataError> {
+        self.charge_value(depth)?;
+        Ok(match value {
+            Object::Ref(source) => {
+                let number = if let Some(number) = self.numbers.get(source) {
+                    *number
+                } else {
+                    let (index, number) = self.slot()?;
+                    self.numbers.insert(*source, number);
+                    self.pending.push((*source, index));
+                    number
+                };
+                Object::Ref(ObjRef::new(number, 0))
+            }
+            Object::Array(values) => {
+                if values.len() > self.nodes {
+                    return Err(DataError::ExportLimit("100,000 values"));
+                }
+                let mut out = Vec::new();
+                for value in values {
+                    out.push(self.copy(value, depth + 1)?);
+                }
+                Object::Array(out)
+            }
+            // Source page links must not drag page contents or the page tree into an FDF.
+            Object::Dict(dict) if self.is_source_page(dict)? => Object::Null,
+            Object::Dict(dict) => Object::Dict(self.dict(dict, depth)?),
+            Object::String(s) => {
+                self.charge(s.bytes.len().saturating_mul(4))?;
+                value.clone()
+            }
+            Object::Name(name) => {
+                self.charge(name.len().saturating_mul(3))?;
+                value.clone()
+            }
+            // A PDF stream can only be an indirect object, never a dictionary/array value.
+            Object::Stream(_) => return Err(DataError::Malformed("FDF export encountered a direct stream".into())),
+            other => other.clone(),
+        })
+    }
+
+    fn finish(&mut self, doc: &Document) -> Result<(), DataError> {
+        let mut cursor = 0;
+        while let Some((source, index)) = self.pending.get(cursor).copied() {
+            // ISO 32000-2 §7.3.10: an absent or stale reference denotes null. Keep reader
+            // errors distinct so damaged objects cannot be silently lost during export.
+            let value = if doc.generation(source.num) != source.generation {
+                std::sync::Arc::new(Object::Null)
+            } else {
+                match doc.try_get(source.num) {
+                    Ok(value) => value,
+                    Err(printcraft_cos::CosError::MissingObject(_)) => std::sync::Arc::new(Object::Null),
+                    Err(error) => return Err(error.into()),
+                }
+            };
+            let copied = match &*value {
+                Object::Stream(stream) => {
+                    self.charge(stream.raw.len())?;
+                    Object::Stream(printcraft_cos::Stream { dict: self.dict(&stream.dict, 0)?, raw: stream.raw.clone() })
+                }
+                other => self.copy(other, 0)?,
+            };
+            let slot = self.objects.get_mut(index).ok_or_else(|| DataError::Malformed("FDF object slot is missing".into()))?;
+            *slot = copied;
+            cursor += 1;
+        }
+        Ok(())
+    }
+}
+
 /// FDF with field values and/or comments (appearances are not carried). Each comment is an
 /// indirect object of the FDF, so a reply's `/IRT` can point at its parent's object there
-/// (§12.7.8.3.1); nothing else refers back into the source document.
-pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> Vec<u8> {
+/// (§12.7.8.3.1). Nested values are copied and renumbered, including shared or cyclic graphs.
+/// Source `/Page` and `/Pages` dictionaries become null at every copy depth.
+/// Refuses exports above the object, value, direct-depth or data budget instead of losing data.
+pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> Result<Vec<u8>, DataError> {
+    let mut copy = FdfCopy::new(doc);
+    copy.charge(file.len().saturating_mul(8))?;
     let mut body: Vec<u8> = b"<< /FDF << ".to_vec();
     // Comment dictionaries, written after the root as objects 2, 3, …
-    let mut annots: Vec<Dict> = Vec::new();
     if fields {
         body.extend_from_slice(b"/Fields [");
         for f in printcraft_forms::fields(doc) {
             if matches!(f.kind, FieldKind::PushButton | FieldKind::Signature) {
                 continue;
+            }
+            // Field dictionary, /T string and /V scalar/array, plus every emitted list
+            // entry. Other field kinds emit only their first value (or a default).
+            let field_nodes = if matches!(f.kind, FieldKind::List) && f.value.len() > 1 { f.value.len().saturating_add(3) } else { 3 };
+            copy.nodes = copy.nodes.checked_sub(field_nodes).ok_or(DataError::ExportLimit("100,000 values"))?;
+            copy.charge(f.name.len().saturating_mul(8).saturating_add(100))?;
+            for value in &f.value {
+                copy.charge(value.len().saturating_mul(8).saturating_add(100))?;
             }
             body.extend_from_slice(b"<< /T ");
             body.extend(pdf_string(&f.name));
@@ -493,44 +704,61 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> V
         body.extend_from_slice(b"] ");
     }
     if comments {
-        // Every exported comment with its source reference, numbered in export order.
-        let mut picked: Vec<(Option<ObjRef>, Dict, usize)> = Vec::new();
-        for (pi, p) in printcraft_model::pages(doc).iter().enumerate() {
-            for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
-                let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
-                if d.name(b"Subtype").is_some_and(|sub| SUBTYPES.iter().any(|(s, _)| s.as_bytes() == sub)) {
-                    picked.push((a.as_ref(), d, pi));
+        // Keep the page/array owners once. Handles retain positions, never annotation
+        // bodies: the document cache can evict and reparse even a repeated source reference.
+        let pages = printcraft_model::pages(doc);
+        let mut arrays = Vec::new();
+        let mut picked: Vec<(Option<ObjRef>, usize, usize)> = Vec::new();
+        for (pi, page) in pages.iter().enumerate() {
+            let owner = page.dict.get(b"Annots").map(|value| FdfValue::resolve(doc, value));
+            let before = picked.len();
+            if let Some(values) = owner.as_ref().and_then(|owner| owner.object().as_array()) {
+                for (ai, a) in values.iter().enumerate() {
+                    let value = FdfValue::resolve(doc, a);
+                    let Some(d) = value.object().as_dict() else { continue };
+                    if d.name(b"Subtype").is_some_and(|sub| SUBTYPES.iter().any(|(s, _)| s.as_bytes() == sub)) {
+                        if picked.len() >= MAX_FDF_OBJECTS {
+                            return Err(DataError::ExportLimit("100,000 comments"));
+                        }
+                        picked.push((a.as_ref(), pi, ai));
+                    }
                 }
             }
+            // Empty/unselected arrays need no owner. Resolve subsequent pages only after
+            // this page passes the cap, rather than loading them all before discovery.
+            arrays.push(if picked.len() > before { owner } else { None });
         }
-        let numbers: HashMap<ObjRef, u32> =
-            picked.iter().enumerate().filter_map(|(i, (r, _, _))| Some(((*r)?, u32::try_from(i).ok()?.checked_add(2)?))).collect();
-        for (_, mut d, pi) in picked {
+        let mut numbers = HashMap::new();
+        for (source, _, _) in &picked {
+            let (_, number) = copy.slot()?;
+            if let Some(source) = source {
+                numbers.insert(*source, number);
+            }
+        }
+        copy.numbers = numbers.clone();
+        let count = picked.len();
+        for (index, (_, pi, ai)) in picked.into_iter().enumerate() {
+            let annotation = arrays
+                .get(pi)
+                .and_then(Option::as_ref)
+                .and_then(|owner| owner.object().as_array())
+                .and_then(|values| values.get(ai))
+                .ok_or_else(|| DataError::Malformed("FDF annotation slot is missing".into()))?;
+            let value = FdfValue::resolve(doc, annotation);
+            let d = value.object().as_dict().ok_or_else(|| DataError::Malformed("FDF comment is not a dictionary".into()))?;
             // A reply points at its parent's object in this FDF; a parent that isn't exported
             // leaves the reply unthreaded.
             let irt = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| numbers.get(&r)).copied();
-            // Only direct values travel: references into this file would dangle.
-            for k in [&b"P"[..], b"AP", b"Popup", b"IRT", b"Parent", b"FS", b"Sound"] {
-                d.remove(k);
-            }
-            let keys: Vec<Vec<u8>> = d.iter().filter(|(_, v)| matches!(v, Object::Ref(_))).map(|(k, _)| k.clone()).collect();
-            for k in keys {
-                let Some(o) = d.get(&k) else { continue };
-                let v = (*doc.resolve(o)).clone();
-                if matches!(v, Object::Stream(_)) {
-                    d.remove(&k);
-                } else {
-                    d.set(k, v);
-                }
-            }
+            let mut d = copy.annotation_dict(d)?;
             if let Some(num) = irt {
                 d.set(b"IRT".to_vec(), Object::Ref(ObjRef::new(num, 0)));
             }
             d.set(b"Page".to_vec(), Object::Int(pi as i64));
-            annots.push(d);
+            let slot = copy.objects.get_mut(index).ok_or_else(|| DataError::Malformed("FDF comment slot is missing".into()))?;
+            *slot = Object::Dict(d);
         }
         body.extend_from_slice(b"/Annots [");
-        for i in 0..annots.len() {
+        for i in 0..count {
             let _ = write!(body, "{} 0 R ", i + 2);
         }
         body.extend_from_slice(b"] ");
@@ -538,16 +766,17 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> V
     body.extend_from_slice(b"/F ");
     body.extend(pdf_string(file));
     body.extend_from_slice(b" >> >>");
+    copy.finish(doc)?;
     let mut out = b"%FDF-1.2\n%\xE2\xE3\xCF\xD3\n".to_vec();
-    let mut offsets = Vec::with_capacity(annots.len() + 1);
+    let mut offsets = Vec::with_capacity(copy.objects.len() + 1);
     offsets.push(out.len());
     out.extend_from_slice(b"1 0 obj\n");
     out.extend(body);
     out.extend_from_slice(b"\nendobj\n");
-    for (i, d) in annots.into_iter().enumerate() {
+    for (i, object) in copy.objects.into_iter().enumerate() {
         offsets.push(out.len());
         let _ = writeln!(out, "{} 0 obj", i + 2);
-        printcraft_cos::serialize(&Object::Dict(d), &mut out);
+        printcraft_cos::serialize(&object, &mut out);
         out.extend_from_slice(b"\nendobj\n");
     }
     let xref = out.len();
@@ -556,12 +785,32 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> V
         let _ = writeln!(out, "{o:010} 00000 n ");
     }
     let _ = write!(out, "trailer\n<< /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n");
-    out
+    Ok(out)
 }
-/// The XML element name for a field name (letters, digits, `_`, `-`, `.`).
+/// XML 1.0 fifth-edition NameStartChar, excluding `:` for an unprefixed NCName.
+/// https://www.w3.org/TR/2008/REC-xml-20081126/#NT-NameStartChar
+fn xml_name_start(c: char) -> bool {
+    matches!(
+        c,
+        '_' | 'A'..='Z' | 'a'..='z'
+            | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}'
+            | '\u{370}'..='\u{37D}' | '\u{37F}'..='\u{1FFF}'
+            | '\u{200C}'..='\u{200D}' | '\u{2070}'..='\u{218F}'
+            | '\u{2C00}'..='\u{2FEF}' | '\u{3001}'..='\u{D7FF}'
+            | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{EFFFF}'
+    )
+}
+
+fn xml_name_char(c: char) -> bool {
+    xml_name_start(c) || matches!(c, '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
+}
+
+/// Keep the existing letters/digits/`_`/`-`/`.` normalization, constrained to valid NCNames.
 fn xml_name(name: &str) -> String {
-    let mut s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
-    if !s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') {
+    let mut s: String =
+        name.chars().map(|c| if (c.is_alphanumeric() && xml_name_char(c)) || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
+    if !s.chars().next().is_some_and(|c| (c.is_alphabetic() && xml_name_start(c)) || c == '_') {
         s.insert(0, '_');
     }
     s
@@ -592,7 +841,7 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             out
         }
         Format::Csv => {
-            let q = |s: &str| if s.contains([',', '"', '\n']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+            let q = |s: &str| if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
             format!(
                 "{}\n{}\n",
                 fields.iter().map(|f| q(&f.0)).collect::<Vec<_>>().join(","),
@@ -925,7 +1174,12 @@ fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<Str
     for f in node.children().filter(|c| c.has_tag_name("field")) {
         let Some(name) = f.attribute("name") else { continue };
         let full = if prefix.is_empty() { name.to_string() } else { format!("{prefix}.{name}") };
-        let vals: Vec<String> = f.children().filter(|c| c.has_tag_name("value")).map(|v| v.text().unwrap_or("").to_string()).collect();
+        let vals: Vec<String> = f
+            .children()
+            .filter(|c| c.has_tag_name("value"))
+            // Comments and processing instructions can split a value into several text nodes.
+            .map(|v| v.children().filter(|n| n.is_text()).filter_map(|n| n.text()).collect())
+            .collect();
         if !vals.is_empty() {
             out.push((full.clone(), vals));
         }
@@ -1016,7 +1270,7 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
             }
         }
     }
-    let q = |s: &str| if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+    let q = |s: &str| if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
@@ -1076,6 +1330,31 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     Ok(report)
 }
 
+// Inspect the first logical record: tabs within quoted CSV cells are data. A quote
+// in the middle of an unquoted TSV name stays literal, as in the TSV reader.
+fn has_tab_delimiter(text: &str) -> bool {
+    let mut quoted = false;
+    let mut cell_start = true;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+            }
+            '"' if quoted || cell_start => {
+                quoted = !quoted;
+                cell_start = false;
+            }
+            '\t' if !quoted => return true,
+            '\r' | '\n' if !quoted => return false,
+            ',' if !quoted => cell_start = true,
+            _ => cell_start = false,
+        }
+    }
+    // An unclosed quote can be a literal TSV field-name character.
+    quoted && text.lines().next().is_some_and(|line| line.contains('\t'))
+}
+
 /// Form data from XML, CSV or tab-delimited text.
 fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     let mut report = Report::default();
@@ -1089,10 +1368,11 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
             .map(|c| {
                 let name =
                     c.attributes().find(|a| a.name() == "original").map(|a| a.value().to_string()).unwrap_or_else(|| c.tag_name().name().to_string());
-                (name, vec![c.text().unwrap_or("").to_string()])
+                // Comments and processing instructions do not end a field's character data.
+                (name, vec![c.children().filter(|node| node.is_text()).filter_map(|node| node.text()).collect()])
             })
             .collect()
-    } else if t.lines().next().is_some_and(|l| l.contains('\t')) {
+    } else if has_tab_delimiter(t) {
         tab_delimited(t)?
     } else {
         // CSV with quotes: a quoted value may hold commas, doubled quotes and line breaks.

@@ -1,10 +1,12 @@
 //! Autosave and crash recovery: a session is "crashed" by dropping the app without a clean
 //! quit, and a new session must offer, recover or discard what was autosaved.
 
+mod support;
+
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use printcraft_engine::Edit;
 use printcraft_ui_egui::{PrintCraftApp, RecoveryStore};
 
@@ -39,8 +41,9 @@ fn store(tag: &str) -> RecoveryStore {
     RecoveryStore::new(dir)
 }
 
+/// Snapshot files (the PDF and its sidecar), not the running instances' lock files.
 fn files_in(s: &RecoveryStore) -> usize {
-    std::fs::read_dir(s.dir()).map(|d| d.count()).unwrap_or(0)
+    std::fs::read_dir(s.dir()).map(|d| d.flatten().filter(|e| e.path().extension().and_then(|x| x.to_str()) != Some("lock")).count()).unwrap_or(0)
 }
 
 /// A session that edits a document, autosaves, and then "crashes" (is dropped).
@@ -80,7 +83,7 @@ fn a_crashed_session_is_offered_and_recovered_unsaved() {
     h.get_by_label("Recover unsaved documents?");
     h.get_by_label("work.pdf");
     h.get_by_label("Recover").click();
-    h.run_steps(4);
+    support::wait_until(&mut h, "recovered document", |app| app.views.len() == 1);
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let doc = app.session.get(app.views[0].id).unwrap();
@@ -180,13 +183,13 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     let mut h = harness(s.clone());
     h.get_by_label_contains("password-protected");
     h.get_by_label("Recover").click();
-    h.run_steps(3);
+    support::wait_until(&mut h, "recovery password prompt", |app| app.password_prompt.is_some());
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();
     field.type_text("pw");
     h.run_steps(2);
     h.key_press(Key::Enter);
-    h.run_steps(4);
+    support::wait_until(&mut h, "unlocked recovery", |app| app.views.len() == 1);
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let d = app.session.get(app.views[0].id).unwrap();
@@ -205,8 +208,15 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
     assert_eq!(s.list().len(), 1);
     let mut h = harness(s.clone());
     h.get_by_label("Recover").click();
-    h.run_steps(3);
+    support::wait_until(&mut h, "recovery password prompt", |app| app.password_prompt.is_some());
     assert!(h.state().password_prompt.is_some(), "the snapshot asks for its password");
+    // The new modal registers its layer before its controls become interactive.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.query_by_label("Cancel").is_none_or(|node| node.accesskit_node().is_disabled()) {
+        h.step();
+        assert!(std::time::Instant::now() < deadline, "the password Cancel button did not become enabled");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(h.state().password_prompt.is_none());
@@ -215,7 +225,7 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
     let app = h.state_mut();
     app.open_bytes("B.pdf", Some("/docs/B.pdf".into()), encrypted(fixture(1), "pw-b")).unwrap();
     app.submit_password(Some("pw-b".into()));
-    h.run_steps(3);
+    support::wait_until(&mut h, "unlocked B", |app| app.views.len() == 1);
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let b = app.session.get(app.views[0].id).unwrap();
@@ -260,6 +270,7 @@ fn a_failed_metadata_write_keeps_the_completed_snapshot_recoverable() {
         path: Some("original.pdf".into()),
         saved_at: 1,
         encrypted: false,
+        instance: None,
     };
     // A directory at the sidecar path makes its atomic rename fail after the PDF was written.
     std::fs::create_dir_all(s.dir().join("snapshot.json")).unwrap();
@@ -291,7 +302,7 @@ fn missing_corrupt_or_mismatched_metadata_recovers_the_snapshot_without_an_origi
         }
         let mut h = harness(s.clone());
         h.get_by_label("Recover").click();
-        h.run_steps(4);
+        support::wait_until(&mut h, "recovery without valid metadata", |app| app.views.len() == 1);
         let app = h.state();
         assert_eq!(app.views.len(), 1, "{case}");
         let doc = app.session.get(app.views[0].id).unwrap();
@@ -316,14 +327,14 @@ fn an_encrypted_snapshot_without_metadata_still_requires_its_password() {
     std::fs::remove_file(s.dir().join(format!("{}.json", meta.key))).unwrap();
     let mut h = harness(s.clone());
     h.get_by_label("Recover").click();
-    h.run_steps(3);
+    support::wait_until(&mut h, "orphan recovery password prompt", |app| app.password_prompt.is_some());
     assert!(h.state().views.is_empty());
     let field = h.get_by_role(Role::PasswordInput);
     field.focus();
     field.type_text("pw");
     h.run_steps(2);
     h.key_press(Key::Enter);
-    h.run_steps(4);
+    support::wait_until(&mut h, "unlocked orphan recovery", |app| app.views.len() == 1);
     let app = h.state();
     assert_eq!(app.views.len(), 1);
     let doc = app.session.get(app.views[0].id).unwrap();
@@ -367,4 +378,56 @@ fn control_click_effects_are_visible_when_the_reply_arrives() {
     call(&mut h, "ui.click", serde_json::json!({ "label": "Discard" }));
     assert_eq!(files_in(&s), 0, "discarded by the time the click is answered");
     assert_eq!(call(&mut h, "ui.state", serde_json::json!({}))["dialog"], serde_json::Value::Null);
+}
+
+/// A running instance's autosaves are its own (#2166): a second instance started meanwhile
+/// does not offer them, so it cannot discard them either; once the first is gone, they are
+/// offered. A sidecar naming a lock file outside the folder is a plain leftover. Each instance
+/// is a store of its own here: a clone shares its instance.
+#[test]
+fn a_running_instances_autosaves_are_not_offered_to_a_second_instance() {
+    let s = store("live");
+    let instance = || RecoveryStore::new(s.dir());
+    let mut first = PrintCraftApp::new();
+    first.set_option("language", "en").unwrap();
+    first.enable_recovery(instance());
+    first.open_bytes("work.pdf", None, fixture(2)).unwrap();
+    assert!(first.apply_edit(Edit::DeletePages { pages: vec![0] }));
+    first.autosave_now();
+    assert_eq!(files_in(&s), 2);
+    let second = harness(instance());
+    assert!(second.state().recoverable.is_empty() && second.state().dialog.is_none(), "the first instance is still running");
+    drop(second);
+    drop(first);
+    let third = harness(instance());
+    assert_eq!(third.state().recoverable.len(), 1, "offered once the first instance is gone");
+    assert_eq!(files_in(&s), 2, "listing removes no snapshot");
+    drop(third);
+    let meta =
+        std::fs::read_dir(s.dir()).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().and_then(|x| x.to_str()) == Some("json")).unwrap();
+    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&meta).unwrap()).unwrap();
+    json["instance"] = "../../outside.lock".into();
+    std::fs::write(&meta, json.to_string()).unwrap();
+    let fourth = harness(instance());
+    assert_eq!(fourth.state().recoverable.len(), 1, "a name outside the folder is not looked at, and the snapshot is offered");
+}
+
+/// Snapshots are unsaved copies of open documents, so on Unix only the owner may open the
+/// folder: a new one is made that way, and one an earlier version left with the default mode is
+/// tightened when an instance starts.
+#[cfg(unix)]
+#[test]
+fn the_recovery_folder_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |s: &RecoveryStore| std::fs::metadata(s.dir()).unwrap().permissions().mode() & 0o777;
+    let fresh = store("owner-only");
+    crashed_session(&fresh, fixture(2), None, None);
+    assert_eq!(files_in(&fresh), 2);
+    assert_eq!(mode(&fresh), 0o700);
+
+    let earlier = store("owner-only-earlier");
+    std::fs::create_dir_all(earlier.dir()).unwrap();
+    std::fs::set_permissions(earlier.dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    earlier.claim();
+    assert_eq!(mode(&earlier), 0o700);
 }

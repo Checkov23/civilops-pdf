@@ -1,8 +1,8 @@
 //! What content editing and redaction need from a PDF font: how to split a string into character
 //! codes, each code's advance width, the glyph height (ascent, descent), and what each code means
 //! (Unicode) — and back, which text the font can show. Widths come from the font dictionary
-//! (`/Widths`, `/W`, `/DW`, `/MissingWidth`); a standard-14 font with no `/Widths` uses the exact
-//! published metrics ([`crate::Std14`]).
+//! (`/Widths`, `/W`, `/DW`, `/MissingWidth`); a simple font with no `/Widths` uses its embedded
+//! sfnt program's advances, else the exact published standard-14 metrics ([`crate::Std14`]).
 //!
 //! Meanings come from `/ToUnicode`, else the encoding (`/Encoding` base and `/Differences` glyph
 //! names, ISO 32000-2 Annex D). A code may deliberately have **no** meaning: where the font's own
@@ -37,6 +37,9 @@ pub struct Metrics {
     /// Code → CID for embedded non-identity CMaps (`cidrange` / `cidchar`).
     cid_map: Vec<(u32, u32, u32)>,
     default: f64,
+    /// Composite fonts with an explicit `/DW`: `/W` may leave out the glyphs that have that
+    /// width (Chrome and Skia do), so a CID missing from `/W` is not a missing glyph.
+    explicit_default: bool,
     /// The standard-14 face to measure with when the dictionary carries no `/Widths`.
     std14: Option<crate::Std14>,
     /// Glyph units → text space (0.001, or `/FontMatrix[0]` for Type 3).
@@ -61,6 +64,9 @@ pub struct Metrics {
     code_len: usize,
     /// Valid single-character explicit mappings, preindexed once for large full CJK fonts.
     explicit_reverse: HashMap<char, u32>,
+    /// Subset CIDFontType2 only: one bit per CID (below 65 536) whose glyph has an outline in the
+    /// embedded program. See [`cids_with_outlines`].
+    outlined_cids: Vec<u64>,
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -127,6 +133,76 @@ pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+/// The CIDs (below 65 536) of a Type 0 font over an embedded TrueType program whose glyph has
+/// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read.
+/// Subsetters keep glyph ids and empty the glyphs they drop, so an empty glyph is a missing one.
+fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
+    use skrifa::raw::TableProvider as _;
+    let Some(descendant) = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref())
+    else {
+        return Vec::new();
+    };
+    let Some(program) = dict(doc, descendant.get(b"FontDescriptor")).and_then(|d| d.get(b"FontFile2").cloned()) else { return Vec::new() };
+    let program = doc.resolve(&program);
+    let Object::Stream(stream) = program.as_ref() else { return Vec::new() };
+    let Ok(bytes) = stream.decoded_within(16 << 20) else { return Vec::new() };
+    let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
+    let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
+    match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
+        None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
+        Some(Object::Stream(map)) => {
+            let Ok(map) = map.decoded_within(1 << 17) else { return Vec::new() };
+            bit_set_below_64k(
+                map.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, gid)| outlined(u32::from(u16::from_be_bytes(**gid))))
+                    .map(|(cid, _)| cid as u32),
+            )
+        }
+        Some(_) => Vec::new(),
+    }
+}
+
+/// A simple font with no `/Widths` is drawn (and found by text search) with its embedded
+/// program's own advances, so measure with them too; a standard-14 guess from the name can be
+/// wider and leave the end of a line outside a redaction mark (#2130). The glyph is looked up
+/// the way the renderer does: the encoding's character in the Unicode cmap, else the code itself
+/// (as in a symbolic cmap), else `.notdef`. Only sfnt programs are read; others keep the guess.
+fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
+    use skrifa::instance::{LocationRef, Size};
+    use skrifa::{GlyphId, MetadataProvider as _, raw::TableProvider as _};
+    let Some(descriptor) = dict(doc, font.get(b"FontDescriptor")) else { return };
+    for key in [b"FontFile2".as_slice(), b"FontFile3".as_slice()] {
+        let Some(object) = descriptor.get(key) else { continue };
+        let object = doc.resolve(object);
+        let Object::Stream(stream) = object.as_ref() else { continue };
+        let Ok(bytes) = stream.decoded_within(16 << 20) else { continue };
+        let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
+        let upem = f64::from(face.metrics(Size::unscaled(), LocationRef::default()).units_per_em);
+        if upem == 0.0 {
+            continue;
+        }
+        let advances = face.glyph_metrics(Size::unscaled(), LocationRef::default());
+        let (charmap, cmap) = (face.charmap(), face.cmap().ok());
+        let found = |g: Option<GlyphId>| g.filter(|g| *g != GlyphId::NOTDEF);
+        m.widths = (0..=255u32)
+            .map(|code| {
+                let glyph = found(m.unicode.encoding.get(&code).and_then(|t| only_char(t)).and_then(|c| charmap.map(c)))
+                    .or_else(|| [0, 0xF000, 0xF100, 0xF200].into_iter().find_map(|o| found(cmap.as_ref()?.map_codepoint(code + o))));
+                // A subset holds only the glyphs it draws: 0 keeps `has_glyph` false for the rest.
+                match glyph {
+                    None if m.subset => 0.0,
+                    _ => advances.advance_width(glyph.unwrap_or(GlyphId::NOTDEF)).map_or(0.0, |w| f64::from(w) * 1000.0 / upem),
+                }
+            })
+            .collect();
+        m.first = 0;
+        return;
+    }
 }
 
 /// Replace an existing cmap directory entry with a bounded Unicode format-12 table.
@@ -525,6 +601,7 @@ impl Metrics {
             cid_ranges: Vec::new(),
             cid_map: Vec::new(),
             default: 500.0,
+            explicit_default: false,
             std14: Some(crate::Std14::Helvetica),
             scale: 0.001,
             ascent: 0.9,
@@ -538,6 +615,7 @@ impl Metrics {
             visual_order: false,
             code_len: 1,
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
+            outlined_cids: Vec::new(),
         }
     }
 
@@ -558,12 +636,18 @@ impl Metrics {
         m.bold |= bold;
         m.italic |= italic;
         m.base_font = base;
+        if m.composite && m.subset {
+            m.outlined_cids = cids_with_outlines(doc, font);
+        }
         m.code_len = match &m.codes {
             Codes::One => 1,
             Codes::Two => 2,
             Codes::Ranges(r) => r.last().map_or(2, |x| x.0),
         };
         m.unicode = unicode_map(doc, font, m.composite);
+        if m.std14.is_some() {
+            embedded_widths(doc, font, &mut m);
+        }
         let mut reverse = HashMap::new();
         for (&code, text) in m.unicode.explicit.iter().map(|(c, (_, t))| (c, t)).chain(m.unicode.encoding.iter()) {
             if let Some(ch) = only_char(text)
@@ -611,6 +695,7 @@ impl Metrics {
                 .unwrap_or_default();
             if let Some(dw) = desc.get(b"DW").and_then(|d| doc.resolve(d).as_f64()) {
                 m.default = dw;
+                m.explicit_default = true;
             }
             if let Some(w) = desc.get(b"W").map(|w| doc.resolve(w)).and_then(|w| w.as_array().cloned()) {
                 let mut i = 0;
@@ -749,10 +834,25 @@ impl Metrics {
     }
 
     /// Whether the font has a glyph for `code` (subset fonts lack the glyphs they don't use).
+    /// Only asked for codes the font's Unicode mapping gives: a subset's `ToUnicode` lists the
+    /// glyphs it kept, while its `/W` leaves out those of the default width (#1443).
     fn has_glyph(&self, code: u32) -> bool {
         if self.composite {
             let cid = self.cid(code);
-            return self.cid_widths.contains_key(&cid) || self.cid_ranges.iter().any(|(a, b, _)| cid >= *a && cid <= *b) || !self.subset;
+            // CID 0 is `.notdef` (an unmapped code lands there too), whatever ToUnicode says: Word
+            // maps it to a space and gives it a width, and typing with it draws boxes (#3223).
+            if cid == 0 {
+                return false;
+            }
+            // A CID /W leaves out takes /DW, and Skia (Chrome) leaves out every CID of that width: for
+            // those, only the subset's program says whether the glyph is there.
+            return self.cid_widths.contains_key(&cid)
+                || self.cid_ranges.iter().any(|(a, b, _)| cid >= *a && cid <= *b)
+                || !self.subset
+                || self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1)
+                // No readable TrueType program to ask (e.g. CFF or missing): an explicit /DW
+                // still says /W may leave out glyphs of that width (#1443).
+                || (self.outlined_cids.is_empty() && self.explicit_default);
         }
         match code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
             Some(w) => *w > 0.0 || code == 32,
@@ -1164,6 +1264,37 @@ mod tests {
         assert!(embedded_sfnt(&doc, &Dict::new()).is_none());
     }
 
+    /// #2130: with no `/Widths`, an embedded program's advances win over a guess from the name
+    /// ("Mono" would mean Courier, 600 units for every glyph).
+    #[test]
+    fn a_font_without_widths_measures_with_its_embedded_program() {
+        use printcraft_cos::Stream;
+        use skrifa::MetadataProvider as _;
+        let mut doc = Document::new_empty();
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        let face = skrifa::FontRef::new(bytes).unwrap();
+        let (size, location) = (skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+        let upem = f64::from(face.metrics(size, location).units_per_em);
+        let advance = |c: char| f64::from(face.glyph_metrics(size, location).advance_width(face.charmap().map(c).unwrap()).unwrap()) / upem;
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), bytes)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name("HouseMono")),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+                ("FontDescriptor", Object::Dict(descriptor)),
+            ],
+        );
+        let m = Metrics::from_dict(&doc, &f);
+        for c in ['i', 'l', 'W', ' '] {
+            assert!((m.width(u32::from(c)) - advance(c)).abs() < 1e-9, "{c}: {} vs {}", m.width(u32::from(c)), advance(c));
+        }
+        assert!(m.width(u32::from('i')) < 0.4, "not Courier's 0.6");
+    }
+
     #[test]
     fn mac_subset_cmap_uses_pdf_unicode_without_changing_source_program() {
         use skrifa::{MetadataProvider as _, raw::TableProvider as _};
@@ -1328,6 +1459,76 @@ mod tests {
         assert_eq!(m.decode(&[0, 0x24, 0, 0x25, 0, 3, 0, 0x30, 0, 0x31, 0, 0x10]), "AB Hié");
         assert_eq!(m.encode("Hi A").as_deref(), Some(&[0, 0x30, 0, 0x31, 0, 3, 0, 0x24][..]));
         assert_eq!(m.encode("Z"), None);
+    }
+
+    /// Word's Type 0 subsets map CID 0 as well as the real space glyph to U+0020 and give CID 0 a
+    /// width; CID 0 is `.notdef`, so a typed space takes the real one (#3223).
+    #[test]
+    fn composite_fonts_never_encode_with_cid_0() {
+        let mut doc = Document::new_empty();
+        let cmap = b"/CIDInit /ProcSet findresource begin 1 begincodespacerange <0000> <FFFF> endcodespacerange \
+            1 beginbfrange <0000> <0002> [<0020> <004D> <00E1>] endbfrange \
+            1 beginbfrange <0005> <0007> [<0065> <0072> <0020>] endbfrange end";
+        let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec())));
+        let mut desc = Dict::new();
+        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        let widths = [889, 444, 389, 278, 444, 333, 250].map(Object::Int).to_vec();
+        desc.set(b"W".to_vec(), Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Int(778)]), Object::Int(1), Object::Array(widths)]));
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("Type0")),
+                ("BaseFont", Object::name("BCDEEE+TimesNewRomanPSMT")),
+                ("Encoding", Object::name("Identity-H")),
+                ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+                ("ToUnicode", Object::Ref(tu)),
+            ],
+        );
+        let m = Metrics::from_dict(&doc, &f);
+        assert_eq!(m.encode("Me er").as_deref(), Some(&[0, 1, 0, 5, 0, 7, 0, 5, 0, 6][..]));
+        assert_eq!(m.decode(&[0, 1, 0, 7, 0, 2]), "M á");
+    }
+
+    /// Chrome's subsets leave the glyphs of `/DW` width out of `/W` (#1443): "s" (CID 0x56) is
+    /// still in the font, but nothing is when the font gives no default width to point at.
+    #[test]
+    fn composite_subset_glyphs_of_the_default_width_are_present() {
+        let metrics = |dw: bool| {
+            let mut doc = Document::new_empty();
+            let cmap = b"/CIDInit /ProcSet findresource begin 1 begincodespacerange <0000> <FFFF> endcodespacerange \
+                1 beginbfrange <0055> <0057> <0072> endbfrange end";
+            let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec())));
+            let mut desc = Dict::new();
+            desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+            if dw {
+                desc.set(b"DW".to_vec(), Object::Int(500));
+            }
+            desc.set(
+                b"W".to_vec(),
+                Object::Array(vec![
+                    Object::Int(0x55),
+                    Object::Array(vec![Object::Int(333)]),
+                    Object::Int(0x57),
+                    Object::Array(vec![Object::Int(277)]),
+                ]),
+            );
+            let f = font(
+                &mut doc,
+                vec![
+                    ("Subtype", Object::name("Type0")),
+                    ("BaseFont", Object::name("AAAAAA+LiberationSans")),
+                    ("Encoding", Object::name("Identity-H")),
+                    ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+                    ("ToUnicode", Object::Ref(tu)),
+                ],
+            );
+            Metrics::from_dict(&doc, &f)
+        };
+        let chrome = metrics(true);
+        assert_eq!(chrome.encode("rst").as_deref(), Some(&[0, 0x55, 0, 0x56, 0, 0x57][..]));
+        assert_eq!(chrome.width(0x56), 0.5);
+        assert_eq!(chrome.encode("x"), None, "a character the ToUnicode map doesn't give");
+        assert_eq!(metrics(false).encode("s"), None);
     }
 
     /// A `/W` run that starts at the last CID stops there instead of overflowing onto CID 0.
@@ -1586,7 +1787,8 @@ mod tests {
                 assert_eq!(got, expected.get(&code).cloned(), "code {code:#06x} in {cmap}");
             }
             let mut reverse: HashMap<char, u32> = HashMap::new();
-            for (&code, text) in &expected {
+            // Code 0 is CID 0, `.notdef`, which no character is encoded with.
+            for (&code, text) in expected.iter().filter(|&(&code, _)| code != 0) {
                 if let Some(c) = only_char(text) {
                     keep(&mut reverse, c, code);
                 }
@@ -1765,6 +1967,32 @@ mod encoding_tests {
             let m = Metrics::from_dict(&doc, &d);
             assert_eq!(m.text_of(0x61).as_deref(), Some("a"), "{name} was asked for by name");
         }
+    }
+
+    /// The Annex D.2 alias codes read, through the whole decode path, as the ink they draw.
+    ///
+    /// This is the map `redact` matches its patterns on (`unicode_map`), so a code that decodes
+    /// to an invisible formatting character is a silent miss, not a cosmetic one: "well-known"
+    /// written with the 0xAD byte matched no search and no redaction pattern.
+    #[test]
+    fn the_alias_codes_decode_as_ordinary_ink_and_encode_back_to_the_low_code() {
+        let (doc, d) = simple("Helvetica", None, Some(Object::name("WinAnsiEncoding")));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"well\xadknown"), "well-known");
+        assert_eq!(m.decode(b"a\xa0b"), "a b");
+        assert_eq!(m.encode("well-known a b").as_deref(), Some(&b"well-known a b"[..]), "the low code is the one written");
+
+        let (doc, d) = simple("Helvetica", None, Some(Object::name("MacRomanEncoding")));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"a\xcab"), "a b");
+        assert_eq!(m.decode(b"a\xadb"), "a\u{2260}b", "MacRoman 0xAD is `notequal`, not a hyphen");
+        assert_eq!(m.encode("a b").as_deref(), Some(&b"a b"[..]));
+
+        // An explicit /Differences name still says what it says: this is a property of those
+        // codes in those tables, not of the glyph names.
+        let (doc, d) = simple("Helvetica", None, Some(differences(vec![Object::Int(0x41), Object::name("sfthyphen"), Object::name("nbspace")])));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"AB"), "\u{ad}\u{a0}");
     }
 
     /// Pins a deliberate restraint, so it is not "fixed" into a regression: a great many ordinary

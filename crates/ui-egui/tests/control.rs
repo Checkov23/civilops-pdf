@@ -5,9 +5,22 @@ use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use printcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use printcraft_ui_egui::PrintCraftApp;
 use printcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
+
+/// The text each page shows, in order, as the app's session holds it.
+fn page_texts(app: &PrintCraftApp) -> Vec<String> {
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+    (0..r.page_count())
+        .map(|p| {
+            let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+            out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+        })
+        .collect()
+}
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -1008,6 +1021,45 @@ fn state_reports_the_selected_pages() {
 }
 
 #[test]
+fn ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page() {
+    let (mut h, c) = harness_pages(3);
+    ok(&mut h, &c, "ui.set", json!({ "key": "tool", "value": "organize" }));
+    h.run_steps(3);
+    // The grid cell of a page: the node labelled exactly "Page N" (the checkbox says "Select page N").
+    let cell = |h: &mut Harness<'static, PrintCraftApp>, c: &ControlClient, page: usize| -> [f64; 4] {
+        let nodes = ok(h, c, "ui.inspect", json!({ "query": &format!("page {page}") }));
+        let want = format!("Page {page}");
+        let r = nodes["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["label"].as_str() == Some(want.as_str()))
+            .and_then(|w| w["rect"].as_array().cloned())
+            .expect("the page's grid cell");
+        let f = |i: usize| r[i].as_f64().unwrap();
+        [f(0), f(1), f(2), f(3)]
+    };
+    let (a, b) = (cell(&mut h, &c, 1), cell(&mut h, &c, 3));
+    // The gesture reads the OS the context reports: Option on macOS, Ctrl elsewhere.
+    let copy = if h.ctx.os() == egui::os::OperatingSystem::Mac { "alt" } else { "ctrl" };
+    ok(
+        &mut h,
+        &c,
+        "ui.drag",
+        json!({
+            "from": [(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0],
+            "to": [b[2] - 4.0, (b[1] + b[3]) / 2.0],
+            "modifiers": [copy],
+        }),
+    );
+    h.run_steps(3);
+    let st = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(st["documents"][0]["pages"], 4, "the drag copied the page instead of moving it: {st}");
+    assert_eq!(st["active"]["selected_pages"], json!([4]), "{st}");
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 1"], "the copy landed at the drop gap, after page 3");
+}
+
+#[test]
 fn organize_overview_is_reachable_through_the_control_channel() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "tool", "value": "organize" }));
@@ -1319,7 +1371,8 @@ fn explicit_panel_requests_reveal_inactive_group_members() {
     h.get_by_label("This document has no bookmarks.");
     ok(&mut h, &c, "ui.command", json!({"id":"edit.edit_text"}));
     h.run_steps(4);
-    h.get_by_label("Edit text & images");
+    // The Edit panel's own row: the tool's name is on the floating toolbar too while it is on.
+    h.get_by_label("Header and footer");
 }
 
 #[test]
@@ -1548,4 +1601,96 @@ fn click_and_drag_refuse_coordinates_that_overflow_like_move() {
     let (x, y) = (read[0].as_f64().unwrap() + 4.0, read[1].as_f64().unwrap() + 4.0);
     assert_eq!(ok(&mut h, &c, "ui.click", json!({ "x": x, "y": y }))["clicked"], json!([x, y]));
     ok(&mut h, &c, "ui.drag", json!({ "from": [x, y], "to": [x + 10.0, y], "steps": 2 }));
+}
+
+#[test]
+fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
+    let (mut h, _c) = harness();
+    let area = h.state().views[0].viewport_rect();
+    let shown = |h: &Harness<'static, PrintCraftApp>| {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("page-size-hint"));
+        h.ctx.memory(|m| m.areas().visible_last_frame(&layer))
+    };
+    let away = area.center() + egui::vec2(300.0, -200.0);
+    h.event(egui::Event::PointerMoved(away));
+    h.run_steps(3);
+    assert!(!shown(&h), "top-right: hidden");
+    h.event(egui::Event::PointerMoved(area.left_bottom() + egui::vec2(80.0, -80.0)));
+    h.run_steps(3);
+    assert!(shown(&h), "bottom-left: shown");
+    if let Ok(dir) = std::env::var("PRINTCRAFT_SHOT_DIR") {
+        h.render().unwrap().save(format!("{dir}/page-size-hint.png")).unwrap();
+    }
+    h.event(egui::Event::PointerMoved(away));
+    h.run_steps(3);
+    assert!(!shown(&h), "pointer left: hidden again");
+}
+
+#[test]
+fn navigation_history_commands_and_rail_are_per_tab_and_non_editing() {
+    for os in [egui::os::OperatingSystem::Nix, egui::os::OperatingSystem::Mac, egui::os::OperatingSystem::Windows] {
+        navigation_history_for_os(os);
+    }
+}
+
+fn navigation_history_for_os(os: egui::os::OperatingSystem) {
+    let (mut h, c) = harness();
+    h.ctx.set_os(os);
+    h.run_steps(2);
+    let enabled =
+        |list: Value, id: &str| list["commands"].as_array().unwrap().iter().find(|cmd| cmd["id"] == id).unwrap()["enabled"].as_bool().unwrap();
+    assert!(!enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
+    assert!(call(&mut h, &c, "ui.command", json!({"id": "view.previous_view"})).is_err());
+    // Empty-history shortcuts were silent before registry integration and must stay silent.
+    for key in ["[", "]"] {
+        ok(&mut h, &c, "ui.key", json!({"key": key, "modifiers": ["command"]}));
+        assert!(h.state().toast.is_none(), "an unavailable history action must not ask to open the already-open document");
+    }
+    let before = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
+    ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "4"}));
+    assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
+    // The real rail button is accessible and invokes the same history, not the adjacent page.
+    let shortcut = if h.ctx.os() == egui::os::OperatingSystem::Mac { "⌘[" } else { "Ctrl+[" };
+    ok(&mut h, &c, "ui.click", json!({"label": &format!("Previous view ({shortcut})")}));
+    assert_eq!(h.state().views[0].current, 0);
+    assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.next_view"));
+    ok(&mut h, &c, "ui.command", json!({"id": "view.next_view"}));
+    assert_eq!(h.state().views[0].current, 3);
+    ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "5"}));
+    ok(&mut h, &c, "ui.key", json!({"key": "[", "modifiers": ["command"]}));
+    assert_eq!(h.state().views[0].current, 3, "shortcut traverses exactly one history entry");
+    ok(&mut h, &c, "ui.key", json!({"key": "]", "modifiers": ["command"]}));
+    assert_eq!(h.state().views[0].current, 4);
+    ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
+    h.state_mut().open_bytes("other.pdf", None, fixture(5)).unwrap();
+    assert!(!enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
+    ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "2"}));
+    ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
+    assert_eq!(h.state().views[1].current, 0);
+    assert_eq!(h.state().views[0].current, 3, "other tab's history does not move this document");
+    h.state_mut().active = Some(0);
+    ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
+    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, before);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    h.state_mut().open_bytes("reopened.pdf", None, before.as_ref().clone()).unwrap();
+    assert!(h.state().views.last().unwrap().back.is_empty());
+    assert!(h.state().views.last().unwrap().forward.is_empty());
+}
+
+#[test]
+fn routine_continuous_scrolling_does_not_add_navigation_history() {
+    let (mut h, c) = harness_pages(20);
+    ok(&mut h, &c, "ui.set", json!({"key": "animation_effects", "value": "off"}));
+    h.hover_at(egui::pos2(700.0, 450.0));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -1200.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(8);
+    assert!(h.state().views[0].current > 0, "the wheel really moved to a later page");
+    assert!(h.state().views[0].back.is_empty());
+    assert!(h.state().views[0].forward.is_empty());
 }

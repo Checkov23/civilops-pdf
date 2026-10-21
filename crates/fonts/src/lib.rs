@@ -10,11 +10,13 @@
 mod craft;
 pub mod embedding;
 mod encodings;
+pub mod fallback;
 pub mod pdf;
 mod script;
 mod shaping;
 pub mod source_shaping;
 mod std14;
+mod std14_metrics;
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_hebrew_font, document_japanese_font, document_japanese_font_for_style,
     document_japanese_fonts_for_style, document_thai_font, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts,
@@ -23,7 +25,9 @@ pub use craft::{
 pub use script::{
     GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
 };
-pub use shaping::{ShapedCluster, ShapedScript, arabic_glyph, arabic_has, shape_arabic, shape_thai, shaped_glyph, thai_has};
+pub use shaping::{
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+};
 pub use std14::Std14;
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
@@ -76,13 +80,19 @@ pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) 
     let mut lines = Vec::new();
     for para in text.split(['\n', '\r']) {
         let mut line = String::new();
+        // No word is on the line yet; an empty word (a leading space) still starts it.
+        let mut fresh = true;
         for word in para.split(' ') {
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if measure(&candidate, size) <= width || line.is_empty() && measure(word, size) <= width {
+            let candidate = if fresh { word.to_string() } else { format!("{line} {word}") };
+            if measure(&candidate, size) <= width || fresh && measure(word, size) <= width {
                 line = candidate;
+                fresh = false;
                 continue;
             }
-            if !line.is_empty() {
+            // Indentation alone is not a line: drop it before an over-long word.
+            if line.trim().is_empty() {
+                line.clear();
+            } else {
                 lines.push(std::mem::take(&mut line));
             }
             for ch in word.chars() {
@@ -91,6 +101,7 @@ pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) 
                 }
                 line.push(ch);
             }
+            fresh = line.is_empty();
         }
         lines.push(line);
     }
@@ -253,6 +264,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wrap_keeps_leading_spaces() {
+        assert_eq!(wrap("    indented", 11.0, 500.0), ["    indented"]);
+        assert_eq!(wrap("  a b\n c", 11.0, 500.0), ["  a b", " c"]);
+        assert_eq!(wrap("", 11.0, 500.0), [""]);
+        // A single leading space before a word that must be broken leaves no blank first line.
+        let broken = wrap(" abcdefghijklmnopqrstuvwxyz", 11.0, 40.0);
+        assert!(broken.len() > 1 && broken.iter().all(|l| !l.is_empty()), "{broken:?}");
+        // So does indentation of two or more spaces: no whitespace-only line, same as one space.
+        let broken = wrap("  abcdefghijklmnopqrstuvwxyz", 11.0, 40.0);
+        assert!(broken.len() > 1 && broken.iter().all(|l| !l.trim().is_empty()), "{broken:?}");
+        assert_eq!(broken, wrap(" abcdefghijklmnopqrstuvwxyz", 11.0, 40.0));
+    }
+
+    #[test]
     fn win_ansi_encodability_matches_the_encoder() {
         for c in ['a', 'é', 'ÿ', '€', '—', '™', '\t', '?'] {
             assert!(win_ansi_encodable(c), "{c:?}");
@@ -301,11 +326,53 @@ mod tests {
         assert_eq!(literal(b"a(b)\\c"), b"(a\\(b\\)\\\\c)");
     }
 
+    /// WinAnsiEncoding's 0xAD is the `hyphen` glyph and its 0xA0 is `space`, not U+00AD and
+    /// U+00A0; MacRomanEncoding's 0xCA is `space` too.
+    ///
+    /// Annex D.2 gives each of those codes the same glyph name as the ordinary one (0x2D, 0x20),
+    /// so the bytes a Windows codepage calls a soft hyphen and a non-breaking space draw ordinary
+    /// ink and must extract as it. Reading them as the formatting characters hid them: a soft
+    /// hyphen is invisible, so a search for "well-known" missed text that drew exactly that, and
+    /// `redact`'s pattern matching missed it too; a non-breaking space does not match the space a
+    /// reader types. Over the 989-file pdf.js corpus this takes the soft hyphens we extract from
+    /// 117 to 13 (104 of them in `XiaoBiaoSong.pdf` alone) and the non-breaking spaces from 30 to
+    /// 26; what remains comes from `/ToUnicode` maps, which say so explicitly and are not touched.
+    /// pdftotext reads both codes as the ordinary character.
+    #[test]
+    fn the_alias_codes_read_as_the_glyph_they_draw() {
+        assert_eq!(encodings::WIN_ANSI.get(0xAD), Some(&u32::from('-')));
+        assert_eq!(encodings::WIN_ANSI.get(0x2D), Some(&u32::from('-')));
+        assert_eq!(encodings::WIN_ANSI.get(0xA0), Some(&u32::from(' ')));
+        assert_eq!(encodings::WIN_ANSI.get(0x20), Some(&u32::from(' ')));
+        assert_eq!(encodings::MAC_ROMAN.get(0xCA), Some(&u32::from(' ')));
+        assert_eq!(encodings::MAC_ROMAN.get(0x20), Some(&u32::from(' ')));
+        // MacRoman has no soft hyphen; 0xAD there is `notequal`, and keeps it.
+        assert_eq!(encodings::MAC_ROMAN.get(0xAD), Some(&0x2260));
+        // Writing is unaffected: '-' and ' ' take the canonical low codes, and a caller holding a
+        // literal U+00AD or U+00A0 still writes the high byte, which is the one that draws them.
+        assert_eq!(win_ansi_byte('-'), Some(0x2D));
+        assert_eq!(win_ansi_byte(' '), Some(0x20));
+        assert_eq!(win_ansi_byte('\u{00ad}'), Some(0xAD));
+        assert_eq!(win_ansi_byte('\u{00a0}'), Some(0xA0));
+        assert_eq!(win_ansi("a-b c"), b"a-b c");
+    }
+
     #[test]
     fn win_ansi_covers_the_0x80_to_0x9f_glyphs() {
-        // Every character in the WinAnsiEncoding table encodes to its code and back (#347).
+        // Every character in the WinAnsiEncoding table encodes to its code and back (#347), except
+        // where two codes share one glyph: 0xAD is `hyphen`, the same glyph as 0x2D, and 0xA0 is
+        // `space`, the same glyph as 0x20, so each decodes to the ordinary character and that
+        // character encodes back to the canonical low code. Round-tripping the *code* is what
+        // cannot hold there; round-tripping the character still does.
+        const ALIASES: &[u8] = &[0xA0, 0xAD];
         for (code, &u) in encodings::WIN_ANSI.iter().enumerate() {
             let Some(c) = char::from_u32(u).filter(|_| u != 0) else { continue };
+            if ALIASES.contains(&(code as u8)) {
+                let canonical = win_ansi_byte(c).expect("an aliased glyph still encodes");
+                assert!(canonical < code as u8, "{c:?}: the canonical code is the lower one");
+                assert_eq!(encodings::WIN_ANSI.get(usize::from(canonical)), Some(&u), "both codes mean the same character");
+                continue;
+            }
             assert_eq!(win_ansi_byte(c), Some(code as u8), "{c:?} (U+{u:04X})");
             assert_eq!(win_ansi(&c.to_string()), [code as u8]);
         }

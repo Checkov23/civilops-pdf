@@ -85,7 +85,14 @@ impl PrintCraftApp {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
         }
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+            && (spec.id != "edit.copy"
+                || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.organize && v.selected_text().is_some_and(|t| !t.is_empty())))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
+            && match spec.id {
+                "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
+                "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
+                _ => true,
+            }
     }
 
     /// Run a registered command by id. Returns `false` when the id is unknown or the command
@@ -174,6 +181,7 @@ impl PrintCraftApp {
             "file.close_all" => self.close_all(),
             "file.revert" => self.dialog = Some(Dialog::Revert),
             "file.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Description)),
+            "file.word_count" => self.dialog = Some(Dialog::WordCount),
             "protect.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Security)),
             // A restricted document's security changes once its permissions password is entered.
             "protect.password" | "protect.remove" if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.can_unlock()) => {
@@ -214,9 +222,15 @@ impl PrintCraftApp {
                 }
             }
             "view.focus_page_input" => {
-                if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get(i))) {
-                    // The page box in the toolbar (chrome.rs); select its number so typing replaces it.
-                    let id = egui::Id::new("page-input");
+                if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get_mut(i))) {
+                    // The page box in the toolbar (chrome.rs); select its label so typing replaces it.
+                    let id = view.page_input_id();
+                    if !ctx.memory(|m| m.has_focus(id))
+                        && let Some(doc) = self.session.get(view.id)
+                    {
+                        // Navigation and this command can arrive before the next rail frame.
+                        view.page_input = view.current_page_label(doc.info.pages.get(view.current).map(|p| p.label.as_str()));
+                    }
                     ctx.memory_mut(|m| m.request_focus(id));
                     let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
                     let len = view.page_input.chars().count();
@@ -260,6 +274,13 @@ impl PrintCraftApp {
                 }
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
+            "view.previous_view" | "view.next_view" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    return v.view_history(id == "view.next_view");
+                }
+            }
+            "view.next_tab" => self.step_tab(true),
+            "view.previous_tab" => self.step_tab(false),
             "view.theme" => {
                 let next = if self.theme == ThemeKind::Light { ThemePreference::Dark } else { ThemePreference::Light };
                 self.set_theme_preference(next);
@@ -314,8 +335,12 @@ impl PrintCraftApp {
                 self.apply_edit(Edit::ResetForm { names: None });
             }
             "page.organize" => {
-                if let Some(i) = active {
-                    self.views[i].organize = !self.views[i].organize;
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    if v.organize {
+                        v.organize = false;
+                    } else {
+                        v.open_organize();
+                    }
                 }
             }
             "page.rotate" => {
@@ -376,6 +401,7 @@ impl PrintCraftApp {
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "a11y.check" => self.start_accessibility_check(),
+            "a11y.find_untagged" => self.find_untagged_content(),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
             "tools.js_console" => self.dialog = Some(Dialog::JsConsole),
             "tools.document_js" => {
@@ -414,6 +440,7 @@ impl PrintCraftApp {
                 }
             }
             "a11y.alt_text" => self.start_alt_text(),
+            "a11y.autotag_fields" => self.autotag_form_fields(),
             "a11y.tags" => self.choose_right_panel(Some(RightPanel::Tags)),
             "a11y.reading_options" => self.dialog = Some(Dialog::Properties(crate::PropsTab::Advanced)),
             "export.all_images" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::AllImages)),
@@ -456,7 +483,10 @@ impl PrintCraftApp {
                 self.redact_search.found = None;
                 self.dialog = Some(Dialog::RedactSearch);
             }
-            "redact.properties" => self.dialog = Some(Dialog::RedactProps),
+            "redact.properties" => {
+                self.redact_before = Some(self.redact_prefs.clone());
+                self.dialog = Some(Dialog::RedactProps);
+            }
             "redact.apply" => {
                 let marks = active.and_then(|i| self.session.get(self.views[i].id)).map_or(0, |d| d.redaction_marks());
                 if marks == 0 {
@@ -498,7 +528,7 @@ impl PrintCraftApp {
             }
             "sign.validate" => {
                 let certs = self.session.trusted_certificates().to_vec();
-                self.session.set_trusted_certificates(certs);
+                self.apply_trusted_certificates(certs);
                 self.choose_right_panel(Some(RightPanel::Signatures));
             }
             "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),
@@ -515,6 +545,12 @@ impl PrintCraftApp {
             "edit.snapshot" => {
                 self.quick_tool = crate::QuickTool::Snapshot;
                 self.notify_tr("Drag a rectangle around the area to copy");
+            }
+            "edit.copy" => {
+                if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
+                    return self.copy_selected_text(i, &ctx);
+                }
+                return false;
             }
             "page.copy" => self.copy_pages(false),
             "page.cut" => self.copy_pages(true),
@@ -615,7 +651,13 @@ impl PrintCraftApp {
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
             "page.duplicate" => {
-                self.apply_edit(Edit::DuplicatePages { pages: targets });
+                self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
+            }
+            // Two or more selected pages reverse among themselves; otherwise the whole document.
+            "page.reverse" => {
+                let all = active.and_then(|i| self.views.get(i)).map_or(0, |v| v.page_count());
+                let pages = if targets.len() >= 2 { targets } else { (0..all).collect() };
+                self.apply_edit(Edit::ReversePages { pages });
             }
             "ocr.enhance_camera" => {
                 // The corners start on the document's edges when they can be found, else
@@ -660,6 +702,20 @@ impl PrintCraftApp {
         true
     }
 
+    /// Shows the next tab (or the previous one) in the strip's order, wrapping around at either
+    /// end (#1542). The Combine files tab, when open, comes after the documents. From Home the
+    /// next tab is the first and the previous one the last.
+    fn step_tab(&mut self, forward: bool) {
+        let count = self.views.len() + usize::from(self.combine_tab.open);
+        let current = if self.combine_showing() { Some(self.views.len()) } else { self.active };
+        let Some(next) = tab_after(current, count, forward) else { return };
+        if next < self.views.len() {
+            self.active = Some(next);
+        } else {
+            self.open_combine_tab();
+        }
+    }
+
     /// Run the registered keyboard shortcuts (more specific combinations first).
     pub(crate) fn registry_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
@@ -675,6 +731,10 @@ impl PrintCraftApp {
         specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
         for spec in specs {
             let Some(s) = spec.shortcut else { continue };
+            // Keep the canvas's silent no-op when there is no previous/next view to visit.
+            if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
+                continue;
+            }
             if typing && !spec.in_text {
                 continue;
             }
@@ -709,6 +769,24 @@ impl PrintCraftApp {
     }
 }
 
+/// The tab after `current` of `count` (before it when `forward` is false), wrapping around. From
+/// no tab, forward is the first and back the last. `None` when there are no tabs.
+fn tab_after(current: Option<usize>, count: usize, forward: bool) -> Option<usize> {
+    let last = count.checked_sub(1)?;
+    Some(match (current.filter(|&i| i <= last), forward) {
+        (None, true) => 0,
+        (None, false) => last,
+        (Some(i), true) => {
+            if i == last {
+                0
+            } else {
+                i + 1
+            }
+        }
+        (Some(i), false) => i.checked_sub(1).unwrap_or(last),
+    })
+}
+
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
 pub(crate) fn registry_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui, menu: &str) {
     for spec in commands::menu(menu) {
@@ -725,17 +803,19 @@ pub(crate) fn registry_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui, menu: &s
             let mut open: Option<String> = None;
             let mut clear = false;
             ui.menu_button(label, |ui| {
-                for r in &app.recent {
-                    if ui.button(&r.name).on_hover_text(&r.path).clicked() {
-                        open = Some(r.path.clone());
+                crate::chrome::scroll_menu(ui, |ui| {
+                    for r in &app.recent {
+                        if ui.button(&r.name).on_hover_text(&r.path).clicked() {
+                            open = Some(r.path.clone());
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button(tl!("Clear Recent Files")).clicked() {
+                        clear = true;
                         ui.close();
                     }
-                }
-                ui.separator();
-                if ui.button(tl!("Clear Recent Files")).clicked() {
-                    clear = true;
-                    ui.close();
-                }
+                })
             });
             if let Some(p) = open {
                 app.open_recent(&p);
@@ -747,7 +827,7 @@ pub(crate) fn registry_menu(app: &mut PrintCraftApp, ui: &mut egui::Ui, menu: &s
             }
             continue;
         }
-        let shortcut = spec.shortcut.map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
+        let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(COPY)).map(|s| shortcut_label(ui.ctx(), s)).unwrap_or_default();
         let enabled = app.command_enabled(spec);
         let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
         if resp.clicked() {
@@ -784,5 +864,21 @@ mod tests {
         assert_eq!(command_shortcut_label(&ctx, "view.read_mode"), "⌃⌘H");
         assert_eq!(command_modifier_label(&ctx), "⌘");
         crate::i18n::set_current(previous);
+    }
+
+    /// Next and previous tab step one place and wrap around at either end; from no tab they go
+    /// to the first or the last (#1542).
+    #[test]
+    fn tab_steps_wrap_around_and_start_from_either_end() {
+        assert_eq!(tab_after(Some(0), 3, true), Some(1));
+        assert_eq!(tab_after(Some(2), 3, true), Some(0), "the last wraps to the first");
+        assert_eq!(tab_after(Some(1), 3, false), Some(0));
+        assert_eq!(tab_after(Some(0), 3, false), Some(2), "the first wraps to the last");
+        assert_eq!(tab_after(None, 3, true), Some(0));
+        assert_eq!(tab_after(None, 3, false), Some(2));
+        assert_eq!(tab_after(Some(0), 1, true), Some(0), "a single tab stays");
+        assert_eq!(tab_after(Some(7), 3, true), Some(0), "a stale index starts over");
+        assert_eq!(tab_after(None, 0, true), None);
+        assert_eq!(tab_after(Some(0), 0, false), None);
     }
 }

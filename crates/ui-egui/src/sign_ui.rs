@@ -5,10 +5,10 @@
 use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
-use printcraft_engine::sign::{self, Appearance, Certificate, DigitalId, Modification, Name, PrivateKey};
+use printcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
 use printcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
 use crate::theme::{self, Tokens};
 use crate::{PrintCraftApp, icons, widgets};
@@ -266,6 +266,12 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
 }
 
 impl PrintCraftApp {
+    /// Export certificate: write `c` as PEM into a chosen folder, named after its subject.
+    pub(crate) fn export_certificate(&mut self, c: &Certificate) {
+        let name = format!("{}.cer", crate::files::attachment_file_name(&c.display_name()));
+        self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate");
+    }
+
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
@@ -357,8 +363,10 @@ impl PrintCraftApp {
         if d.name.trim().is_empty() {
             return Err("Enter a name.".into());
         }
-        if d.password.chars().count() < 6 {
-            return Err("The password must have at least 6 characters.".into());
+        // The message is a catalogue key, so it spells the number out; keep the two in step.
+        const _: () = assert!(sign::pkcs12::MIN_PASSWORD_CHARS == 8);
+        if d.password.chars().count() < sign::pkcs12::MIN_PASSWORD_CHARS {
+            return Err("The password must have at least 8 characters.".into());
         }
         if d.password != d.confirm {
             return Err("The passwords do not match.".into());
@@ -434,6 +442,8 @@ impl PrintCraftApp {
             location: some(&d.location),
             certify: d.certify,
             appearance: d.appearance.clone(),
+            // The labels the preview shows: in the interface language, or all in English.
+            appearance_labels: appearance_labels(crate::i18n::current()).0,
             graphic,
             ..SignOptions::default()
         };
@@ -524,36 +534,100 @@ impl PrintCraftApp {
         if !certs.iter().any(|c| c.raw == cert.raw) {
             certs.push(cert);
         }
+        self.apply_trusted_certificates(certs);
+    }
+
+    /// Replace the trust store and redraw from the rebuilt display copy. One helper
+    /// so no caller can revalidate without invalidating: trust changes verdicts,
+    /// verdicts choose what the display copy shows, and the old rasters would
+    /// otherwise linger while the badge already follows the new verdict.
+    /// Trust alone is not an edit: nothing becomes dirty.
+    pub fn apply_trusted_certificates(&mut self, certs: Vec<Certificate>) {
         self.session.set_trusted_certificates(certs);
+        for view in &mut self.views {
+            view.invalidate_content();
+        }
+    }
+
+    /// A file name without its PDF extension, for snapshot tab names.
+    fn file_stem(name: &str) -> String {
+        name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string()
     }
 
     /// Open saved revision `n` (1 = the oldest) of the active document as a new document.
+    /// A repeat reuses the tab: every click used to open another identical one.
     pub fn open_revision(&mut self, n: usize) {
         let Some((_, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        // The revision's byte range, as `Session::open_revision` reads it. An unknown `n`
+        // skips the lookup: the whole file could otherwise match the latest revision's tab
+        // instead of erroring.
+        let ends = doc.revision_ends();
+        if let Some(&end) = n.checked_sub(1).and_then(|k| ends.get(k)) {
+            let end = end.min(doc.bytes.len());
+            if let Some(index) = self.find_snapshot(SnapshotKind::Revision, &doc.name, &doc.bytes[..end]) {
+                self.active = Some(index);
+                return;
+            }
+        }
+        let from = doc.name.clone();
         match self.session.open_revision(id, n) {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened revision starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
                 let Some(doc) = self.session.get(new) else { return };
-                self.views.push(DocView::new(new, &doc.info, self.view_defaults));
+                let mut view = DocView::new(new, &doc.info, self.view_defaults);
+                view.snapshot = Some(Snapshot { kind: SnapshotKind::Revision, revision: n, from });
+                self.views.push(view);
                 self.active = Some(self.views.len() - 1);
             }
             Err(e) => self.notify_fmt("Couldn't open revision {n}: {e}", &[("n", &n.to_string()), ("e", &e.to_string())]),
         }
     }
 
+    /// A tab already showing these exact snapshot bytes: its index, so a repeat
+    /// switches to it instead of opening another identical tab. An exact match on
+    /// the source document wins, so the banner names the file opened from; a
+    /// bytes-only match still reuses the tab (incremental saves append, so one
+    /// file's revision can be byte-identical to another tab's, and a snapshot's
+    /// own repeats name the snapshot itself).
+    fn find_snapshot(&self, kind: SnapshotKind, from: &str, bytes: &[u8]) -> Option<usize> {
+        let mut fallback = None;
+        for (i, v) in self.views.iter().enumerate() {
+            let same_kind = v.snapshot.as_ref().is_some_and(|s| s.kind == kind);
+            let same_bytes = same_kind && self.session.get(v.id).is_some_and(|d| d.bytes.as_slice() == bytes);
+            if !same_bytes {
+                continue;
+            }
+            if v.snapshot.as_ref().is_some_and(|s| s.from == from) {
+                return Some(i);
+            }
+            fallback.get_or_insert(i);
+        }
+        fallback
+    }
+
     /// Open the signed version of a signature as a new document (View signed version).
-    pub fn view_signed_version(&mut self, len: usize) {
+    /// A repeat reuses the tab: every click used to open another identical one.
+    pub fn view_signed_version(&mut self, len: usize, revision: usize) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        let bytes = doc.bytes[..len.min(doc.bytes.len())].to_vec();
-        let name = format!("{} (signed version)", doc.name.trim_end_matches(".pdf"));
+        let end = len.min(doc.bytes.len());
+        if let Some(index) = self.find_snapshot(SnapshotKind::SignedVersion, &doc.name, &doc.bytes[..end]) {
+            self.active = Some(index);
+            return;
+        }
+        let from = doc.name.clone();
+        let bytes = doc.bytes[..end].to_vec();
+        let name = format!("{} (signed version)", Self::file_stem(&from));
         match self.session.open(format!("{name}.pdf"), None, std::sync::Arc::new(bytes), doc.password.clone().as_deref()) {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened copy starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
                 let Some(doc) = self.session.get(new) else { return };
-                self.views.push(DocView::new(new, &doc.info, self.view_defaults));
+                let mut view = DocView::new(new, &doc.info, self.view_defaults);
+                view.snapshot = Some(Snapshot { kind: SnapshotKind::SignedVersion, revision, from });
+                self.views.push(view);
                 self.active = Some(self.views.len() - 1);
             }
             Err(e) => self.notify_fmt("Couldn't open the signed version: {e}", &[("e", &e.to_string())]),
@@ -816,12 +890,67 @@ fn graphic_of(signature: Option<&SavedSig>, g: &SignGraphic) -> Option<SavedSig>
     }
 }
 
-/// The signature as it will look: the graphic (or the name) on the left, the details beside it.
+/// The words of a visible signature's labels in `lang`, and whether they fell back to English.
+///
+/// The labels are stamped into the document, so they are all in `lang` or all in English, never a
+/// mix. English when `lang` is English; when it is written right to left (its catalog is kept in
+/// display order, not the order a PDF stores text in); when one label has no translation; or when
+/// the signature's font can't draw one (Chinese, Japanese, Cyrillic, Greek in Helvetica), which
+/// signing would refuse. The English words are the sign crate's own, so they can't drift apart.
+pub(crate) fn appearance_labels(lang: crate::i18n::Lang) -> (AppearanceLabels, bool) {
+    let english = AppearanceLabels::default();
+    if lang == crate::i18n::Lang::EN {
+        return (english, false);
+    }
+    let said = |s: &str| (!lang.rtl() && crate::i18n::has(lang, s)).then(|| crate::i18n::tr(lang, s).to_string());
+    let translated = (|| {
+        Some(AppearanceLabels {
+            signed_by: said(&english.signed_by)?,
+            distinguished_name: said(&english.distinguished_name)?,
+            reason: said(&english.reason)?,
+            location: said(&english.location)?,
+            date: said(&english.date)?,
+        })
+    })();
+    match translated.filter(|l| l.first_undrawable().is_none()) {
+        Some(labels) => (labels, false),
+        None => (english, true),
+    }
+}
+
+/// The detail lines of a visible signature, as `sign::pdf` stamps them (the distinguished name
+/// aside, which the dialog doesn't know before the ID is opened): the label above the name, then
+/// the reason, location and date, each after its label. `reason` and `location` are as typed.
+fn detail_lines(a: &Appearance, labels: &AppearanceLabels, name: &str, reason: &str, location: &str, date: &str) -> Vec<String> {
+    let label = |l: &str, v: &str| if a.labels { format!("{l}{v}") } else { v.to_string() };
+    let mut lines = Vec::new();
+    if a.name {
+        if a.labels {
+            lines.push(labels.signed_by.clone());
+        }
+        lines.push(name.to_string());
+    }
+    if a.reason && !reason.trim().is_empty() {
+        lines.push(label(&labels.reason, reason.trim()));
+    }
+    if a.location && !location.trim().is_empty() {
+        lines.push(label(&labels.location, location.trim()));
+    }
+    if a.date {
+        lines.push(label(&labels.date, date));
+    }
+    lines.retain(|l| !l.is_empty());
+    lines
+}
+
+/// The signature as it will look: the graphic (or the name) on the left, the details beside it
+/// (`lines`, from [`detail_lines`] with the labels signing will stamp).
 fn preview(
     ui: &mut egui::Ui,
     t: &Tokens,
     name: &str,
-    d: &SignDraft,
+    a: &Appearance,
+    lines: &[String],
     graphic: Option<&SavedSig>,
     cache: &mut Option<(SavedSig, egui::TextureHandle)>,
 ) {
@@ -829,20 +958,6 @@ fn preview(
     let bg = if t.dark() { Color32::from_gray(0xF4) } else { Color32::WHITE };
     ui.painter().rect(rect, CornerRadius::same(4), bg, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     let inner = rect.shrink(10.0);
-    let a = &d.appearance;
-    let mut lines = Vec::new();
-    if a.name {
-        lines.push(if a.labels { format!("Digitally signed by {name}") } else { name.to_string() });
-    }
-    if a.reason && !d.reason.trim().is_empty() {
-        lines.push(format!("{}{}", if a.labels { "Reason: " } else { "" }, d.reason.trim()));
-    }
-    if a.location && !d.location.trim().is_empty() {
-        lines.push(format!("{}{}", if a.labels { "Location: " } else { "" }, d.location.trim()));
-    }
-    if a.date {
-        lines.push(format!("{}{}", if a.labels { "Date: " } else { "" }, "(the signing time)"));
-    }
     // As in the signature itself: a graphic with no details beside it fills the box.
     let alone = graphic.is_some() && lines.is_empty();
     let half = Rect::from_min_size(inner.min, vec2(inner.width() * 0.5 - 6.0, inner.height()));
@@ -859,6 +974,8 @@ fn preview(
 
 fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
+    // The time as the signature will show it (signing takes the session clock then).
+    let date = sign::pdf::display_date(&app.session.signing_date());
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() else {
         d.step = SignStep::Choose;
@@ -879,7 +996,16 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens) -> bool {
     if d.rect.is_some() || d.field.is_some() {
         ui.label(egui::RichText::new(tl!("Appearance")).font(theme::semibold(12.5)));
         let graphic = graphic_of(app.signature.as_ref(), &d.graphic);
-        preview(ui, t, &entry.name, d, graphic.as_ref(), &mut app.sign_graphic_preview);
+        let (labels, in_english) = appearance_labels(crate::i18n::current());
+        let lines = detail_lines(&d.appearance, &labels, &entry.name, &d.reason, &d.location, &date);
+        preview(ui, t, &entry.name, &d.appearance, &lines, graphic.as_ref(), &mut app.sign_graphic_preview);
+        if in_english && d.appearance.labels {
+            ui.label(
+                egui::RichText::new(tl!("The labels are in English: the signature's font can't draw them in this language."))
+                    .small()
+                    .color(t.text_muted),
+            );
+        }
         ui.horizontal_wrapped(|ui| {
             let a = &mut d.appearance;
             ui.add(widgets::checkbox(&mut a.name, tl!("Name")));
@@ -1028,11 +1154,16 @@ fn status_icon(s: &SignatureInfo) -> (&'static str, Color32) {
     if !s.signed {
         return ("pen-line", Color32::from_gray(0x80));
     }
-    match (s.status, &s.modification) {
-        (SignatureStatus::Valid, Modification::None) => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
-        (SignatureStatus::Valid, _) => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
-        (SignatureStatus::Unknown, _) => ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)),
-        (SignatureStatus::Invalid, _) => ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)),
+    signature_status_style(s.status)
+}
+
+/// One look per signature verdict, shared by the Signatures panel and the page badges so
+/// the two can't drift apart.
+pub(crate) fn signature_status_style(status: SignatureStatus) -> (&'static str, Color32) {
+    match status {
+        SignatureStatus::Valid => ("circle-check", Color32::from_rgb(0x2D, 0x9D, 0x78)),
+        SignatureStatus::Unknown => ("triangle-alert", Color32::from_rgb(0xE6, 0x86, 0x19)),
+        SignatureStatus::Invalid => ("circle-x", Color32::from_rgb(0xD7, 0x37, 0x3F)),
     }
 }
 
@@ -1042,7 +1173,10 @@ pub enum PanelAction {
     Validate,
     GoTo(usize),
     Trust(Box<Certificate>),
-    ViewSigned(usize),
+    ViewSigned {
+        len: usize,
+        revision: usize,
+    },
     Sign(String),
     ExportCertificate(Box<Certificate>),
     /// Certificate Viewer for the signer's chain (signer first).
@@ -1175,7 +1309,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
                     action = Some(PanelAction::Trust(Box::new(c.clone())));
                 }
                 if ui.button(tl!("View signed version")).clicked() {
-                    action = Some(PanelAction::ViewSigned(s.signed_len));
+                    action = Some(PanelAction::ViewSigned { len: s.signed_len, revision: s.revision });
                 }
                 if let Some(c) = &s.certificate
                     && ui.button(tl!("Show certificate…")).clicked()
@@ -1362,10 +1496,34 @@ mod tests {
         // P-256 keeps the test fast.
         let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
         draft.new_id =
-            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret1".into(), confirm: "secret1".into(), ..NewIdDraft::default() };
+            NewIdDraft { name: "Grace Hopper".into(), key, password: "secret12".into(), confirm: "secret12".into(), ..NewIdDraft::default() };
         app.sign_draft = Some(draft);
         let i = app.create_digital_id()?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
+    }
+
+    #[test]
+    fn an_exported_certificate_is_written_inside_the_chosen_folder() {
+        let dir = scratch();
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let key = PrivateKey::generate_p256().unwrap();
+        let cert = Certificate::self_signed(&Name::build("../x", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
+        let mut app = PrintCraftApp::new();
+        app.export_dir_override = Some(out.to_string_lossy().into_owned());
+        app.export_certificate(&cert);
+        let written: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(written, vec![std::ffi::OsString::from("out")]);
+        let pem = std::fs::read_to_string(out.join(".._x.cer")).unwrap();
+        assert!(pem.starts_with("-----BEGIN CERTIFICATE-----"), "{pem}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signature_status_style_gives_each_verdict_its_panel_icon() {
+        assert_eq!(signature_status_style(SignatureStatus::Valid).0, "circle-check");
+        assert_eq!(signature_status_style(SignatureStatus::Unknown).0, "triangle-alert");
+        assert_eq!(signature_status_style(SignatureStatus::Invalid).0, "circle-x");
     }
 
     #[test]
@@ -1379,7 +1537,7 @@ mod tests {
         let saved = create_in(&dir).unwrap();
         assert_eq!(saved, dir.join("Grace Hopper 3.p12"));
         assert_eq!(std::fs::read_to_string(dir.join("victim.txt")).unwrap(), "keep me");
-        assert!(sign::pkcs12::open(&std::fs::read(&saved).unwrap(), "secret1").is_ok());
+        assert!(sign::pkcs12::open(&std::fs::read(&saved).unwrap(), "secret12").is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1455,5 +1613,47 @@ mod tests {
         fresh.restore(&app.persist());
         assert!(fresh.digital_ids.is_empty(), "the removal survives a restart: {:?}", fresh.digital_ids);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The labels a signature is stamped with are all in the interface language, or all in
+    /// English when the signature's font can't draw them there (or the language is right to
+    /// left): never a mix, and never a label signing would refuse.
+    #[test]
+    fn appearance_labels_are_translated_or_all_english() {
+        use crate::i18n::{Lang, tr};
+        let english = AppearanceLabels::default();
+        assert_eq!(appearance_labels(Lang::EN), (english.clone(), false));
+        for code in ["de", "es", "fr", "it", "pt-br", "pl", "tr", "sl", "hu"] {
+            let lang = Lang::from_code(code).unwrap();
+            let (labels, in_english) = appearance_labels(lang);
+            assert!(!in_english, "{code}: {labels:?}");
+            for ((field, ours), (_, source)) in labels.fields().into_iter().zip(english.fields()) {
+                assert_eq!(ours, tr(lang, source), "{code}: {field}");
+            }
+        }
+        let (de, _) = appearance_labels(Lang::from_code("de").unwrap());
+        assert_eq!((de.signed_by.as_str(), de.reason.as_str()), ("Digital signiert von", "Grund: "));
+        for code in ["zh-hans", "zh-hant", "ja", "ru", "uk", "bg", "kk", "el", "te", "cs", "lt", "ar"] {
+            assert_eq!(appearance_labels(Lang::from_code(code).unwrap()), (english.clone(), true), "{code}");
+        }
+        for lang in Lang::all() {
+            let (labels, in_english) = appearance_labels(lang);
+            assert_eq!(labels.first_undrawable(), None, "{}: signing would refuse {labels:?}", lang.code());
+            assert_eq!(in_english, lang != Lang::EN && labels == english, "{}", lang.code());
+        }
+    }
+
+    /// The preview's details are the stamp's: the label above the name, then each detail after
+    /// its label, in the words given, and only the values when the labels are off.
+    #[test]
+    fn preview_lines_use_the_labels_signing_stamps() {
+        let (de, _) = appearance_labels(crate::i18n::Lang::from_code("de").unwrap());
+        let all = Appearance { reason: true, location: true, ..Appearance::default() };
+        let lines = detail_lines(&all, &de, "Ada", " Genehmigt ", "Berlin", "2026.10.14 09:30:00 Z");
+        assert_eq!(lines, ["Digital signiert von", "Ada", "Grund: Genehmigt", "Ort: Berlin", "Datum: 2026.10.14 09:30:00 Z"]);
+        let bare = Appearance { labels: false, ..all.clone() };
+        assert_eq!(detail_lines(&bare, &de, "Ada", "Genehmigt", "", "D"), ["Ada", "Genehmigt", "D"]);
+        let nothing = Appearance { name: false, date: false, ..all };
+        assert!(detail_lines(&nothing, &de, "Ada", "  ", "", "D").is_empty());
     }
 }

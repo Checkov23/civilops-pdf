@@ -14,4 +14,5 @@ printcraft-cos = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+printcraft-oracle = { workspace = true }
 hayro-syntax = { workspace = true }

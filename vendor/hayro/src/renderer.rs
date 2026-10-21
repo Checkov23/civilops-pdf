@@ -432,6 +432,9 @@ pub(crate) struct Renderer {
     /// PrintCraft patch: when set, solid text and line-art paint colours are remapped
     /// while rendering (the "reading colours" view setting).
     color_replacement: Option<ColorReplacement>,
+    /// PrintCraft patch (17): while the page's annotations are being drawn, paints keep their
+    /// colours — reading colours replace document colours, never annotation colours.
+    in_annotations: bool,
     pub(crate) inside_pattern: bool,
     /// Soft masks drawn during this render. PrintCraft note: it belongs to one `Renderer` (one
     /// render, every nested renderer starting empty) and so to one `preview` setting: a mask
@@ -466,6 +469,7 @@ impl Renderer {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
             color_replacement,
+            in_annotations: false,
             inside_pattern: false,
             soft_mask_cache: HashMap::default(),
             outline_cache: cache.outline_cache.clone(),
@@ -522,14 +526,7 @@ impl Renderer {
             },
         };
 
-        // A miter limit that isn't finite leaves miters unbounded: never skipped.
-        let miter = stroke.miter_limit.abs();
-        let reach = stroke.width / 2.0
-            * if miter.is_finite() {
-                miter.max(std::f64::consts::SQRT_2)
-            } else {
-                f64::INFINITY
-            };
+        let reach = stroke_reach(&stroke);
         self.ctx.set_stroke(stroke);
         reach
     }
@@ -573,6 +570,7 @@ impl Renderer {
                 // PrintCraft patch: this renders an image's alpha mask, which must keep its
                 // original values, so it is never remapped by the reading-colours setting.
                 color_replacement: None,
+                in_annotations: false,
                 inside_pattern: false,
                 soft_mask_cache: HashMap::default(),
                 outline_cache: self.outline_cache.clone(),
@@ -1023,6 +1021,11 @@ impl Renderer {
         let Some(replacement) = self.color_replacement else {
             return paint.clone();
         };
+        // PrintCraft patch (17): annotations keep the colours they were given; reading colours
+        // replace document colours only (issue #1548).
+        if self.in_annotations {
+            return paint.clone();
+        }
         match paint {
             Paint::Color(c) => {
                 let mapped = replacement.map(c.to_rgba().to_rgba8(), is_text);
@@ -1075,8 +1078,13 @@ impl Renderer {
                         // become native gradients instead of a texture sampled pixel by pixel.
                         // Upstream also shifts by half a pixel for vello_cpu 0.3; 0.0.8 already
                         // evaluates gradients at pixel centres, like the texture below.
-                        if let Some(native) =
-                            encoded.as_svg_gradient(bbox, NATIVE_GRADIENT_TOLERANCE)
+                        // PrintCraft patch (#2128): vello_cpu 0.0.8 copies an opaque gradient
+                        // over fully covered tiles without applying the mask or blend mode, and
+                        // a gradient can't be flagged transparent like the texture below, so
+                        // under a soft mask or blend mode the shading is sampled instead.
+                        if !self.force_images_may_have_transparency()
+                            && let Some(native) =
+                                encoded.as_svg_gradient(bbox, NATIVE_GRADIENT_TOLERANCE)
                         {
                             self.ctx
                                 .set_paint_transform(path_transform.inverse() * native.transform);
@@ -1127,6 +1135,65 @@ impl Renderer {
                         };
                         xs = xs.max(min_x_scale).min(max_x_scale);
                         ys = ys.max(min_y_scale).min(max_y_scale);
+                        // PrintCraft patch (20): a step too large for a cell pixmap, where what is
+                        // painted can only show the first cell (PowerPoint writes `/XStep
+                        // 2147480100` for a picture fill drawn once, #3349): the cell's `/BBox` is
+                        // drawn at full scale with a transparent border and padded, not tiled.
+                        // Shrinking the cell to fit the step left a picture under one pixel.
+                        // How far a stroke's paint reaches past the path, miters included, in
+                        // device pixels: the most the transform stretches any direction (a skew
+                        // stretches some further than either axis), times the reach.
+                        let reach = if is_stroke {
+                            path_transform.spectral_norm() * stroke_reach(self.ctx.stroke())
+                        } else {
+                            0.0
+                        };
+                        if usable_cell_scale(xs, ys)
+                            && (xs * t.x_step.abs() > MAX_PIXMAP_SIZE || ys * t.y_step.abs() > MAX_PIXMAP_SIZE)
+                            && shows_one_cell(&t.matrix, path_transform, path, reach, bbox, t.x_step, t.y_step)
+                        {
+                            const BORDER: f64 = 1.0;
+                            let pix_width = ((bbox.width() as f32 * xs).ceil() as u16).saturating_add(2);
+                            let pix_height = ((bbox.height() as f32 * ys).ceil() as u16).saturating_add(2);
+                            let mut renderer = Self {
+                                ctx: RenderContext::new_with(
+                                    pix_width,
+                                    pix_height,
+                                    derive_settings(self.ctx.render_settings()),
+                                ),
+                                color_replacement: None,
+                                in_annotations: false,
+                                cur_mask: None,
+                                inside_pattern: true,
+                                soft_mask_cache: HashMap::default(),
+                                outline_cache: self.outline_cache.clone(),
+                                in_type3_glyph: false,
+                                scaler: self.scaler,
+                                preview: self.preview,
+                                image_transparency_stack: Vec::new(),
+                            };
+                            let initial_transform = Affine::translate((BORDER, BORDER))
+                                * Affine::scale_non_uniform(xs as f64, ys as f64)
+                                * Affine::translate((-bbox.x0, -bbox.y0));
+                            t.interpret(&mut renderer, initial_transform, is_stroke);
+                            let mut pix = Pixmap::new(pix_width, pix_height);
+                            renderer.ctx.flush();
+                            let mut resources = vello_cpu::Resources::default();
+                            renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                            paint_transform = path_transform.inverse() * t.matrix * initial_transform.inverse();
+                            let image = Image {
+                                image: ImageSource::Pixmap(Arc::new(pix)),
+                                sampler: ImageSampler {
+                                    x_extend: peniko::Extend::Pad,
+                                    y_extend: peniko::Extend::Pad,
+                                    quality: ImageQuality::Medium,
+                                    alpha: 1.0,
+                                },
+                            };
+                            self.ctx.set_paint_transform(paint_transform);
+                            self.ctx.set_paint(PaintType::Image(image));
+                            return clip_path;
+                        }
                         // PrintCraft patch: the cell pixmap is `step × scale` pixels, which only the
                         // u16 cast below bounded (a fuzzed /XStep far beyond /BBox gave 65535² cells).
                         xs = tiling_cell_scale(xs, t.x_step, MAX_PIXMAP_SIZE);
@@ -1149,6 +1216,7 @@ impl Renderer {
                             // PrintCraft patch: a pattern cell is painted as one artwork, so its
                             // content is never remapped by the reading-colours setting.
                             color_replacement: None,
+                            in_annotations: false,
                             cur_mask: None,
                             inside_pattern: true,
                             soft_mask_cache: HashMap::default(),
@@ -1464,6 +1532,7 @@ impl<'a> Device<'a> for Renderer {
                                         // coverage values, so its content is never remapped by
                                         // the reading-colours setting.
                                         color_replacement: None,
+                                        in_annotations: false,
                                         inside_pattern: false,
                                         soft_mask_cache: HashMap::default(),
                                         outline_cache: self.outline_cache.clone(),
@@ -1608,6 +1677,16 @@ impl<'a> Device<'a> for Renderer {
         }
     }
 
+    /// PrintCraft patch (17): the reading-colours mapping is suspended for annotations.
+    fn begin_annotations(&mut self) {
+        self.in_annotations = true;
+    }
+
+    /// PrintCraft patch (17): back to document content; reading colours apply again.
+    fn end_annotations(&mut self) {
+        self.in_annotations = false;
+    }
+
     fn draw_rect(
         &mut self,
         rect: &Rect,
@@ -1749,6 +1828,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         // PrintCraft patch: a soft mask must keep its original luminance values, so its
         // content is never remapped by the reading-colours setting.
         color_replacement: None,
+        in_annotations: false,
         inside_pattern: false,
         cur_mask: None,
         soft_mask_cache: HashMap::default(),
@@ -1864,6 +1944,46 @@ fn convert_blend_mode(blend_mode: BlendMode) -> peniko::BlendMode {
     };
 
     peniko::BlendMode::new(mix, Compose::SrcOver)
+}
+
+/// PrintCraft patch: how far a stroke's paint reaches past its path, in user units: half the width
+/// times the larger of the miter limit and √2 (a miter join or a square cap). A miter limit that
+/// isn't finite leaves miters unbounded, so the reach is too.
+fn stroke_reach(stroke: &kurbo::Stroke) -> f64 {
+    let miter = stroke.miter_limit.abs();
+    stroke.width / 2.0
+        * if miter.is_finite() {
+            miter.max(std::f64::consts::SQRT_2)
+        } else {
+            f64::INFINITY
+        }
+}
+
+/// PrintCraft patch (20): whether a cell's scale can draw it at full size: finite and positive. A
+/// `/BBox` too thin to divide by (1e-40 wide passes the zero-area check) gives an infinite scale,
+/// which would send non-finite geometry to the cell renderer; such a cell keeps the old path.
+pub fn usable_cell_scale(xs: f32, ys: f32) -> bool {
+    xs.is_finite() && ys.is_finite() && xs > 0.0 && ys > 0.0
+}
+
+/// PrintCraft patch (20): whether `path` (drawn with `path_transform`, its paint reaching `reach`
+/// device pixels past it), mapped into the space of a tiling pattern with matrix `matrix`, can
+/// only meet the first cell's `/BBox`: every other cell's content lies a whole step or more
+/// away. False when the matrix can't be inverted or the bounds aren't finite.
+pub(crate) fn shows_one_cell(matrix: &Affine, path_transform: &Affine, path: &BezPath, reach: f64, bbox: Rect, x_step: f32, y_step: f32) -> bool {
+    if matrix.determinant().abs() < 1e-12 || !matrix.determinant().is_finite() {
+        return false;
+    }
+    let device = (*path_transform * path.clone()).bounding_box().inflate(reach, reach);
+    let bounds = (matrix.inverse() * device.to_path(0.1)).bounding_box();
+    let (sx, sy) = (f64::from(x_step.abs()), f64::from(y_step.abs()));
+    let finite = [bounds.x0, bounds.y0, bounds.x1, bounds.y1, sx, sy].iter().all(|v| v.is_finite());
+    // Cell k's content spans `bbox + k × step`; with k = ±1 out of reach, so is every other.
+    finite
+        && bounds.x1 < bbox.x0 + sx
+        && bounds.x0 > bbox.x1 - sx
+        && bounds.y1 < bbox.y0 + sy
+        && bounds.y0 > bbox.y1 - sy
 }
 
 /// PrintCraft patch: the scale for a tiling cell, lowered so that the cell pixmap (`|step| ×

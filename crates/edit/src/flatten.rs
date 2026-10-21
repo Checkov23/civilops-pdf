@@ -6,7 +6,8 @@
 //! the appearance's bounding box, transformed by its `/Matrix`, mapped onto `/Rect`). Hidden
 //! annotations are left alone; links are kept (they have no ink and stay clickable). Flattened
 //! comments take their pop-ups and replies with them; flattened widgets are removed from the
-//! form's field tree.
+//! form's field tree. An annotation whose appearance cannot be drawn is not flattened: it stays
+//! as it is, so no comment or field value is lost with nothing in its place.
 
 use std::collections::HashSet;
 
@@ -62,9 +63,15 @@ enum Which {
 fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
     let subtype = d.name(b"Subtype").unwrap_or_default();
     match which {
+        // Comments are what the comment list calls comments: links, pop-ups and the non-markup
+        // multimedia and print-production annotations (3D, Screen, Movie, RichMedia,
+        // PrinterMark, TrapNet, Watermark) are neither comments nor fields, and stay (#3087).
         Which::Comments { comments, fields } => {
-            let widget = subtype == b"Widget";
-            !matches!(subtype, b"Link" | b"Popup") && (!widget || fields) && (widget || comments)
+            if subtype == b"Widget" {
+                fields
+            } else {
+                comments && printcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
+            }
         }
         Which::FillSign => !matches!(subtype, b"Link" | b"Popup" | b"Widget") && printcraft_annot::is_fill_sign(doc, d),
     }
@@ -154,6 +161,8 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             .unwrap_or_default();
         let mut gone: HashSet<ObjRef> = HashSet::new();
         let mut gone_inline: HashSet<usize> = HashSet::new();
+        // Selected, but nothing was drawn for it: it stays, pop-up and reply handling included.
+        let mut undrawn: HashSet<ObjRef> = HashSet::new();
         // A viewer draws many comments from their dictionary even when the file stores no
         // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
         // flattening keeps a comment that still has ink on screen instead of deleting it.
@@ -199,9 +208,18 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
             }
             // A comment whose ink was not written into the page stays. Removing it would drop
             // the annotation (a cloudy square this builder cannot draw, for example) with nothing
-            // left on the page. Widgets are form fields: flattening still removes them.
-            if !widget && !drew {
-                continue;
+            // left on the page. A widget stays when it has no appearance to draw at all (none
+            // stored, or none for its selected state): removing it would lose the field's value
+            // with nothing in its place (#1794). One whose appearance draws nothing (an empty
+            // stream) shows nothing anywhere, so flattening still removes it.
+            if !drew {
+                let no_appearance = appearance(doc, d).is_none();
+                if no_appearance && let Some(r) = entry.as_ref() {
+                    undrawn.insert(r);
+                }
+                if !widget || no_appearance {
+                    continue;
+                }
             }
             match entry.as_ref() {
                 Some(r) => {
@@ -218,9 +236,13 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
         if gone.is_empty() && gone_inline.is_empty() {
             continue;
         }
-        // Pop-ups and replies of what was flattened go too.
+        // Pop-ups and replies of what was flattened go too, except a reply that stayed because
+        // it could not be drawn: its content would go with nothing in its place.
         for entry in &list {
             let Some(r) = entry.as_ref() else { continue };
+            if undrawn.contains(&r) {
+                continue;
+            }
             let obj = doc.get(r);
             let Some(d) = obj.as_dict() else { continue };
             let points_at = |k: &[u8]| d.reference(k).is_some_and(|t| gone.contains(&t));

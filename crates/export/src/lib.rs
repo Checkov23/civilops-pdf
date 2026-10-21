@@ -114,6 +114,34 @@ const COL_TOL: f64 = 4.0;
 /// its columns, so a hostile page laid out as a staircase of blocks would otherwise make
 /// (blocks / 2)² cells.
 const MAX_COLS: usize = 63;
+/// Two blocks in a row this close (as a fraction of their font size) are one line of running
+/// text that changed font or colour, such as a link inside a sentence, not two table cells.
+const INLINE_GAP: f64 = 0.5;
+/// How many blocks ending near a block's start are looked at to find the one it continues; a
+/// page laid out so that many end at the same place stays quick.
+const CONTINUATION_PROBE: usize = 64;
+/// Per block, whether it continues another on the same line: it starts where that one ends (up to
+/// [`INLINE_GAP`] later, or a point earlier for rounding), so it is the same line of text running
+/// on (a link inside a sentence, a superscript), not a cell of its own.
+fn continuations(blocks: &[Block]) -> Vec<bool> {
+    let mut by_end: Vec<(f64, usize)> = blocks.iter().enumerate().map(|(i, b)| (b.rect[2], i)).collect();
+    by_end.sort_by(|a, b| a.0.total_cmp(&b.0));
+    blocks
+        .iter()
+        .enumerate()
+        .map(|(bi, b)| {
+            let k = by_end.partition_point(|(end, _)| *end < b.rect[0] - INLINE_GAP * b.size);
+            by_end
+                .get(k..)
+                .unwrap_or_default()
+                .iter()
+                .take_while(|(end, _)| *end <= b.rect[0] + 1.0)
+                .take(CONTINUATION_PROBE)
+                .filter_map(|(_, ai)| blocks.get(*ai).filter(|_| *ai != bi))
+                .any(|a| a.rect[3].min(b.rect[3]) - a.rect[1].max(b.rect[1]) > 0.5 * (a.rect[3] - a.rect[1]).min(b.rect[3] - b.rect[1]))
+        })
+        .collect()
+}
 /// A cell is short: taller blocks are body text (or a multi-column layout), not table cells.
 fn is_cell_like(b: &Block) -> bool {
     (b.rect[3] - b.rect[1]) <= b.size * 5.0 && !b.text.trim().is_empty()
@@ -264,13 +292,20 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
         es.dedup_by(|a, b| (*a - *b).abs() <= COL_TOL);
         es
     };
+    let cont = continuations(blocks);
     let qual: Vec<bool> = rows
         .iter()
         .map(|row| {
-            let mut cs: Vec<usize> = row.iter().map(|(c, _)| *c).collect();
+            // A block that continues another adds no column of its own, and the cells of a table row
+            // sit side by side: blocks that overlap are a paragraph's lines, not cells (#2806).
+            let cells: Vec<(usize, usize)> = row.iter().copied().filter(|(_, bi)| !cont.get(*bi).copied().unwrap_or(false)).collect();
+            let mut spans: Vec<[f64; 2]> = cells.iter().filter_map(|(_, bi)| blocks.get(*bi)).map(|b| [b.rect[0], b.rect[2]]).collect();
+            spans.sort_by(|a, b| a[0].total_cmp(&b[0]));
+            let apart = spans.windows(2).all(|w| w[1][0] >= w[0][1] - COL_TOL);
+            let mut cs: Vec<usize> = cells.iter().map(|(c, _)| *c).collect();
             cs.sort_unstable();
             cs.dedup();
-            cs.len() >= 2
+            apart && cs.len() >= 2
         })
         .collect();
     let mut i = 0;
@@ -520,6 +555,36 @@ fn layout_number(n: f64) -> f64 {
     if n.is_finite() { n.clamp(-1584.0, 1584.0) } else { 0.0 }
 }
 
+/// Most images a Word export embeds, and most image bytes (the zip writer has 32-bit sizes and
+/// a 16-bit entry count; a hostile PDF must not be able to overflow them).
+const MAX_MEDIA: usize = 1000;
+const MAX_MEDIA_BYTES: usize = 512 << 20;
+
+/// Whether `im` can still be embedded: it has data, and the package stays within its limits.
+fn room_for(media: &[(String, &Image)], im: &Image) -> bool {
+    !im.bytes.is_empty()
+        && media.len() < MAX_MEDIA
+        && media.iter().map(|(_, m)| m.bytes.len()).fold(im.bytes.len(), usize::saturating_add) <= MAX_MEDIA_BYTES
+}
+
+/// Points as EMU (12700 per point); non-finite values are 0.
+fn emu(pt: f64) -> i64 {
+    if pt.is_finite() { (pt * 12700.0).round() as i64 } else { 0 }
+}
+
+/// The `a:graphic` of one picture (DrawingML), rotated by `rotation` degrees when given.
+fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>) -> String {
+    let rot = rotation.map_or(String::new(), |r| format!(" rot=\"{}\"", (r * 60000.0).round() as i64));
+    format!(
+        "<wp:docPr id=\"{n}\" name=\"Picture {n}\"/><wp:cNvGraphicFramePr/>\
+<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
+<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"{n}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
+<pic:blipFill><a:blip r:embed=\"rIdImg{n}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
+<pic:spPr><a:xfrm{rot}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>\
+</a:graphicData></a:graphic>"
+    )
+}
+
 fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize) -> String {
     // One 1 pt paragraph anchors the whole page. Shapes never reserve body space, so even a
     // page-sized watermark cannot push the invoice footer onto another page.
@@ -552,13 +617,31 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
         ));
     }
     for im in &page.images {
+        if !room_for(media, im) {
+            continue;
+        }
         *shape_id = shape_id.saturating_add(1);
         let n = media.len().saturating_add(1);
         let (w, h) = (layout_number(im.size[0]).max(1.0), layout_number(im.size[1]).max(1.0));
         let (x, y) = (layout_number((im.rect[0] + im.rect[2] - w) / 2.0), layout_number(page.height - (im.rect[1] + im.rect[3] + h) / 2.0));
         let rotation = layout_number(-im.rotation).rem_euclid(360.0);
-        s.push_str(&format!("<w:r><w:pict><v:rect id=\"Image{shape_id}\" style=\"position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;rotation:{rotation:.3};z-index:-1;mso-position-horizontal-relative:page;mso-position-vertical-relative:page\" stroked=\"f\"><v:imagedata r:id=\"rIdImg{n}\"/><w10:wrap type=\"none\"/></v:rect></w:pict></w:r>"));
-        media.push((format!("image{n}.{}", im.ext), im));
+        let name = format!("image{n}.{}", im.ext);
+        let pic = picture_xml(n, &name, (emu(w), emu(h)), Some(rotation));
+        // A DrawingML anchor, the way Word itself stores a picture placed behind text: a VML
+        // rectangle with an image does not show the picture.
+        s.push_str(&format!(
+            "<w:r><w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"{}\" behindDoc=\"1\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">\
+<wp:simplePos x=\"0\" y=\"0\"/><wp:positionH relativeFrom=\"page\"><wp:posOffset>{}</wp:posOffset></wp:positionH><wp:positionV relativeFrom=\"page\"><wp:posOffset>{}</wp:posOffset></wp:positionV>\
+<wp:extent cx=\"{}\" cy=\"{}\"/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/><wp:wrapNone/>",
+            n.saturating_add(1),
+            emu(x),
+            emu(y),
+            emu(w),
+            emu(h),
+        ));
+        s.push_str(&pic);
+        s.push_str("</wp:anchor></w:drawing></w:r>");
+        media.push((name, im));
     }
     s.push_str("</w:p>");
     s
@@ -612,21 +695,18 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
                         body.push_str(&docx_table(t));
                     }
                     Item::Img(im) => {
-                        let n = media.len() + 1;
-                        let name = format!("image{n}.{}", im.ext);
-                        // Size on the page, in EMU (12700 per point), at most the text width.
-                        let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
-                        let k = (text_w / w).min(1.0);
-                        let (cx, cy) = ((w * k * 12700.0) as i64, (h * k * 12700.0) as i64);
-                        body.push_str(&format!(
-                    "<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:docPr id=\"{n}\" name=\"Picture {n}\"/>\
-<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
-<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"{n}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
-<pic:blipFill><a:blip r:embed=\"rIdImg{n}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
-<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>\
-</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
-                ));
-                        media.push((name, im));
+                        if room_for(&media, im) {
+                            let n = media.len() + 1;
+                            let name = format!("image{n}.{}", im.ext);
+                            // Size on the page, at most the text width.
+                            let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
+                            let k = (text_w / w).min(1.0);
+                            let (cx, cy) = (emu(w * k), emu(h * k));
+                            body.push_str(&format!("<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/>"));
+                            body.push_str(&picture_xml(n, &name, (cx, cy), None));
+                            body.push_str("</wp:inline></w:drawing></w:r></w:p>");
+                            media.push((name, im));
+                        }
                     }
                     Item::PageBreak => body.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"),
                 }
@@ -907,8 +987,9 @@ mod tests {
         assert!(xml.contains("margin-left:72.000pt;margin-top:160.000pt"), "Meter field keeps its source position: {xml}");
         let watermark = xml.split(">DRAFT</w:t>").next().unwrap().rsplit("<v:rect ").next().unwrap();
         assert!(watermark.contains("z-index:-2"), "watermark is behind foreground graphics");
-        let image = xml.split("<v:imagedata ").next().unwrap().rsplit("<v:rect ").next().unwrap();
-        assert!(image.contains("z-index:-1"), "foreground graphics cover the watermark");
+        // The picture is a DrawingML anchor behind the text (a VML rectangle shows no picture in Word).
+        assert!(!xml.contains("<v:imagedata"), "{xml}");
+        assert!(xml.contains("<wp:anchor ") && xml.contains("behindDoc=\"1\"") && xml.contains("<a:blip r:embed=\"rIdImg1\"/>"), "{xml}");
     }
 
     #[test]
@@ -1140,6 +1221,75 @@ mod tests {
         assert_eq!(grid_cols(&grid(64)), 0);
     }
 
+    fn block(t: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Block {
+        Block { text: t.into(), rect: [x0, y0, x1, y1], size: 12.0, bold: false, italic: false, color: [0.0; 3], rotation: 0.0 }
+    }
+
+    /// #2806: a sentence whose link is set in another colour or font runs on as separate blocks
+    /// on one line. They are not table columns, even when several such lines share left edges.
+    #[test]
+    fn a_link_inside_a_sentence_is_not_a_table_column() {
+        let blue = |t: &str, x0: f64, y0: f64, x1: f64, y1: f64| Block { color: [0.02, 0.388, 0.757], ..block(t, x0, y0, x1, y1) };
+        let p = Page {
+            width: 612.0,
+            height: 792.0,
+            blocks: vec![
+                block("6.3. 2. All content shown at", 121.7, 710.3, 272.0, 724.9),
+                blue("http", 273.5, 710.3, 294.1, 724.9),
+                blue("s", 294.1, 709.8, 298.8, 725.8),
+                blue("://women", 298.8, 710.3, 348.0, 724.9),
+                blue("g", 348.1, 709.8, 353.7, 725.8),
+                blue("randprix.fide.com", 353.7, 710.3, 443.2, 724.9),
+                block("shall be reviewed and approved by the Press Officer.", 164.3, 622.5, 533.1, 724.9),
+                block("6.3. 3. The Organiser shall warrant that", 121.7, 601.8, 345.1, 616.5),
+                blue("https://womengrandprix.fide.com", 350.2, 601.3, 519.9, 617.4),
+                block("is managed in a professional way and furthermore that it is capable of", 164.3, 557.9, 533.0, 616.5),
+                block("6. 3. 4. The Press Officer shall report to the FIDE Head of PR.", 121.7, 516.6, 530.3, 551.9),
+                block("conducted during a WGP tournament.", 164.3, 502.0, 352.5, 516.6),
+            ],
+            images: Vec::new(),
+        };
+        let h = html(std::slice::from_ref(&p), "Regulations");
+        assert!(!h.contains("<table>"), "running text became a table: {h}");
+        for b in &p.blocks {
+            assert!(h.contains(&b.text), "{} was lost: {h}", b.text);
+        }
+    }
+
+    /// #2806: lines that each run on into a link starting at the same place are sentences, not a
+    /// two-column table, even three in a row.
+    #[test]
+    fn sentences_that_run_on_into_links_are_not_a_table() {
+        let blue = |t: &str, x0: f64, y0: f64, x1: f64, y1: f64| Block { color: [0.02, 0.388, 0.757], ..block(t, x0, y0, x1, y1) };
+        let mut blocks = Vec::new();
+        for (n, lead) in ["Rules are published at", "Pairings are posted at", "Results are listed at"].iter().enumerate() {
+            let y = 700.0 - 16.0 * n as f64;
+            blocks.push(block(lead, 72.0, y, 211.0, y + 12.0));
+            blocks.push(blue("https://example.org/event", 212.5, y, 360.0, y + 12.0));
+        }
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let h = html(std::slice::from_ref(&p), "Event");
+        assert!(!h.contains("<table>"), "sentences became a table: {h}");
+        assert_eq!(h.matches("https://example.org/event").count(), 3, "{h}");
+    }
+
+    /// #2806: a superscript right after a number ("1" "st") continues its cell; the prize table
+    /// around it stays a table.
+    #[test]
+    fn a_superscript_beside_a_number_keeps_its_table() {
+        let mut blocks = vec![block("PLACE", 100.0, 700.0, 140.0, 712.0), block("PRIZE (euros)", 300.0, 700.0, 380.0, 712.0)];
+        for (n, (row, sup)) in [("1", "st"), ("2", "nd"), ("3", "rd"), ("4", "th")].iter().enumerate() {
+            let y = 680.0 - 20.0 * n as f64;
+            blocks.push(block(row, 100.0, y, 106.0, y + 12.0));
+            blocks.push(Block { size: 8.0, ..block(sup, 106.0, y + 5.0, 113.0, y + 13.0) });
+            blocks.push(block(&format!("{},000", 30 - 5 * n), 300.0, y, 340.0, y + 12.0));
+        }
+        let p = Page { width: 612.0, height: 792.0, blocks, images: Vec::new() };
+        let h = html(std::slice::from_ref(&p), "Prizes");
+        assert!(h.contains("<table>"), "the prize table was lost: {h}");
+        assert!(h.contains("30,000") && h.contains("15,000"), "{h}");
+    }
+
     #[test]
     fn two_column_body_text_is_not_mistaken_for_a_table() {
         let para = |t: &str, x: f64, y: f64| Block {
@@ -1164,5 +1314,43 @@ mod tests {
         };
         let h = html(&[p], "Paper");
         assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");
+    }
+
+    /// #1936: every picture Word is told to draw (`r:embed`) names a relationship whose target is a
+    /// file in the package, with a content type; JPEG pictures too, inline or placed.
+    #[test]
+    fn word_pictures_resolve_to_media_in_the_package() {
+        let jpeg = Image { ext: "jpg", bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], ..page().images[0].clone() };
+        for placed in [false, true] {
+            let mut p = page();
+            p.images = vec![jpeg.clone()];
+            if placed {
+                p.images[0].rect = [72.0, 640.0, 272.0, 790.0];
+                p.blocks[0].rect = [72.0, 700.0, 300.0, 760.0];
+            }
+            let zip = docx(&[p], "T");
+            let xml = part(&zip, "word/document.xml");
+            assert_eq!(xml.contains("<wp:anchor "), placed, "{xml}");
+            let rels = part(&zip, "word/_rels/document.xml.rels");
+            let embed = xml.split("r:embed=\"").nth(1).and_then(|r| r.split('"').next()).unwrap();
+            let rel = rels.split(&format!("Id=\"{embed}\"")).nth(1).unwrap();
+            assert!(rel.contains("relationships/image\""), "{rels}");
+            let target = rel.split("Target=\"").nth(1).and_then(|t| t.split('"').next()).unwrap();
+            assert_eq!(target, "media/image1.jpg");
+            assert!(zip.windows(21).any(|w| w == b"word/media/image1.jpg"));
+            assert!(part(&zip, "[Content_Types].xml").contains("Extension=\"jpg\" ContentType=\"image/jpeg\""));
+            assert!(xml.matches("<wp:docPr ").count() == 1 && !xml.contains("<v:imagedata"));
+        }
+    }
+
+    #[test]
+    fn word_export_bounds_the_number_of_pictures_and_skips_empty_ones() {
+        let mut p = page();
+        let one = p.images[0].clone();
+        p.images = vec![Image { bytes: Vec::new(), ..one.clone() }];
+        p.images.extend(std::iter::repeat_n(one, MAX_MEDIA + 10));
+        let zip = docx(&[p], "T");
+        let rels = part(&zip, "word/_rels/document.xml.rels");
+        assert_eq!(rels.matches("relationships/image\"").count(), MAX_MEDIA);
     }
 }

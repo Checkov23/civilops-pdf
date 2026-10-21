@@ -28,8 +28,10 @@ pub struct PageRange {
 }
 
 impl Default for PageRange {
+    /// From the first page to the last: `to` starts past any page count, and the range field
+    /// shows (and clamps it to) the document's last page.
     fn default() -> Self {
-        Self { all: true, from: 1, to: 1, subset: Subset::All }
+        Self { all: true, from: 1, to: usize::MAX, subset: Subset::All }
     }
 }
 
@@ -53,9 +55,6 @@ impl PageRange {
             widgets::radio_value(ui, &mut self.all, false, tl!("Pages from"));
             ui.add_enabled(!self.all, egui::DragValue::new(&mut self.from).range(1..=count.max(1)));
             ui.label(tl!("to"));
-            if self.to == 1 && self.from == 1 {
-                self.to = count.max(1);
-            }
             ui.add_enabled(!self.all, egui::DragValue::new(&mut self.to).range(1..=count.max(1)));
             ui.label(tl!("Subset"));
             let label = match self.subset {
@@ -384,20 +383,29 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
             }
         });
     });
+    // Text the standard fonts can't draw is refused on apply (#125), so it's refused here, with the
+    // preview (drawn in the interface font, which can draw it) no longer the only answer (#2013).
+    let undrawable = undrawable(kind, d);
+    if let Some(c) = undrawable {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(crate::content_ui::undrawable_message(c)).small().color(crate::content_ui::UNDRAWABLE));
+    }
     ui.add_space(10.0);
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let ready = match kind {
-            MarkKind::HeaderFooter => d.hf.text.iter().any(|x| !x.trim().is_empty()),
-            MarkKind::Watermark => {
-                if d.use_file {
-                    d.file.is_some()
-                } else {
-                    !d.wm.text.trim().is_empty()
+        let ready = undrawable.is_none()
+            && match kind {
+                MarkKind::HeaderFooter => d.hf.text.iter().any(|x| !x.trim().is_empty()),
+                MarkKind::Watermark => {
+                    if d.use_file {
+                        d.file.is_some()
+                    } else {
+                        !d.wm.text.trim().is_empty()
+                    }
                 }
+                MarkKind::Background => !d.use_file || d.file.is_some(),
             }
-            MarkKind::Background => !d.use_file || d.file.is_some(),
-        } && !d.range.pages(count).is_empty();
+            && !d.range.pages(count).is_empty();
         if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
@@ -423,6 +431,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PrintCraftApp, t: &Tokens, kind:
     #[cfg(target_arch = "wasm32")]
     let _ = browse;
     (apply, cancel)
+}
+
+/// The first character of the dialog's text that applying would refuse (the standard fonts can't
+/// draw it), as the engine decides it. Pictures draw no text.
+fn undrawable(kind: MarkKind, d: &MarksDraft) -> Option<char> {
+    match kind {
+        MarkKind::HeaderFooter => d.hf.first_undrawable(),
+        MarkKind::Watermark if !d.use_file => d.wm.first_undrawable(),
+        MarkKind::Watermark | MarkKind::Background => None,
+    }
 }
 
 fn mark_file(d: &MarksDraft) -> Option<printcraft_engine::MarkFile> {
@@ -479,6 +497,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn text_applying_would_refuse_is_caught_in_the_dialog() {
+        let mut d = MarksDraft::default();
+        d.hf.text[5] = "Страница <<1>> из <<n>> / Page <<1>> of <<n>>".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('С'), "#2013: refused before OK, not after");
+        d.hf.text[5] = "Page <<1>> of <<n>> — café".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None);
+        d.wm.text = "ΑΠΟΡΡΗΤΟ".into();
+        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('Α'));
+        d.use_file = true;
+        assert_eq!(undrawable(MarkKind::Watermark, &d), None, "a picture watermark draws no text");
+        assert_eq!(undrawable(MarkKind::Background, &d), None);
+    }
+
+    #[test]
     fn page_ranges_with_subsets() {
         let r = PageRange::default();
         assert_eq!(r.pages(4), [0, 1, 2, 3]);
@@ -486,6 +518,11 @@ mod tests {
         assert_eq!(r.pages(6), [1, 3, 5]);
         let r = PageRange { all: true, subset: Subset::Odd, ..PageRange::default() };
         assert_eq!(r.pages(5), [0, 2, 4]);
+        // Not all pages: by default up to the last one; a single page is a range too.
+        let r = PageRange { all: false, ..PageRange::default() };
+        assert_eq!(r.pages(4), [0, 1, 2, 3]);
+        let r = PageRange { all: false, from: 1, to: 1, subset: Subset::All };
+        assert_eq!(r.pages(38), [0]);
     }
 
     #[test]

@@ -94,6 +94,17 @@ fn util_printf_printd_and_printx() {
     assert_eq!(o.value, "1,234,567.89|00042|hi|FF|1.234,50|Jan 5, 2024 09:07|Friday|(555) 123-4567|ABC");
 }
 
+#[test]
+fn printd_escapes_multibyte_chars() {
+    let o = go(
+        "event.value = [util.printd('yyyy \\\\é', new Date(2024, 0, 5)), util.printd('\\\\€ yyyy', new Date(2024, 0, 5)), \
+         util.printd('\\\\y yyyy', new Date(2024, 0, 5))].join('|');",
+        &Event::field("Calculate", "total", ""),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "2024 é|€ 2024|y 2024");
+}
+
 fn assert_printf_error(script: &str, message: &str) {
     let o = go(script, &Event::doc("Open"));
     assert!(o.error.as_deref().is_some_and(|e| e.starts_with(message)), "{script}: {:?}", o.error);
@@ -626,6 +637,34 @@ mod formcalc {
     }
 
     #[test]
+    fn date_pictures_render_the_weekday_letters() {
+        assert_eq!(calc(r#"Num2Date(45350, DateFmt(4))"#), "Thursday, February 29, 2024");
+        assert_eq!(calc(r#"Num2Date(45350, "EEE, YYYY-MM-DD")"#), "Thu, 2024-02-29");
+        assert_eq!(calc(r#"Num2Date(45350, "EEEE")"#), "Thursday");
+        assert_eq!(calc(r#"Num2Date(45350, "E")"#), "5");
+        assert_eq!(calc(r#"Num2Date(45351, "EEEE")"#), "Friday");
+        assert_eq!(calc(r#"Num2Date(45352, "EEEE")"#), "Saturday");
+        assert_eq!(calc(r#"Num2Date(45353, "EEEE")"#), "Sunday");
+        assert_eq!(calc(r#"Num2Date(1, "EEEE")"#), "Monday");
+        assert_eq!(calc(r#"Format("EEEE, YYYY-MM-DD", 45350)"#), "Thursday, 2024-02-29");
+        // Other letters are still literal text.
+        assert_eq!(calc(r#"Num2Date(45350, "YYYY-MM-DD x")"#), "2024-02-29 x");
+    }
+
+    #[test]
+    fn str_and_format_round_exact_ties_away_from_zero() {
+        assert_eq!(calc("Str(2.5, 3, 0)"), "  3");
+        assert_eq!(calc("Str(0.5, 3, 0)"), "  1");
+        assert_eq!(calc("Str(-2.5, 4, 0)"), "  -3");
+        assert_eq!(calc("Str(1.125, 6, 2)"), "  1.13");
+        assert_eq!(calc(r#"Format("9", 2.5)"#), "3");
+        assert_eq!(calc(r#"Format("9.99", 0.125)"#), "0.13");
+        assert_eq!(calc(r#"Format("9.9", 0.25)"#), "0.3");
+        assert_eq!(calc(r#"Format("9.9", -0.25)"#), "-0.3");
+        assert_eq!(calc(r#"Format("9.99", 2.344)"#), "2.34");
+    }
+
+    #[test]
     fn built_in_functions_cover_the_common_set() {
         assert_eq!(calc("Abs(-2.5)"), "2.5");
         assert_eq!(calc("Ceil(2.1)"), "3");
@@ -679,6 +718,20 @@ mod formcalc {
         assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
         assert!(go(r#"Get("http://example.com")"#, "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("network"));
         assert!(go("Nope(1)", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown function"));
+    }
+
+    #[test]
+    fn date2num_rejects_days_past_the_end_of_the_month() {
+        assert_eq!(calc(r#"Date2Num("2023-02-30")"#), "0");
+        assert_eq!(calc(r#"Date2Num("31/04/2024", "DD/MM/YYYY")"#), "0");
+        assert_eq!(calc(r#"Date2Num("2023-02-29")"#), "0");
+        assert_eq!(calc(r#"Date2Num("1900-02-29")"#), "0");
+        assert_eq!(calc(r#"Parse("YYYY-MM-DD", "2023-02-30") == null"#), "1");
+        // Valid month ends still work.
+        assert_eq!(calc(r#"Date2Num("2024-02-29")"#), "45350");
+        assert_eq!(calc(r#"Date2Num("2000-02-29") <> 0"#), "1");
+        assert_eq!(calc(r#"Date2Num("2024-04-30") <> 0"#), "1");
+        assert_eq!(calc(r#"Date2Num("2024-12-31") <> 0"#), "1");
     }
 
     #[test]

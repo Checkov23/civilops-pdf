@@ -68,11 +68,17 @@ pub struct Watched {
     pub path: String,
     /// The version PrintCraft last read or wrote (`None`: the first one the watcher sees).
     pub known: Option<Stamp>,
+    /// Which reading or writing of the file by PrintCraft this is for (an open, a save, Save As):
+    /// a version the watcher found for an earlier one is older than the document is now.
+    pub epoch: u64,
 }
 
 /// A new version of a watched file, read and ready to open.
 pub struct Changed {
     pub doc: DocId,
+    /// The file it was read from, and the epoch it was watched for (see [`Watched`]).
+    pub path: String,
+    pub epoch: u64,
     pub stamp: Stamp,
     pub bytes: Arc<Vec<u8>>,
 }
@@ -81,6 +87,7 @@ pub struct Changed {
 struct Entry {
     doc: DocId,
     path: String,
+    epoch: u64,
     known: Option<Stamp>,
     /// A changed version seen once, waiting to be seen unchanged again.
     pending: Option<Stamp>,
@@ -101,7 +108,13 @@ impl Watcher {
             .into_iter()
             .map(|w| {
                 let prev = old.iter().find(|e| e.doc == w.doc && e.path == w.path);
-                Entry { known: w.known.or(prev.and_then(|e| e.known)), pending: prev.and_then(|e| e.pending), doc: w.doc, path: w.path }
+                Entry {
+                    known: w.known.or(prev.and_then(|e| e.known)),
+                    pending: prev.and_then(|e| e.pending),
+                    doc: w.doc,
+                    path: w.path,
+                    epoch: w.epoch,
+                }
             })
             .collect();
     }
@@ -132,7 +145,7 @@ impl Watcher {
             match read_whole_pdf(&e.path, now) {
                 Version::Ready(bytes) => {
                     e.known = Some(now);
-                    found.push(Changed { doc: e.doc, stamp: now, bytes });
+                    found.push(Changed { doc: e.doc, path: e.path.clone(), epoch: e.epoch, stamp: now, bytes });
                 }
                 // Not a whole PDF in this version (a build that failed or paused): wait for the
                 // next one.
@@ -234,32 +247,61 @@ pub struct FileWatch {
     inline: Watcher,
     /// The version of each document's file that PrintCraft last read or wrote.
     known: HashMap<DocId, Stamp>,
+    /// The version each document came from (its open, reload or last save). Unlike `known`,
+    /// a version found on disk and not applied (the document had unsaved changes) is not
+    /// recorded here, so Save can tell that the file is not the one the document came from.
+    basis: HashMap<DocId, Stamp>,
+    /// How many times PrintCraft has read or written each document's file: a version the watcher
+    /// found before the latest one is older than the document in memory, and is not applied
+    /// (#1802).
+    epoch: HashMap<DocId, u64>,
     /// The notice bar's Reload was pressed for this document.
     pub reload_request: Option<DocId>,
 }
 
 impl FileWatch {
-    /// PrintCraft read or wrote `path` for `doc`: that version is not a change.
+    /// PrintCraft read or wrote `path` for `doc`: that version is not a change, and anything the
+    /// watcher found before it is stale.
     pub fn known_now(&mut self, doc: DocId, path: &str) {
-        if let Some(stamp) = Stamp::at(path) {
-            self.known.insert(doc, stamp);
-        }
+        self.known_as(doc, Stamp::at(path));
     }
 
     /// Remember `stamp`, read before the file was, for `doc`.
     pub fn known_as(&mut self, doc: DocId, stamp: Option<Stamp>) {
         if let Some(stamp) = stamp {
             self.known.insert(doc, stamp);
+            self.basis.insert(doc, stamp);
         }
+        self.bump(doc);
+    }
+
+    /// Whether the file at `path` is another version than the one `doc` came from: something
+    /// else wrote it since the document was opened, reloaded or last saved (#2166). A file
+    /// that is missing or can't be looked at, or a document whose version was never recorded,
+    /// is not a difference.
+    pub fn disk_differs(&self, doc: DocId, path: &str) -> bool {
+        match (Stamp::at(path), self.basis.get(&doc)) {
+            (Some(now), Some(basis)) => now != *basis,
+            _ => false,
+        }
+    }
+
+    fn bump(&mut self, doc: DocId) {
+        let epoch = self.epoch.entry(doc).or_default();
+        *epoch = epoch.wrapping_add(1);
+    }
+
+    fn epoch(&self, doc: DocId) -> u64 {
+        self.epoch.get(&doc).copied().unwrap_or(0)
     }
 }
 
 impl PrintCraftApp {
     /// The documents to watch: every open one with a file, while the preference is on.
-    fn watched(&self) -> impl Iterator<Item = (DocId, &str, Option<Stamp>)> {
+    fn watched(&self) -> impl Iterator<Item = (DocId, &str, Option<Stamp>, u64)> {
         self.views.iter().filter(|_| self.reload_changed_files).filter_map(|v| {
             let path = self.session.get(v.id)?.path.as_deref()?;
-            Some((v.id, path, self.watch.known.get(&v.id).copied()))
+            Some((v.id, path, self.watch.known.get(&v.id).copied(), self.watch.epoch(v.id)))
         })
     }
 
@@ -270,12 +312,16 @@ impl PrintCraftApp {
             self.reload_from_disk(id);
         }
         let mut sent = self.watch.sent.iter();
-        let unchanged = self.watched().all(|(doc, path, known)| sent.next().is_some_and(|w| w.doc == doc && w.path == path && w.known == known))
+        let unchanged = self
+            .watched()
+            .all(|(doc, path, known, epoch)| sent.next().is_some_and(|w| w.doc == doc && w.path == path && w.known == known && w.epoch == epoch))
             && sent.next().is_none();
         if !unchanged {
-            let list: Vec<Watched> = self.watched().map(|(doc, path, known)| Watched { doc, path: path.to_owned(), known }).collect();
+            let list: Vec<Watched> = self.watched().map(|(doc, path, known, epoch)| Watched { doc, path: path.to_owned(), known, epoch }).collect();
             let open: Vec<DocId> = self.views.iter().map(|v| v.id).collect();
             self.watch.known.retain(|doc, _| open.contains(doc));
+            self.watch.basis.retain(|doc, _| open.contains(doc));
+            self.watch.epoch.retain(|doc, _| open.contains(doc));
             if self.send_to_watcher(list.clone()) {
                 self.watch.sent = list;
             }
@@ -321,6 +367,13 @@ impl PrintCraftApp {
     /// changes.
     fn file_changed(&mut self, c: Changed) {
         let Some(i) = self.views.iter().position(|v| v.id == c.doc) else { return };
+        // Found for an earlier reading or writing of the file, or for another file than the
+        // document's now (a save, Save As or a reopen came between): older than the document in
+        // memory, so it is not applied over it (#1802). The watcher was told the newer version.
+        let same_file = self.session.get(c.doc).and_then(|d| d.path.as_deref()) == Some(c.path.as_str());
+        if !same_file || self.watch.epoch(c.doc) != c.epoch {
+            return;
+        }
         // PrintCraft wrote this version itself (a save), or it was handled already.
         if self.watch.known.get(&c.doc) == Some(&c.stamp) {
             return;
@@ -373,5 +426,140 @@ impl PrintCraftApp {
                 self.notify_fmt("Couldn't reload {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use egui_kittest::Harness;
+
+    use super::*;
+    use crate::SaveTarget;
+
+    /// An `n`-page PDF with a proper xref table.
+    fn fixture(n: usize) -> Vec<u8> {
+        let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + i)).collect();
+        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
+        for _ in 0..n {
+            objs.push("<< /Type /Page /Parent 2 0 R >>".into());
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// A fresh temporary folder with `thesis.pdf` in it, removed when dropped.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(test: &str, bytes: &[u8]) -> (Self, String) {
+            let dir = std::env::temp_dir().join(format!("printcraft-watch-{test}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("thesis.pdf").to_string_lossy().into_owned();
+            std::fs::write(&path, bytes).unwrap();
+            (Self(dir), path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Rewrite `path` as a build does, with a later modification time.
+    fn rebuild(path: &str, bytes: &[u8]) {
+        std::fs::write(path, bytes).unwrap();
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(60)).unwrap();
+    }
+
+    fn harness(path: &str) -> Harness<'static, PrintCraftApp> {
+        let path = path.to_owned();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PrintCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.run_inline = true;
+            app.open_path(&path);
+            app
+        });
+        h.run_steps(4);
+        h
+    }
+
+    /// Version B of the open file, found by the watcher but not yet applied: queued as the worker
+    /// thread queues what it finds between frames.
+    fn find_new_version(app: &mut PrintCraftApp, path: &str, bytes: &[u8]) -> Vec<Changed> {
+        rebuild(path, bytes);
+        // One look sees the change, the next sees it settled and reads it.
+        let (mut found, _) = app.watch.inline.tick();
+        found.extend(app.watch.inline.tick().0);
+        assert_eq!(found.len(), 1, "the watcher found the new version");
+        found
+    }
+
+    fn doc<'a>(h: &'a Harness<'static, PrintCraftApp>) -> &'a printcraft_engine::Document {
+        let app = h.state();
+        app.session.get(app.views[0].id).unwrap()
+    }
+
+    /// #1802: the watcher found version B of the file, then the user saved version C over it
+    /// before B was applied. B is older than the document now: it is not applied, the undo history
+    /// stays, and C stays on disk.
+    #[test]
+    fn a_version_found_before_a_save_is_not_applied_over_it() {
+        let (_dir, path) = TempDir::new("stale-save", &fixture(2));
+        let mut h = harness(&path);
+        let stale = find_new_version(h.state_mut(), &path, &fixture(3));
+        let app = h.state_mut();
+        app.views[0].select_pages(&[0]);
+        app.apply_edit(printcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        // B is on disk, not the A the document came from: Save asks first (#2166), and the
+        // user saves C over it.
+        assert!(!app.save_active(SaveTarget::InPlace), "asks before writing over B");
+        app.overwrite_changed_file();
+        assert!(!doc(&h).dirty, "saved version C");
+        let app = h.state_mut();
+        app.watch.found.lock().unwrap().extend(stale);
+        h.run_steps(3);
+        let d = doc(&h);
+        assert_eq!(d.info.pages.len(), 2, "the stale version was not applied over the saved one");
+        assert!(d.can_undo().is_some() && !d.dirty, "the saved document and its history stay");
+        assert_eq!(Stamp::at(&path), h.state().watch.known.get(&h.state().views[0].id).copied(), "C is still on disk");
+    }
+
+    /// #1802: version B found under the old path, then Save As to another file: B is not applied
+    /// to the document under its new path.
+    #[test]
+    fn a_version_found_before_save_as_is_not_applied_to_the_new_file() {
+        let (dir, path) = TempDir::new("stale-save-as", &fixture(2));
+        let mut h = harness(&path);
+        let stale = find_new_version(h.state_mut(), &path, &fixture(3));
+        let new_path = dir.0.join("copy.pdf").to_string_lossy().into_owned();
+        let app = h.state_mut();
+        app.views[0].select_pages(&[0]);
+        app.apply_edit(printcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        app.save_override = Some(new_path.clone());
+        assert!(app.save_active(SaveTarget::As), "saved as the new file");
+        app.watch.found.lock().unwrap().extend(stale);
+        h.run_steps(3);
+        let d = doc(&h);
+        assert_eq!(d.path.as_deref(), Some(new_path.as_str()));
+        assert_eq!(d.info.pages.len(), 2, "the old file's version was not applied to the new one");
+        assert!(d.can_undo().is_some() && !d.dirty, "the saved document and its history stay");
     }
 }

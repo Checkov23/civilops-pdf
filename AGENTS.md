@@ -35,8 +35,7 @@ publication, or shows in its documentation. This covers:
   licensed and required for PDF compatibility. Each item needs its own entry in `ATTRIBUTION.toml`
   with `adobe_data = true`, and the list below is closed:
   - The CMap resources (BSD-3-Clause), bundled inside the `hayro-cmap` dependency.
-  - The standard-14 font metrics and encoding tables in the PDF specification. They are data, not
-    typefaces, and are embedded as code in hayro.
+  - The standard-14 font metrics and encoding tables in the PDF specification. They are data, not typefaces. They are embedded as code in hayro, and as our own generated table in `crates/fonts/src/std14_metrics.rs` (approved by the owner, 2026-10-08; that file holds the data alone, so the code reading it can change without re-attesting the table), which is what generated appearances measure with and what survives hayro being retired.
 
   Adding anything to this list needs the owner's explicit approval.
 
