@@ -714,7 +714,7 @@ pub(crate) fn toolbar(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let mut select_similar = false;
     let mut turn: Option<Affine> = None;
     let mut custom = view.plan_objects.custom;
-    egui::Area::new(egui::Id::new(("object-toolbar", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique(("object-toolbar", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(8, 5)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let what = match chosen.as_slice() {

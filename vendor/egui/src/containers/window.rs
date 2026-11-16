@@ -101,7 +101,7 @@ impl<'a> Window<'a> {
     /// If you need a changing title, you must call `window.id(…)` with a fixed id.
     pub fn new(title: impl IntoAtoms<'a>) -> Self {
         let title: Atoms<'_> = title.into_atoms();
-        let area = Area::new(Id::new(title.text())).kind(UiKind::Window);
+        let area = Area::new(Id::unique(title.text())).kind(UiKind::Window);
         Self {
             title,
             open: None,
@@ -137,7 +137,7 @@ impl<'a> Window<'a> {
             .. // A lot of things not implemented yet
         } = viewport;
 
-        let mut window = Self::new(title.or(app_id).unwrap_or_else(String::new)).id(Id::new(id));
+        let mut window = Self::new(title.or(app_id).unwrap_or_else(String::new)).id(Id::unique(id));
 
         if let Some(inner_size) = inner_size {
             window = window.default_size(inner_size);
@@ -679,11 +679,7 @@ impl Window<'_> {
         }
 
         area.with_widget_info(|| {
-            WidgetInfo::labeled(
-                WidgetType::Window,
-                true,
-                title.text().as_deref().unwrap_or(""),
-            )
+            WidgetInfo::labeled(Role::Window, true, title.text().as_deref().unwrap_or(""))
         });
 
         {
@@ -755,7 +751,7 @@ impl Window<'_> {
 
             // Do resize interaction _again_, to move their widget rectangles on TOP of the rest of the window.
             let resize_interaction = do_resize_interaction(
-                ctx,
+                &area_content_ui,
                 possible,
                 area.id(),
                 area_layer_id,
@@ -817,29 +813,52 @@ fn paint_resize_corner(
 ) {
     let cr = window_frame.corner_radius;
 
-    let (corner, radius, corner_response) = if possible.resize_right && possible.resize_bottom {
-        (Align2::RIGHT_BOTTOM, cr.se, i.right & i.bottom)
-    } else if possible.resize_left && possible.resize_bottom {
-        (Align2::LEFT_BOTTOM, cr.sw, i.left & i.bottom)
-    } else if possible.resize_left && possible.resize_top {
-        (Align2::LEFT_TOP, cr.nw, i.left & i.top)
-    } else if possible.resize_right && possible.resize_top {
-        (Align2::RIGHT_TOP, cr.ne, i.right & i.top)
-    } else {
-        // We're not in two directions, but it is still nice to tell the user
-        // we're resizable by painting the resize corner in the expected place
-        // (i.e. for windows only resizable in one direction):
-        if possible.resize_right || possible.resize_bottom {
-            (Align2::RIGHT_BOTTOM, cr.se, i.right & i.bottom)
-        } else if possible.resize_left || possible.resize_bottom {
-            (Align2::LEFT_BOTTOM, cr.sw, i.left & i.bottom)
-        } else if possible.resize_left || possible.resize_top {
-            (Align2::LEFT_TOP, cr.nw, i.left & i.top)
-        } else if possible.resize_right || possible.resize_top {
-            (Align2::RIGHT_TOP, cr.ne, i.right & i.top)
-        } else {
-            return;
-        }
+    // Corners in order of preference, with whether they can resize horizontally and vertically.
+    let mut corners = [
+        (
+            Align2::RIGHT_BOTTOM,
+            cr.se,
+            i.right & i.bottom,
+            possible.resize_right,
+            possible.resize_bottom,
+        ),
+        (
+            Align2::LEFT_BOTTOM,
+            cr.sw,
+            i.left & i.bottom,
+            possible.resize_left,
+            possible.resize_bottom,
+        ),
+        (
+            Align2::LEFT_TOP,
+            cr.nw,
+            i.left & i.top,
+            possible.resize_left,
+            possible.resize_top,
+        ),
+        (
+            Align2::RIGHT_TOP,
+            cr.ne,
+            i.right & i.top,
+            possible.resize_right,
+            possible.resize_top,
+        ),
+    ];
+    if ui.style().right_to_left {
+        // The bottom corner at the end side comes first.
+        corners.swap(0, 1);
+    }
+
+    // If we can't resize in two directions, it is still nice to tell the user
+    // we're resizable by painting the resize corner in the expected place
+    // (i.e. for windows only resizable in one direction):
+    let Some((corner, radius, corner_response, _, _)) = corners
+        .iter()
+        .find(|(_, _, _, x, y)| *x && *y)
+        .or_else(|| corners.iter().find(|(_, _, _, x, y)| *x || *y))
+        .copied()
+    else {
+        return;
     };
 
     // Adjust the corner offset to accommodate for window rounding
@@ -1019,7 +1038,7 @@ fn move_and_resize_window(ctx: &Context, id: Id, interaction: &ResizeInteraction
     let mut rect = rect_at_start_of_drag; // prevent drift
 
     // Put the rect in the center of the stroke:
-    rect = rect.shrink(interaction.window_frame.stroke.width / 2.0);
+    rect = rect.shrink(interaction.window_frame.stroke.width * 0.5);
 
     if interaction.left.drag {
         rect.min.x += total_drag_delta.x;
@@ -1034,13 +1053,13 @@ fn move_and_resize_window(ctx: &Context, id: Id, interaction: &ResizeInteraction
     }
 
     // Return to having the rect outside the stroke:
-    rect = rect.expand(interaction.window_frame.stroke.width / 2.0);
+    rect = rect.expand(interaction.window_frame.stroke.width * 0.5);
 
     Some(rect.round_ui())
 }
 
 fn do_resize_interaction(
-    ctx: &Context,
+    ui: &Ui,
     possible: PossibleInteractions,
     accessibility_parent: Id,
     layer_id: LayerId,
@@ -1059,9 +1078,12 @@ fn do_resize_interaction(
     }
 
     // The rect that is in the middle of the stroke:
-    let rect = outer_rect.shrink(window_frame.stroke.width / 2.0);
+    let rect = outer_rect.shrink(window_frame.stroke.width * 0.5);
 
-    let side_response = |rect, id| {
+    let ctx = ui.ctx();
+    let visible = ui.is_visible();
+
+    let side_response = |rect, id, name: &'static str| {
         ctx.register_accesskit_parent(id, accessibility_parent);
         let response = ctx.create_widget(
             WidgetRect {
@@ -1072,6 +1094,7 @@ fn do_resize_interaction(
                 interact_rect: rect,
                 sense: Sense::DRAG, // Don't use Sense::drag() since we don't want these to be focusable
                 enabled: true,
+                visible,
             },
             true,
             InteractOptions {
@@ -1082,7 +1105,9 @@ fn do_resize_interaction(
             },
         );
 
-        response.widget_info(|| WidgetInfo::new(crate::WidgetType::ResizeHandle));
+        // Named so a screen reader can tell the eight handles apart,
+        // and so the harness' accessibility check is satisfied:
+        response.widget_info(|| WidgetInfo::labeled(Role::Splitter, true, name));
 
         SideResponse {
             hover: response.hovered(),
@@ -1090,7 +1115,7 @@ fn do_resize_interaction(
         }
     };
 
-    let id = Id::new(layer_id).with("edge_drag");
+    let id = Id::unique(layer_id).with("edge_drag");
 
     let style = ctx.global_style();
 
@@ -1116,6 +1141,7 @@ fn do_resize_interaction(
         let response = side_response(
             vertical_rect(rect.right_top(), rect.right_bottom()),
             id.with("right"),
+            "Resize window right edge",
         );
         right |= response;
     }
@@ -1123,6 +1149,7 @@ fn do_resize_interaction(
         let response = side_response(
             vertical_rect(rect.left_top(), rect.left_bottom()),
             id.with("left"),
+            "Resize window left edge",
         );
         left |= response;
     }
@@ -1130,6 +1157,7 @@ fn do_resize_interaction(
         let response = side_response(
             horizontal_rect(rect.left_bottom(), rect.right_bottom()),
             id.with("bottom"),
+            "Resize window bottom edge",
         );
         bottom |= response;
     }
@@ -1137,6 +1165,7 @@ fn do_resize_interaction(
         let response = side_response(
             horizontal_rect(rect.left_top(), rect.right_top()),
             id.with("top"),
+            "Resize window top edge",
         );
         top |= response;
     }
@@ -1150,7 +1179,11 @@ fn do_resize_interaction(
     // the whole corner is grabbable:
 
     if possible.resize_right || possible.resize_bottom {
-        let response = side_response(corner_rect(rect.right_bottom()), id.with("right_bottom"));
+        let response = side_response(
+            corner_rect(rect.right_bottom()),
+            id.with("right_bottom"),
+            "Resize window bottom-right corner",
+        );
         if possible.resize_right {
             right |= response;
         }
@@ -1160,7 +1193,11 @@ fn do_resize_interaction(
     }
 
     if possible.resize_right || possible.resize_top {
-        let response = side_response(corner_rect(rect.right_top()), id.with("right_top"));
+        let response = side_response(
+            corner_rect(rect.right_top()),
+            id.with("right_top"),
+            "Resize window top-right corner",
+        );
         if possible.resize_right {
             right |= response;
         }
@@ -1170,7 +1207,11 @@ fn do_resize_interaction(
     }
 
     if possible.resize_left || possible.resize_bottom {
-        let response = side_response(corner_rect(rect.left_bottom()), id.with("left_bottom"));
+        let response = side_response(
+            corner_rect(rect.left_bottom()),
+            id.with("left_bottom"),
+            "Resize window bottom-left corner",
+        );
         if possible.resize_left {
             left |= response;
         }
@@ -1180,7 +1221,11 @@ fn do_resize_interaction(
     }
 
     if possible.resize_left || possible.resize_top {
-        let response = side_response(corner_rect(rect.left_top()), id.with("left_top"));
+        let response = side_response(
+            corner_rect(rect.left_top()),
+            id.with("left_top"),
+            "Resize window top-left corner",
+        );
         if possible.resize_left {
             left |= response;
         }
@@ -1230,11 +1275,11 @@ fn paint_frame_interaction(ui: &Ui, rect: Rect, interaction: ResizeInteraction) 
     let cr = CornerRadiusF32::from(ui.visuals().window_corner_radius);
 
     // Put the rect in the center of the fixed window stroke:
-    let rect = rect.shrink(interaction.window_frame.stroke.width / 2.0);
+    let rect = rect.shrink(interaction.window_frame.stroke.width * 0.5);
 
     // Make sure the inner part of the stroke is at a pixel boundary:
     let stroke = visuals.bg_stroke;
-    let half_stroke = stroke.width / 2.0;
+    let half_stroke = stroke.width * 0.5;
     let rect = rect
         .shrink(half_stroke)
         .round_to_pixels(ui.pixels_per_point())
@@ -1312,15 +1357,28 @@ fn title_ui(
     let heading_font_height =
         ui.fonts_mut(|f| f.row_height(&TextStyle::Heading.resolve(ui.style())));
     let button_allocation_size = Vec2::splat(heading_font_height);
-    let button_shrink = (button_allocation_size - button_size) / 2.0;
+    let button_shrink = (button_allocation_size - button_size) * 0.5;
 
-    let collapse_atom_id = Id::new("__window_collapse_button");
-    let close_atom_id = Id::new("__window_close_button");
+    let collapse_atom_id = IdSalt::new("__window_collapse_button");
+    let close_atom_id = IdSalt::new("__window_close_button");
 
     let expanded = collapsing.openness(ui.ctx()) > 0.0;
 
-    if collapsible {
-        atoms.push_right(Atom::custom(collapse_atom_id, button_allocation_size));
+    let right_to_left = ui.style().right_to_left;
+    let (left_button, right_button) = if right_to_left {
+        (
+            open.is_some().then_some(close_atom_id),
+            collapsible.then_some(collapse_atom_id),
+        )
+    } else {
+        (
+            collapsible.then_some(collapse_atom_id),
+            open.is_some().then_some(close_atom_id),
+        )
+    };
+
+    if let Some(left_button) = left_button {
+        atoms.push_right(Atom::custom(left_button, button_allocation_size));
     }
 
     atoms.push_right(Atom::grow());
@@ -1337,15 +1395,15 @@ fn title_ui(
 
     atoms.push_right(Atom::grow());
 
-    if open.is_some() {
-        atoms.push_right(Atom::custom(close_atom_id, button_allocation_size));
+    if let Some(right_button) = right_button {
+        atoms.push_right(Atom::custom(right_button, button_allocation_size));
     }
 
     let spacing = ui.spacing().item_spacing.x;
 
     let mut child_ui = ui.new_child(UiBuilder::new());
 
-    let mut layout = AtomLayout::new(atoms)
+    let mut layout = WidgetAtom::new(atoms)
         .gap(spacing)
         .fallback_font(TextStyle::Heading)
         .wrap_mode(TextWrapMode::Truncate)
@@ -1373,7 +1431,11 @@ fn title_ui(
     // Collapse triangle icon
     if collapsible && let Some(rect) = layout_response.rect(collapse_atom_id) {
         let rect = rect.shrink2(button_shrink);
-        title_click_rect = title_click_rect.with_min_x(rect.max.x);
+        title_click_rect = if right_to_left {
+            title_click_rect.with_max_x(rect.min.x)
+        } else {
+            title_click_rect.with_min_x(rect.max.x)
+        };
         let icon_response = child_ui.interact(
             rect,
             child_ui.auto_id_with("collapse_button"),
@@ -1381,7 +1443,7 @@ fn title_ui(
         );
         icon_response.widget_info(|| {
             WidgetInfo::labeled(
-                WidgetType::Button,
+                Role::Button,
                 child_ui.is_enabled(),
                 if collapsing.is_open() { "Hide" } else { "Show" },
             )
@@ -1398,7 +1460,11 @@ fn title_ui(
         && let Some(rect) = layout_response.rect(close_atom_id)
     {
         let rect = rect.shrink2(button_shrink);
-        title_click_rect = title_click_rect.with_max_x(rect.min.x);
+        title_click_rect = if right_to_left {
+            title_click_rect.with_min_x(rect.max.x)
+        } else {
+            title_click_rect.with_max_x(rect.min.x)
+        };
         if close_button(&mut child_ui, rect).clicked() {
             *open = false;
         }
@@ -1466,8 +1532,7 @@ fn title_ui(
 fn close_button(ui: &mut Ui, rect: Rect) -> Response {
     let close_id = ui.auto_id_with("window_close_button");
     let response = ui.interact(rect, close_id, Sense::click());
-    response
-        .widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), "Close window"));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), "Close window"));
 
     ui.expand_to_include_rect(response.rect);
 
@@ -1479,4 +1544,222 @@ fn close_button(ui: &mut Ui, rect: Rect) -> Response {
     ui.painter() // paints /
         .line_segment([rect.right_top(), rect.left_bottom()], stroke);
     response
+}
+
+#[cfg(all(test, feature = "persistence"))]
+mod tests {
+    use crate::{
+        Context, Event, Id, Modifiers, PointerButton, Pos2, RawInput, Rect, Window, pos2, vec2,
+    };
+
+    fn window_id() -> Id {
+        Id::unique("window")
+    }
+
+    /// Run one frame showing a window, and return the window rect.
+    fn run_frame_with(
+        ctx: &Context,
+        events: Vec<Event>,
+        window: impl Fn(Window<'static>) -> Window<'static>,
+        num_lines: usize,
+    ) -> Rect {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+            events,
+            ..Default::default()
+        };
+        let mut rect = None;
+        let output = ctx.run_ui(input, |ui| {
+            let response = window(Window::new("Window").id(window_id())).show(ui.ctx(), |ui| {
+                for _ in 0..num_lines {
+                    ui.label("Hello");
+                }
+            });
+            rect = response.map(|response| response.response.rect);
+        });
+        output.drop_without_applying_deltas();
+        rect.expect("The window was not shown")
+    }
+
+    /// Run one frame showing a resizable window, and return the window rect.
+    fn run_frame(ctx: &Context, events: Vec<Event>) -> Rect {
+        run_frame_with(ctx, events, |window| window.default_size([340.0, 420.0]), 1)
+    }
+
+    /// Restore the memory into a new context, like `eframe` does when restarting.
+    fn restart(ctx: &Context) -> Context {
+        let memory =
+            ron::to_string(&ctx.memory(|mem| mem.clone())).expect("Failed to serialize memory");
+        let ctx = Context::default();
+        ctx.memory_mut(|mem| *mem = ron::from_str(&memory).expect("Failed to deserialize memory"));
+        ctx
+    }
+
+    fn drag(ctx: &Context, from: Pos2, to: Pos2) {
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        run_frame(ctx, vec![Event::PointerMoved(from)]);
+        run_frame(ctx, vec![button(from, true)]);
+        run_frame(ctx, vec![Event::PointerMoved(from.lerp(to, 0.5))]);
+        run_frame(ctx, vec![Event::PointerMoved(to)]);
+        run_frame(ctx, vec![button(to, false)]);
+        run_frame(ctx, vec![]);
+    }
+
+    /// The position of a window that was resized below its default size survives a restart (#8522).
+    #[test]
+    fn shrunk_window_keeps_its_position_after_restart() {
+        let ctx = Context::default();
+        run_frame(&ctx, vec![]);
+        let rect = run_frame(&ctx, vec![]);
+
+        // Shrink the window by dragging its right edge, then move it against the right edge of the screen:
+        let right_edge = pos2(rect.right() - 1.0, rect.center().y);
+        drag(&ctx, right_edge, right_edge - vec2(190.0, 0.0));
+        let rect = run_frame(&ctx, vec![]);
+        assert!(rect.width() < 200.0, "The window didn't shrink: {rect:?}");
+        let title_bar = pos2(rect.center().x, rect.top() + 10.0);
+        drag(&ctx, title_bar, title_bar + vec2(800.0 - rect.right(), 0.0));
+        let before_restart = run_frame(&ctx, vec![]);
+        assert_eq!(before_restart.right(), 800.0);
+
+        let ctx = restart(&ctx);
+        run_frame(&ctx, vec![]);
+        assert_eq!(run_frame(&ctx, vec![]), before_restart);
+    }
+
+    /// Windows of all kinds placed near the bottom right corner of the screen keep their position after a restart.
+    #[test]
+    fn windows_keep_their_position_after_restart() {
+        type Config = fn(Window<'static>) -> Window<'static>;
+        let configs: [(&str, Config); 5] = [
+            ("default", |window| window),
+            ("auto_sized", |window| window.auto_sized()),
+            ("not resizable", |window| window.resizable(false)),
+            ("collapsed", |window| window.default_open(false)),
+            ("large default size", |window| {
+                window.default_size([700.0, 500.0])
+            }),
+        ];
+
+        for (name, config) in configs {
+            let config = &move |window: Window<'static>| config(window.default_pos([600.0, 450.0]));
+
+            // Show lots of content at first, then less, so the window shrinks
+            // below the size stored in its `Resize` state (for non-resizable windows):
+            let ctx = Context::default();
+            for _ in 0..3 {
+                run_frame_with(&ctx, vec![], config, 20);
+            }
+            for _ in 0..3 {
+                run_frame_with(&ctx, vec![], config, 1);
+            }
+            let before_restart = run_frame_with(&ctx, vec![], config, 1);
+
+            let ctx = restart(&ctx);
+            for _ in 0..3 {
+                run_frame_with(&ctx, vec![], config, 1);
+            }
+            let after_restart = run_frame_with(&ctx, vec![], config, 1);
+
+            assert_eq!(
+                after_restart, before_restart,
+                "The {name:?} window moved after a restart"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod title_bar_tests {
+    use core::cell::Cell;
+
+    use crate::{
+        Context, Event, Id, LayerId, Modifiers, Order, PointerButton, Pos2, RawInput, Rect, Vec2,
+        Window, vec2,
+    };
+
+    #[derive(Debug, PartialEq)]
+    enum Outcome {
+        Collapsed,
+        Closed,
+    }
+
+    /// Clicks the leftmost title-bar button of a window and reports what happened.
+    fn click_leftmost_title_bar_button(right_to_left: bool) -> Outcome {
+        let ctx = Context::default();
+        ctx.all_styles_mut(|style| style.right_to_left = right_to_left);
+        let window_id = Id::unique("window");
+        let open = Cell::new(true);
+        let collapsed = Cell::new(false);
+        let run = |events: Vec<Event>| {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                let mut is_open = open.get();
+                let response = Window::new("Window")
+                    .id(window_id)
+                    .open(&mut is_open)
+                    .show(ui.ctx(), |ui| ui.label("Hello"));
+                open.set(is_open);
+                collapsed.set(response.is_some_and(|response| response.inner.is_none()));
+            })
+            .drop_without_applying_deltas();
+        };
+
+        run(vec![]);
+        run(vec![]);
+        let button_size = Vec2::splat(ctx.global_style().spacing.icon_width);
+        let layer_id = LayerId::new(Order::Middle, window_id);
+        let mut buttons: Vec<Rect> = ctx.prev_pass_state(|pass| {
+            pass.widgets
+                .get_layer(layer_id)
+                .filter(|widget| widget.sense.senses_click() && widget.rect.size() == button_size)
+                .map(|widget| widget.rect)
+                .collect()
+        });
+        assert_eq!(
+            buttons.len(),
+            2,
+            "Expected two title-bar buttons: {buttons:?}"
+        );
+        buttons.sort_by(|a, b| a.left().total_cmp(&b.left()));
+
+        let pos = buttons[0].center();
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        run(vec![Event::PointerMoved(pos), button(true)]);
+        run(vec![button(false)]);
+        // Let the collapse animation finish.
+        for _ in 0..30 {
+            run(vec![]);
+        }
+
+        match (open.get(), collapsed.get()) {
+            (true, true) => Outcome::Collapsed,
+            (false, _) => Outcome::Closed,
+            (true, false) => panic!("Clicking the button did nothing"),
+        }
+    }
+
+    #[test]
+    fn collapse_button_on_the_left() {
+        assert_eq!(click_leftmost_title_bar_button(false), Outcome::Collapsed);
+    }
+
+    #[test]
+    fn close_button_on_the_left_right_to_left() {
+        assert_eq!(click_leftmost_title_bar_button(true), Outcome::Closed);
+    }
 }

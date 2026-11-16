@@ -24,7 +24,8 @@ Werkzeuge
 Die Werkzeugleiste oben: Auswählen, Hand | Text, Objekte | Länge, Fläche, Maßstab |
 Notiz, Hervorheben, Wolke, Mehr | Drucken, Speichern. Ganz rechts „Alle Werkzeuge“ (Seiten,
 Formulare, Schützen, Exportieren und mehr) und „Suchen“ (Strg+K). Die Menüs Datei,
-Bearbeiten, Seiten, Ansicht und Hilfe stehen ganz oben links.
+Bearbeiten, Ansicht, Unterschreiben, Fenster und Hilfe stehen ganz oben links; die Befehle
+für Seiten (Einfügen, Drehen, Löschen und mehr) unter Bearbeiten > Seiten.
 
 Updates
 -------
@@ -76,7 +77,8 @@ Alles lässt sich mit Strg+Z rückgängig machen. Gespeichert wird erst mit Strg
 
 Texterkennung (OCR)
 -------------------
-Bearbeiten > Text erkennen… macht eingescannte Seiten durchsuchbar: Der erkannte Text liegt
+Alle Werkzeuge > Scannen und Texterkennung > In dieser Datei (oder Strg+K, „Text erkennen“)
+macht eingescannte Seiten durchsuchbar: Der erkannte Text liegt
 unsichtbar über dem Bild, das Bild selbst bleibt unverändert. Die Erkennung nutzt die
 Texterkennung von Windows und liest Deutsch mit Umlauten und ß (Sprache im Fenster wählbar,
 alle in Windows installierten Sprachen). Seiten, die schon Text haben, werden übersprungen.

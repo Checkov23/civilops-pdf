@@ -1,0 +1,25 @@
+[package]
+name = "printcraft-redact-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Detached from the PrintCraft workspace: run with `cargo +nightly fuzz run apply`
+# from crates/redact/.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+printcraft-cos = { path = "../../cos" }
+printcraft-redact = { path = ".." }
+
+[[bin]]
+name = "apply"
+path = "fuzz_targets/apply.rs"
+test = false
+doc = false
+bench = false

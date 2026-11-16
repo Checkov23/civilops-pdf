@@ -17,7 +17,8 @@
 use printcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use printcraft_fonts::{helvetica_width, literal, win_ansi};
 
-use crate::{AnnotError, LineEnding, Meta, NewAnnotation, Rgb, Shape, Style, add_annotation, annots, n, num_array, page_ref, set_appearance};
+use crate::create::num_array;
+use crate::{AnnotError, LineEnding, Meta, NewAnnotation, Rgb, Shape, Style, add_annotation, annots, n, page_ref, set_appearance};
 
 /// Metres per PDF point on paper at 1:1 (1 pt = 1/72 in = 0.352 7̅ mm).
 pub const METRES_PER_POINT: f64 = 0.0254 / 72.0;
@@ -398,7 +399,7 @@ pub struct NewMeasurement {
 
 /// The default look of measurements: a dark red line, 1.5 pt.
 pub fn default_style() -> Style {
-    Style { color: [0.80, 0.07, 0.07], opacity: 1.0, width: 1.5, fill: None }
+    Style { color: [0.80, 0.07, 0.07], opacity: 1.0, width: 1.5, fill: None, ..Style::default() }
 }
 
 /// Add a measurement; returns its index in the page's `/Annots`.

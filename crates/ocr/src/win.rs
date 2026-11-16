@@ -1,8 +1,9 @@
-//! CivilOps PDF: Windows' own text recognition (Windows.Media.Ocr). It is part of Windows 10 and
-//! 11 and reads every language whose text recognition is installed with the language (Settings ▸
-//! Time & language ▸ Language), German with its umlauts included, so there are no models to ship.
+//! CivilOps PDF: Windows' own text recognition (Windows.Media.Ocr) as the `windows` engine. It is
+//! part of Windows 10 and 11 and reads every language whose text recognition is installed with
+//! the language (Settings ▸ Time & language ▸ Language), German with its umlauts included, so
+//! there are no models to ship.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use windows::Globalization::Language;
 use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
@@ -10,27 +11,78 @@ use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
 use windows::core::HSTRING;
 
-use crate::{Line, OcrError, Word};
+use crate::{Line, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
 
 /// Tiles overlap by this much (pixels) when an image is larger than Windows reads at once, so a
 /// word cut by one tile's edge is whole in the next.
 const OVERLAP: u32 = 256;
 
 /// The languages Windows reads: their tags (`de-DE`) and names in the user's language.
-pub fn languages() -> Vec<(String, String)> {
+pub(crate) fn languages() -> Vec<(String, String)> {
     let Ok(list) = OcrEngine::AvailableRecognizerLanguages() else { return Vec::new() };
     list.into_iter().filter_map(|l| Some((l.LanguageTag().ok()?.to_string(), l.DisplayName().ok()?.to_string()))).collect()
 }
 
+/// Windows' own text recognition as a [`Recognizer`] (`"windows"`). It reads the language a job
+/// names: a tag from [`crate::windows_languages`] (`de-DE`), or a language such as `de` for the
+/// installed `de-DE`. One Windows engine per language is made on first use and kept.
+#[derive(Default)]
+pub struct WindowsRecognizer {
+    engines: Mutex<Vec<(String, Arc<Engine>)>>,
+}
+
+impl WindowsRecognizer {
+    pub fn new() -> WindowsRecognizer {
+        WindowsRecognizer::default()
+    }
+
+    /// The engine for `language` (made once, then shared).
+    fn engine(&self, language: &str) -> Result<Arc<Engine>, OcrError> {
+        let tag = crate::resolve_in(crate::windows_languages(), language).ok_or_else(|| OcrError::Language(language.into()))?;
+        let mut engines = self.engines.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, engine)) = engines.iter().find(|(t, _)| *t == tag) {
+            return Ok(engine.clone());
+        }
+        let engine = Arc::new(Engine::new(&tag)?);
+        engines.push((tag, engine.clone()));
+        Ok(engine)
+    }
+}
+
+impl Recognizer for WindowsRecognizer {
+    fn id(&self) -> &'static str {
+        "windows"
+    }
+
+    fn available(&self) -> bool {
+        crate::windows_ocr()
+    }
+
+    fn languages(&self) -> Vec<(String, String)> {
+        crate::windows_languages().to_vec()
+    }
+
+    fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+        self.engine(&options.language)?.recognize(&gray(image), image.width(), image.height())
+    }
+}
+
+/// The image as grey, one byte per pixel (Rec. 601 weights).
+fn gray(image: &OcrImage) -> Vec<u8> {
+    // At most 255 · 1000 / 1000, so it fits a byte.
+    let luma = |p: &[u8; 4]| ((u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114) / 1000) as u8;
+    image.rgba().as_chunks::<4>().0.iter().map(luma).collect()
+}
+
 /// A recogniser for one language.
-pub struct Engine {
+struct Engine {
     engine: OcrEngine,
     /// The longest side Windows reads at once.
     max: u32,
 }
 
 impl Engine {
-    pub fn new(tag: &str) -> Result<Engine, OcrError> {
+    fn new(tag: &str) -> Result<Engine, OcrError> {
         let err = |e: windows::core::Error| OcrError::Load(format!("Windows text recognition ({tag})"), e.to_string());
         let language = Language::CreateLanguage(&HSTRING::from(tag)).map_err(err)?;
         if !OcrEngine::IsLanguageSupported(&language).map_err(err)? {
@@ -43,7 +95,7 @@ impl Engine {
 
     /// Read a grey image (one byte per pixel), in tiles when it is larger than Windows reads at
     /// once.
-    pub fn recognize(&self, gray: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
+    fn recognize(&self, gray: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
         let (xs, ys) = (tiles(width, self.max), tiles(height, self.max));
         let mut out = Vec::new();
         for (xi, &(x0, x1)) in xs.iter().enumerate() {
@@ -96,7 +148,8 @@ impl Engine {
                 if text.trim().is_empty() || !(r.Width > 0.0 && r.Height > 0.0) {
                     continue;
                 }
-                words.push(Word { text, rect: [r.X + dx, r.Y + dy, r.X + r.Width + dx, r.Y + r.Height + dy] });
+                // Windows reports no confidence for a word.
+                words.push(Word::new(text, [r.X + dx, r.Y + dy, r.X + r.Width + dx, r.Y + r.Height + dy], "windows"));
             }
             if !words.is_empty() {
                 lines.push(Line { words });
@@ -152,5 +205,33 @@ mod tests {
         for x in [0.0, 700.0, 871.9, 872.0, 1700.0, 2499.0] {
             assert_eq!((0..t.len()).filter(|&i| core(&t, i).0 <= x && x < core(&t, i).1).count(), 1, "{x}");
         }
+    }
+
+    #[test]
+    fn images_turn_grey() {
+        let image = OcrImage::new(3, 1, vec![255, 255, 255, 255, 0, 0, 0, 255, 255, 0, 0, 255]).unwrap();
+        assert_eq!(gray(&image), [255, 0, 76]);
+    }
+
+    /// Windows' own text recognition, when Windows has it (Windows 10 and 11 with a language
+    /// that includes it).
+    #[test]
+    fn windows_reads_rendered_text() {
+        if !crate::windows_ocr() {
+            eprintln!("skipped: no Windows text recognition");
+            return;
+        }
+        let (w, h, px) = crate::tests::test_image::hello();
+        let image = OcrImage::new(w, h, px).unwrap();
+        let language = crate::resolve_in(crate::windows_languages(), "en").unwrap_or_else(crate::default_language);
+        let r = WindowsRecognizer::new();
+        assert!(r.available() && r.languages().iter().any(|(c, _)| *c == language));
+        let lines = r.recognize(&image, &RecognizeOptions { language }).unwrap();
+        let text: Vec<String> = lines.iter().map(Line::text).collect();
+        assert!(text.iter().any(|t| t.contains("HELL") && t.contains("WOR")), "{text:?}");
+        let word = lines.iter().flat_map(|l| &l.words).find(|w| w.text.contains("HELL")).unwrap();
+        assert!(word.rect[0] >= 10.0 && word.rect[0] < 60.0, "{word:?}");
+        assert_eq!((word.source.as_str(), word.confidence), ("windows", None));
+        assert!(matches!(r.recognize(&image, &RecognizeOptions { language: "xx-YY".into() }), Err(OcrError::Language(_))));
     }
 }

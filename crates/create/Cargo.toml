@@ -10,8 +10,11 @@ workspace = true
 
 [dependencies]
 printcraft-cos = { workspace = true }
+printcraft-filters = { workspace = true }
 printcraft-model = { workspace = true }
 printcraft-fonts = { workspace = true }
+# For `image::bmp_with_pixel_offset`, shared with XFA pictures.
+printcraft-xfa = { workspace = true }
 png = "0.18"
 tiff = "0.11"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
@@ -21,6 +24,14 @@ thiserror = { workspace = true }
 # Already in the graph through lopdf; used only to read plain-text files (decode_text).
 encoding_rs = "0.8"
 
+[target.'cfg(unix)'.dependencies]
+# Already in the graph (printcraft-platform, ui-egui); stops a timed-out LibreOffice's whole process
+# group, soffice.bin included, without unsafe code.
+rustix = { version = "1", features = ["process"] }
+
 [dev-dependencies]
+# An independent CCITT decoder, to check Create PDF's Group 4 images.
+hayro-ccitt.workspace = true
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 hayro-syntax = { workspace = true }
+printcraft-filters = { workspace = true }

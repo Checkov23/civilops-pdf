@@ -10,11 +10,11 @@ use super::pdf::{Content, Font, Fonts, Stamp, colors, name, text};
 /// Links to this prefix in showcase.html mark where annotations go.
 const MARKER_PREFIX: &str = "https://mark.printcraft.invalid/";
 
-const TITLE: &str = "PrintCraft Showcase";
-const AUTHOR: &str = "PrintCraft";
+const TITLE: &str = "CivilOps PDF Showcase";
+const AUTHOR: &str = "CivilOps PDF";
 const SUBJECT: &str = "A specimen document exercising typography, world scripts, vector graphics, \
                        MathML, forms, annotations, layers and attachments.";
-const KEYWORDS: &[&str] = &["PDF", "typography", "OpenType", "AcroForm", "annotations", "optional content", "PrintCraft"];
+const KEYWORDS: &[&str] = &["PDF", "typography", "OpenType", "AcroForm", "annotations", "optional content", "CivilOps PDF"];
 const CREATOR: &str = "printcraft xtask demo-pdf";
 
 /// Chrome-printed page indices (0-based) that the post-processor refers to.

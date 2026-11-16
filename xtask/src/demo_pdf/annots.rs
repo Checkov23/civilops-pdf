@@ -81,7 +81,7 @@ impl Kind {
     }
 }
 
-const AUTHOR: &str = "PrintCraft Reviewer";
+const AUTHOR: &str = "CivilOps PDF Reviewer";
 const AUTHOR_2: &str = "Layout Editor";
 
 /// Builds annotation dictionaries (and their appearance XObjects) for one document.
@@ -269,7 +269,7 @@ impl Annotator {
         reply.set("AP", dictionary! { "N" => icon });
         let reply_id = doc.add_object(reply);
 
-        let mut state = self.base("Text", r, colors::TEAL, AUTHOR, "Accepted set by PrintCraft Reviewer", page);
+        let mut state = self.base("Text", r, colors::TEAL, AUTHOR, "Accepted set by CivilOps PDF Reviewer", page);
         state.set("F", 30); // hidden: review-state annotations are shown only in the comments list
         state.set("Name", "Comment");
         state.set("IRT", self_id);
@@ -488,7 +488,7 @@ impl Annotator {
     }
 
     fn attachment(&mut self, doc: &mut Document, page: ObjectId, r: Rect) -> Dictionary {
-        let note = "Review notes for the PrintCraft showcase.\n\n\
+        let note = "Review notes for the CivilOps PDF showcase.\n\n\
                     - Page 9 exercises every common annotation type.\n\
                     - Each annotation carries its own appearance stream.\n";
         let fs = embedded_file(doc, "review-notes.txt", "text/plain", note.as_bytes(), "Notes attached to a comment", &self.now);

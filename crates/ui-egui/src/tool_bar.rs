@@ -33,7 +33,7 @@ fn tool(ui: &mut egui::Ui, icon: &str, label: &str, tip: &str, active: bool, men
     let text_w = ui.fonts_mut(|f| f.layout_no_wrap(crate::i18n::shown(label), font.clone(), t.text).size().x);
     let chevron = if menu { 12.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2((text_w + chevron).max(30.0) + 16.0, 50.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, label));
     let enabled = ui.is_enabled();
     let fill = if active {
         t.accent
@@ -188,7 +188,7 @@ fn more(app: &mut PrintCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     icons::paint(ui, Rect::from_min_size(row.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)), "check", 14.0, t.accent);
                 }
                 let click = click.on_hover_cursor(egui::CursorIcon::PointingHand);
-                click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, c.label()));
+                click.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, c.label()));
                 if click.clicked() {
                     app.execute(c.command());
                     ui.close();

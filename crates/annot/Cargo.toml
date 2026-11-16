@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 printcraft-cos = { workspace = true }
 printcraft-fonts = { workspace = true }
+# The usable-quad rule `/QuadPoints` readers share.
+printcraft-geom = { workspace = true }
 printcraft-model = { workspace = true }
 thiserror = { workspace = true }
 

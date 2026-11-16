@@ -1,10 +1,10 @@
 use crate::{
-    AsIdSalt, Context, Id, IdSalt, InnerResponse, NumExt as _, Rect, Response, Sense, Stroke,
-    TextStyle, TextWrapMode, Ui, UiBuilder, UiKind, UiStackInfo, WidgetInfo, WidgetText,
-    WidgetType, emath, epaint, pos2, remap, remap_clamp, vec2,
+    Align, AsIdSalt, Context, Id, IdSalt, InnerResponse, Layout, NumExt as _, Rect, Response, Role,
+    Sense, TextStyle, TextWrapMode, Ui, UiBuilder, UiKind, UiStackInfo, WidgetInfo, WidgetText,
+    emath, epaint, pos2, remap, remap_clamp, vec2,
 };
 use emath::GuiRounding as _;
-use epaint::{Shape, StrokeKind};
+use epaint::StrokeKind;
 
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -131,13 +131,23 @@ impl CollapsingState {
         ui: &mut Ui,
         add_header: impl FnOnce(&mut Ui) -> HeaderRet,
     ) -> HeaderResponse<'_, HeaderRet> {
-        let header_response = ui.horizontal(|ui| {
+        let add_contents = |ui: &mut Ui| {
             let prev_item_spacing = ui.spacing_mut().item_spacing;
             ui.spacing_mut().item_spacing.x = 0.0; // the toggler button uses the full indent width
             let collapser = self.show_default_button_indented(ui);
             ui.spacing_mut().item_spacing = prev_item_spacing;
             (collapser, add_header(ui))
-        });
+        };
+        let header_response = if ui.style().right_to_left {
+            // The toggle button comes first, on the right.
+            let size = vec2(
+                ui.available_size_before_wrap().x,
+                ui.spacing().interact_size.y,
+            );
+            ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), add_contents)
+        } else {
+            ui.horizontal(add_contents)
+        };
         HeaderResponse {
             state: self,
             ui,
@@ -163,7 +173,11 @@ impl CollapsingState {
         self.show_body_unindented(ui, |ui| {
             ui.indent(id, |ui| {
                 // make as wide as the header:
-                ui.expand_to_include_x(header_response.rect.right());
+                ui.expand_to_include_x(if ui.style().right_to_left {
+                    header_response.rect.left()
+                } else {
+                    header_response.rect.right()
+                });
                 add_body(ui)
             })
             .inner
@@ -341,17 +355,19 @@ pub fn paint_default_icon(ui: &mut Ui, openness: f32, response: &Response) {
     // Draw a pointy triangle arrow:
     let rect = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height()) * 0.75);
     let rect = rect.expand(visuals.expansion);
-    let mut points = vec![rect.left_top(), rect.right_top(), rect.center_bottom()];
     use core::f32::consts::TAU;
-    let rotation = emath::Rot2::from_angle(remap(openness, 0.0..=1.0, -TAU / 4.0..=0.0));
-    for p in &mut points {
-        *p = rect.center() + rotation * (*p - rect.center());
-    }
+    // Collapsed, the triangle points in the reading direction.
+    let collapsed_rotation = if ui.style().right_to_left {
+        TAU * 0.25
+    } else {
+        -TAU * 0.25
+    };
+    let rotation = remap(openness, 0.0..=1.0, collapsed_rotation..=0.0);
 
-    ui.painter().add(Shape::convex_polygon(
-        points,
+    ui.painter().add(epaint::Shape::rotated_triangle(
+        rect,
+        rotation,
         visuals.fg_stroke.color,
-        Stroke::NONE,
     ));
 }
 
@@ -407,6 +423,46 @@ impl CollapsingHeader {
             show_background: false,
             icon: None,
         }
+    }
+
+    /// Show a collapsing header where you draw the header contents yourself.
+    ///
+    /// Unlike [`Self::new`], which only takes a text label, the header here is an
+    /// arbitrary closure, so you can put e.g. checkboxes, buttons or several widgets
+    /// next to the expand/collapse arrow. Only the arrow toggles the open state.
+    ///
+    /// `id_salt` must be unique within the parent [`Ui`].
+    /// The header starts out collapsed.
+    ///
+    /// This is a convenience wrapper around [`CollapsingState::show_header`].
+    /// Use [`CollapsingState`] directly if you need more control,
+    /// e.g. to make it open by default or to get the responses back.
+    ///
+    /// ```
+    /// # egui::__run_test_ui(|ui| {
+    /// let mut enabled = true;
+    /// egui::CollapsingHeader::custom(
+    ///     ui,
+    ///     "my_custom_header",
+    ///     |ui| {
+    ///         ui.checkbox(&mut enabled, "Enabled");
+    ///     },
+    ///     |ui| {
+    ///         ui.label("Body");
+    ///     },
+    /// );
+    /// # });
+    /// ```
+    pub fn custom(
+        ui: &mut Ui,
+        id_salt: impl AsIdSalt,
+        ui_header: impl FnOnce(&mut Ui),
+        ui_body: impl FnOnce(&mut Ui),
+    ) {
+        let id = ui.make_persistent_id(id_salt);
+        CollapsingState::load_with_default_open(ui.ctx(), id, false)
+            .show_header(ui, ui_header)
+            .body(ui_body);
     }
 
     /// By default, the [`CollapsingHeader`] is collapsed.
@@ -533,8 +589,15 @@ impl CollapsingHeader {
         let (_, rect) = ui.allocate_space(desired_size);
 
         let mut header_response = ui.interact(rect, id, Sense::click());
+        // The icon sits at the start side, followed by the text.
+        let right_to_left = ui.style().right_to_left;
+        let text_x = if right_to_left {
+            rect.right() - ui.spacing().indent - galley.size().x
+        } else {
+            text_pos.x
+        };
         let text_pos = pos2(
-            text_pos.x,
+            text_x,
             header_response.rect.center().y - galley.size().y / 2.0,
         );
 
@@ -550,7 +613,11 @@ impl CollapsingHeader {
         }
 
         header_response.widget_info(|| {
-            WidgetInfo::labeled(WidgetType::CollapsingHeader, ui.is_enabled(), galley.text())
+            WidgetInfo::labeled(Role::DisclosureTriangle, ui.is_enabled(), galley.text())
+        });
+
+        ui.ctx().accesskit_node_builder(header_response.id, |node| {
+            node.set_expanded(state.is_open());
         });
 
         let openness = state.openness(ui.ctx());
@@ -583,10 +650,12 @@ impl CollapsingHeader {
 
             {
                 let (mut icon_rect, _) = ui.spacing().icon_rectangles(header_response.rect);
-                icon_rect.set_center(pos2(
-                    header_response.rect.left() + ui.spacing().indent / 2.0,
-                    header_response.rect.center().y,
-                ));
+                let icon_x = if right_to_left {
+                    header_response.rect.right() - ui.spacing().indent / 2.0
+                } else {
+                    header_response.rect.left() + ui.spacing().indent / 2.0
+                };
+                icon_rect.set_center(pos2(icon_x, header_response.rect.center().y));
                 let icon_response = header_response.clone().with_new_rect(icon_rect);
                 if let Some(icon) = icon {
                     icon(ui, openness, &icon_response);
@@ -692,5 +761,46 @@ impl<R> CollapsingResponse<R> {
     /// Was the [`CollapsingHeader`] fully open (and not being animated)?
     pub fn fully_open(&self) -> bool {
         self.openness >= 1.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{CollapsingHeader, Context, RawInput, epaint::Shape};
+
+    /// Which way the triangle of a collapsed header points: `1.0` right, `-1.0` left.
+    fn collapsed_triangle_direction(right_to_left: bool) -> f32 {
+        let ctx = Context::default();
+        ctx.all_styles_mut(|style| style.right_to_left = right_to_left);
+        let mut output = ctx.run_ui(RawInput::default(), |ui| {
+            CollapsingHeader::new("Header").show(ui, |ui| ui.label("Body"));
+        });
+        output.textures_delta.clear();
+        let triangles: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                Shape::Path(path) if path.points.len() == 3 => Some(path.points.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(triangles.len(), 1, "Expected one triangle: {triangles:?}");
+        let points = &triangles[0];
+        let mean_x = points.iter().map(|p| p.x).sum::<f32>() / 3.0;
+        let tip = points
+            .iter()
+            .max_by(|a, b| (a.x - mean_x).abs().total_cmp(&(b.x - mean_x).abs()))
+            .expect("three points");
+        (tip.x - mean_x).signum()
+    }
+
+    #[test]
+    fn collapsed_triangle_points_right() {
+        assert_eq!(collapsed_triangle_direction(false), 1.0);
+    }
+
+    #[test]
+    fn collapsed_triangle_points_left_right_to_left() {
+        assert_eq!(collapsed_triangle_direction(true), -1.0);
     }
 }

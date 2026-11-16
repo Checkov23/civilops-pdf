@@ -1,0 +1,74 @@
+[
+  {
+    "crate": "printcraft-cli",
+    "name": "hyper",
+    "reachable": true,
+    "path": "printcraft-cli -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> hyper"
+  },
+  {
+    "crate": "printcraft-cli",
+    "name": "reqwest",
+    "reachable": true,
+    "path": "printcraft-cli -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest"
+  },
+  {
+    "crate": "printcraft-cli",
+    "name": "socket2",
+    "reachable": true,
+    "path": "printcraft-cli -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> hyper-util -> socket2"
+  },
+  {
+    "crate": "printcraft-cli",
+    "name": "tokio",
+    "reachable": true,
+    "path": "printcraft-cli -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> tokio"
+  },
+  {
+    "crate": "printcraft-automation",
+    "name": "hyper",
+    "reachable": true,
+    "path": "printcraft-automation -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> hyper"
+  },
+  {
+    "crate": "printcraft-automation",
+    "name": "reqwest",
+    "reachable": true,
+    "path": "printcraft-automation -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest"
+  },
+  {
+    "crate": "printcraft-automation",
+    "name": "socket2",
+    "reachable": true,
+    "path": "printcraft-automation -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> hyper-util -> socket2"
+  },
+  {
+    "crate": "printcraft-automation",
+    "name": "tokio",
+    "reachable": true,
+    "path": "printcraft-automation -> printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> tokio"
+  },
+  {
+    "crate": "printcraft-engine",
+    "name": "hyper",
+    "reachable": true,
+    "path": "printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> hyper"
+  },
+  {
+    "crate": "printcraft-engine",
+    "name": "reqwest",
+    "reachable": true,
+    "path": "printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest"
+  },
+  {
+    "crate": "printcraft-engine",
+    "name": "socket2",
+    "reachable": true,
+    "path": "printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> hyper-util -> socket2"
+  },
+  {
+    "crate": "printcraft-engine",
+    "name": "tokio",
+    "reachable": true,
+    "path": "printcraft-engine -> printcraft-print -> craft-print -> winprint -> reqwest -> tokio"
+  }
+]

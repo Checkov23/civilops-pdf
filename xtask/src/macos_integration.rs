@@ -41,7 +41,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         return Ok(());
     }
     let mut report = String::new();
-    writeln!(report, "PrintCraft macOS integration diagnostics")?;
+    writeln!(report, "CivilOps PDF macOS integration diagnostics")?;
     writeln!(report, "target: {} / {}", std::env::consts::OS, std::env::consts::ARCH)?;
     writeln!(report, "os version: {}", os_version())?;
 
@@ -110,7 +110,7 @@ fn write_bundle_report(report: &mut String, bundle: &Path) -> anyhow::Result<()>
         writeln!(report, "  bundle identifier: {bundle_id}")?;
         writeln!(report, "  minimum macOS: {minimum}")?;
         writeln!(report, "  PDF registration: {}", pdf_registration(text))?;
-        let executable = plist_value(text, "CFBundleExecutable").unwrap_or_else(|| "PrintCraft".into());
+        let executable = plist_value(text, "CFBundleExecutable").unwrap_or_else(|| "CivilOps PDF".into());
         write_architecture_report(report, &contents.join("MacOS").join(executable))?;
     } else if plist.exists() {
         writeln!(report, "  Info.plist: present but not UTF-8 XML (binary plist inspection unavailable)")?;

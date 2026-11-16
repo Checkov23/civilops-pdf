@@ -120,7 +120,8 @@ fn scale_opens_the_scale_dialog() {
 #[test]
 fn printcraft_layout_is_unchanged_without_the_switch() {
     let h = harness(false);
-    h.get_by_label("Menu");
+    // Upstream's menu bar (File, Edit, ...) in its top bar.
+    assert!(h.query_all_by_label("File").next().is_some(), "the menu bar");
     h.get_by_label("E-Sign");
     h.get_by_label("Select (V)");
     assert!(h.query_by_label("Objects").is_none());

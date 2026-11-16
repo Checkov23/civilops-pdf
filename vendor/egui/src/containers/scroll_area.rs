@@ -8,10 +8,12 @@ use emath::GuiRounding as _;
 use epaint::{Color32, Direction, Margin, Shape};
 
 use crate::{
-    AsIdSalt, Context, CursorIcon, Id, IdSalt, NumExt as _, Pos2, Rangef, Rect, Response, Sense,
-    Ui, UiBuilder, UiKind, UiStackInfo, Vec2, Vec2b, WidgetInfo, emath, epaint, lerp, pass_state,
-    pos2, remap, remap_clamp,
+    AsIdSalt, Context, CursorIcon, Id, IdSalt, MouseWheelSource, NumExt as _, Pos2, Rangef, Rect,
+    Response, Role, Sense, Ui, UiBuilder, UiKind, UiStackInfo, Vec2, Vec2b, WidgetInfo, emath,
+    epaint, lerp, pass_state, pos2, remap, remap_clamp, style::KineticScrollStyle, vec2,
 };
+
+use super::scroll_physics::{AxisPhysics, WheelScroll, scroll_bounds};
 
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -24,8 +26,17 @@ struct ScrollingToTarget {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 pub struct State {
-    /// Positive offset means scrolling down/right
-    pub offset: Vec2,
+    /// Positive offset means scrolling down/right.
+    ///
+    /// This can be outside of the valid range while the user is
+    /// rubber-banding past the edge of the content (see [`crate::style::KineticScrollStyle::rubber_band`]).
+    /// See [`Self::clamped_offset`] and [`Self::unclamped_offset`].
+    offset: Vec2,
+
+    /// The largest valid offset, as of last frame: `content_size - viewport_size`.
+    ///
+    /// Can be negative if the content is smaller than the viewport.
+    max_offset: Vec2,
 
     /// If set, quickly but smoothly scroll to this target offset.
     offset_target: [Option<ScrollingToTarget>; 2],
@@ -39,7 +50,9 @@ pub struct State {
     /// Did the user interact (hover or drag) the scroll bars last frame?
     scroll_bar_interaction: Vec2b,
 
-    /// Momentum, used for kinetic scrolling
+    /// Velocity of the offset, used for kinetic scrolling and rubber-banding.
+    ///
+    /// Positive means the offset is increasing, i.e. the content is scrolling down/right.
     #[cfg_attr(feature = "serde", serde(skip))]
     vel: Vec2,
 
@@ -53,12 +66,23 @@ pub struct State {
 
     /// Area that can be dragged. This is the size of the content from the last frame.
     interact_rect: Option<Rect>,
+
+    /// Did we already bounce off the edge during the current momentum scroll?
+    ///
+    /// On macOS, after a quick trackpad swipe the OS keeps sending scroll events
+    /// long after the fingers have left the trackpad, with decaying speed.
+    /// That is how kinetic scrolling works there (see [`crate::MouseWheelSource::Momentum`]).
+    /// When those reach the edge we bounce once, and then ignore the rest of them,
+    /// so they don't keep pushing the content out.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    bounced_this_momentum: Vec2b,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
             offset: Vec2::ZERO,
+            max_offset: Vec2::ZERO,
             offset_target: Default::default(),
             show_scroll: Vec2b::FALSE,
             content_is_too_large: Vec2b::FALSE,
@@ -67,6 +91,7 @@ impl Default for State {
             scroll_start_offset_from_top_left: [None; 2],
             scroll_stuck_to_end: Vec2b::TRUE,
             interact_rect: None,
+            bounced_this_momentum: Vec2b::FALSE,
         }
     }
 }
@@ -80,10 +105,55 @@ impl State {
         ctx.data_mut(|d| d.insert_persisted(id, self));
     }
 
-    /// Get the current kinetic scrolling velocity.
+    /// The current kinetic scrolling velocity of the offset, in ui points per second.
+    ///
+    /// Positive means the offset is increasing, i.e. the content is scrolling down/right.
     pub fn velocity(&self) -> Vec2 {
         self.vel
     }
+
+    /// The scroll offset, clamped to the valid range `0..=max_offset`.
+    ///
+    /// Positive means scrolled down/right.
+    ///
+    /// This differs from [`Self::unclamped_offset`] only while the user is rubber-banding
+    /// past the edge of the content.
+    pub fn clamped_offset(&self) -> Vec2 {
+        Vec2::new(
+            scroll_bounds(self.max_offset.x).clamp(self.offset.x),
+            scroll_bounds(self.max_offset.y).clamp(self.offset.y),
+        )
+    }
+
+    /// The scroll offset, which can be outside of the valid range while the user is
+    /// rubber-banding past the edge of the content
+    /// (see [`crate::style::KineticScrollStyle::rubber_band`]).
+    ///
+    /// Positive means scrolled down/right.
+    /// This is where the content is actually drawn.
+    pub fn unclamped_offset(&self) -> Vec2 {
+        self.offset
+    }
+
+    /// How far past the edge of the content we are, in ui points.
+    ///
+    /// Negative means past the start (top/left), positive means past the end (bottom/right).
+    /// Zero when not rubber-banding.
+    pub fn overscroll(&self) -> Vec2 {
+        self.offset - self.clamped_offset()
+    }
+
+    #[deprecated = "Use `clamped_offset()` or `unclamped_offset()`"]
+    pub fn offset(&self) -> Vec2 {
+        self.clamped_offset()
+    }
+}
+
+/// Is `ui` inside another [`ScrollArea`]?
+fn has_scrolling_ancestor(ui: &Ui) -> bool {
+    ui.stack()
+        .iter()
+        .any(|stack| stack.kind() == Some(UiKind::ScrollArea))
 }
 
 pub struct ScrollAreaOutput<R> {
@@ -488,6 +558,25 @@ impl ScrollArea {
     ///
     /// Positive offset means scrolling down/right.
     ///
+    /// An explicit offset takes precedence over momentum and animated scroll targets
+    /// that existed before this frame: on each supplied axis the velocity and any
+    /// previous `scroll_to_*` animation are cleared, and the offset is not advanced by
+    /// the previous frame's physics. Actions that happen later in the same frame (a
+    /// wheel event, a scroll-bar drag, `scroll_to_*`, or `scroll_with_delta`) still
+    /// apply on top of it, because they are newer input. Animated targets started in the
+    /// same frame are queued normally, but a subsequent frame's explicit offset will
+    /// cancel them. A continuing drag does not modify an axis with an explicit offset.
+    /// Supplying an offset every frame therefore effectively disables kinetic scrolling
+    /// and animation on those axes. An explicit offset also counts as a manual
+    /// reposition for `stick_to_end`: the axis sticks again only if the requested
+    /// position is at the end.
+    ///
+    /// The offset is used for this frame's layout as-is. It is clamped to the current
+    /// content bounds when stored at the end of the frame, so an out-of-range request
+    /// paints at the requested position for that frame while the next frame starts
+    /// from the clamped edge. Non-finite values (NaN or infinity) are ignored for that
+    /// axis.
+    ///
     /// See also: [`Self::vertical_scroll_offset`], [`Self::horizontal_scroll_offset`],
     /// [`Ui::scroll_to_cursor`](crate::ui::Ui::scroll_to_cursor) and
     /// [`Response::scroll_to_me`](crate::Response::scroll_to_me)
@@ -684,6 +773,9 @@ struct Prepared {
     scroll_bar_visibility: ScrollBarVisibility,
     scroll_bar_rect: Option<Rect>,
 
+    /// The vertical scroll bar sits on the left ([`crate::Style::right_to_left`]).
+    vertical_bar_on_left: bool,
+
     /// Where on the screen the content is (excludes scroll bars; includes `content_margin`).
     inner_rect: Rect,
 
@@ -705,6 +797,22 @@ struct Prepared {
     background_drag_response: Option<Response>,
 
     animated: bool,
+
+    /// Along which axes the offset is deliberately outside the valid range this frame
+    /// (rubber-banding), and so should not be clamped.
+    rubber_banding: Vec2b,
+
+    /// Is there an enclosing [`ScrollArea`]?
+    has_scrolling_ancestor: bool,
+
+    /// Per axis. Bounds are from last frame.
+    axis_physics: [AxisPhysics; 2],
+
+    /// Per axis, the caller-provided offset for this frame, if any.
+    ///
+    /// Carried into [`Prepared::end`] so later phases (stick-to-end, drag-release
+    /// momentum) don't override an explicitly requested position.
+    requested_offset: [Option<f32>; 2],
 }
 
 impl ScrollArea {
@@ -739,8 +847,19 @@ impl ScrollArea {
         );
         let mut state = State::load(&ctx, id).unwrap_or_default();
 
-        state.offset.x = offset_x.unwrap_or(state.offset.x);
-        state.offset.y = offset_y.unwrap_or(state.offset.y);
+        // Non-finite positions would poison layout and the stored state, so ignore them.
+        let requested_offset =
+            [offset_x, offset_y].map(|offset| offset.filter(|offset| offset.is_finite()));
+        for (axis, offset) in requested_offset.iter().enumerate() {
+            if let Some(offset) = offset {
+                // A caller-provided position supersedes previous motion on this axis.
+                state.offset[axis] = *offset;
+                state.vel[axis] = 0.0;
+                state.offset_target[axis] = None;
+                state.scroll_stuck_to_end[axis] = false;
+                state.bounced_this_momentum[axis] = false;
+            }
+        }
 
         let show_bars: Vec2b = match scroll_bar_visibility {
             ScrollBarVisibility::AlwaysHidden => Vec2b::FALSE,
@@ -779,7 +898,13 @@ impl ScrollArea {
             inner_size
         };
 
-        let inner_rect = Rect::from_min_size(available_outer.min, inner_size);
+        let vertical_bar_on_left = ui.style().right_to_left;
+        let bar_space_on_left = if vertical_bar_on_left {
+            vec2(current_bar_use.x, 0.0)
+        } else {
+            Vec2::ZERO
+        };
+        let inner_rect = Rect::from_min_size(available_outer.min + bar_space_on_left, inner_size);
 
         let mut content_max_size = inner_size;
 
@@ -802,6 +927,10 @@ impl ScrollArea {
             .round_to_pixels(ui.pixels_per_point())
             .round_ui();
 
+        // Is there an enclosing scroll area? If so, we let the scroll wheel chain to it
+        // when we're at the edge.
+        let has_scrolling_ancestor = has_scrolling_ancestor(ui);
+
         let mut content_ui = ui.new_child(
             UiBuilder::new()
                 .ui_stack_info(UiStackInfo::new(UiKind::ScrollArea))
@@ -815,8 +944,9 @@ impl ScrollArea {
                 if direction_enabled[d] {
                     content_clip_rect.min[d] = inner_rect.min[d];
                     content_clip_rect.max[d] = inner_rect.max[d];
-                } else {
-                    // Nice handling of forced resizing beyond the possible:
+                } else if !(d == 0 && vertical_bar_on_left) {
+                    // Nice handling of forced resizing beyond the possible.
+                    // (A vertical bar on the left is never in the way of content that overflows to the right.)
                     content_clip_rect.max[d] = ui.clip_rect().max[d] - current_bar_use[d];
                 }
             }
@@ -828,6 +958,21 @@ impl ScrollArea {
         let viewport = Rect::from_min_size(Pos2::ZERO + state.offset, inner_size);
         let dt = ui.input(|i| i.stable_dt).at_most(0.1);
 
+        let kinetic_style = ui.spacing().scroll.kinetic;
+        let mut rubber_banding = Vec2b::FALSE;
+
+        let axis_physics: [AxisPhysics; 2] = core::array::from_fn(|d| AxisPhysics {
+            bounds: scroll_bounds(state.max_offset[d]),
+            viewport_extent: inner_size[d],
+            style: KineticScrollStyle {
+                // Only rubber-band along axes that actually have something to scroll:
+                rubber_band: kinetic_style.rubber_band
+                    && direction_enabled[d]
+                    && state.content_is_too_large[d],
+                ..kinetic_style
+            },
+        });
+
         let background_drag_response = if scroll_source.drag.enabled(ui.ctx())
             && ui.is_enabled()
             && state.content_is_too_large.any()
@@ -838,46 +983,6 @@ impl ScrollArea {
             let content_response_option = state
                 .interact_rect
                 .map(|rect| ui.interact(rect, id.with("area"), Sense::DRAG));
-
-            if content_response_option
-                .as_ref()
-                .is_some_and(|response| response.dragged())
-            {
-                for d in 0..2 {
-                    if direction_enabled[d] {
-                        ui.input(|input| {
-                            state.offset[d] -= input.pointer.delta()[d];
-                        });
-                        state.scroll_stuck_to_end[d] = false;
-                        state.offset_target[d] = None;
-                    }
-                }
-            } else {
-                // Apply the cursor velocity to the scroll area when the user releases the drag.
-                if content_response_option
-                    .as_ref()
-                    .is_some_and(|response| response.drag_stopped())
-                {
-                    state.vel =
-                        direction_enabled.to_vec2() * ui.input(|input| input.pointer.velocity());
-                }
-                for d in 0..2 {
-                    // Kinetic scrolling
-                    let stop_speed = 20.0; // Pixels per second.
-                    let friction_coeff = 1000.0; // Pixels per second squared.
-
-                    let friction = friction_coeff * dt;
-                    if friction > state.vel[d].abs() || state.vel[d].abs() < stop_speed {
-                        state.vel[d] = 0.0;
-                    } else {
-                        state.vel[d] -= friction * state.vel[d].signum();
-                        // Offset has an inverted coordinate system compared to
-                        // the velocity, so we subtract it instead of adding it
-                        state.offset[d] -= state.vel[d] * dt;
-                        ctx.request_repaint();
-                    }
-                }
-            }
 
             // Set the desired mouse cursors.
             if let Some(response) = &content_response_option {
@@ -896,6 +1001,69 @@ impl ScrollArea {
         } else {
             None
         };
+
+        if background_drag_response
+            .as_ref()
+            .is_some_and(|response| response.dragged())
+        {
+            let pointer_delta = ui.input(|input| input.pointer.delta());
+            for d in 0..2 {
+                // An explicit offset wins over a continuing drag on that axis: the drag
+                // physics uses last frame's bounds, which may be stale after a
+                // zoom/reflow, and a caller controlling the offset expects it as-is.
+                if direction_enabled[d] && requested_offset[d].is_none() {
+                    let physics = &axis_physics[d];
+                    // Offset has an inverted coordinate system compared to the pointer:
+                    state.offset[d] = physics.drag(state.offset[d], -pointer_delta[d]);
+                    rubber_banding[d] = physics.is_rubber_banding(state.offset[d]);
+                    state.scroll_stuck_to_end[d] = false;
+                    state.offset_target[d] = None;
+                }
+            }
+        } else {
+            // Apply the cursor velocity to the scroll area when the user releases the drag.
+            if background_drag_response
+                .as_ref()
+                .is_some_and(|response| response.drag_stopped())
+            {
+                let pointer_velocity = ui.input(|input| input.pointer.velocity());
+                for d in 0..2 {
+                    // Offset has an inverted coordinate system compared to the pointer.
+                    // Don't re-inject the release velocity on an explicitly positioned
+                    // axis, or the next frame would coast away from that position.
+                    state.vel[d] = if direction_enabled[d] && requested_offset[d].is_none() {
+                        -pointer_velocity[d]
+                    } else {
+                        0.0
+                    };
+                }
+            }
+
+            // While the fingers are still on the trackpad,
+            // hold the overscroll instead of springing back, like macOS does.
+            // The wheel events are applied in `end`.
+            let fingers_on_trackpad =
+                ui.input(|i| i.scroll_source()) == Some(MouseWheelSource::Trackpad);
+            let hold_overscroll = fingers_on_trackpad && ui.rect_contains_pointer(inner_rect);
+
+            for d in 0..2 {
+                // Bounds here still describe last frame. A zoom/reflow may request an offset
+                // beyond those old bounds that is valid for the content we are about to draw.
+                // Skip physics and validate the offset against the current content in `end`,
+                // without springing back or reviving the previous gesture's momentum. The
+                // begin pass paints at the request; `end` clamps the stored state, so an
+                // out-of-range request can show a one-frame paint/state mismatch (this
+                // predates explicit-offset handling and is not resolved here).
+                if requested_offset[d].is_some() {
+                    continue;
+                }
+                let physics = &axis_physics[d];
+                if physics.step(&mut state.offset[d], &mut state.vel[d], dt, hold_overscroll) {
+                    ctx.request_repaint();
+                }
+                rubber_banding[d] = physics.is_rubber_banding(state.offset[d]);
+            }
+        }
 
         // Scroll with an animation if we have a target offset (that hasn't been cleared by the code
         // above).
@@ -941,6 +1109,7 @@ impl ScrollArea {
             current_bar_use,
             scroll_bar_visibility,
             scroll_bar_rect,
+            vertical_bar_on_left,
             inner_rect,
             content_ui,
             viewport,
@@ -950,6 +1119,10 @@ impl ScrollArea {
             saved_scroll_target,
             background_drag_response,
             animated,
+            rubber_banding,
+            has_scrolling_ancestor,
+            axis_physics,
+            requested_offset,
         }
     }
 
@@ -1069,6 +1242,7 @@ impl Prepared {
             current_bar_use,
             scroll_bar_visibility,
             scroll_bar_rect,
+            vertical_bar_on_left,
             content_ui,
             viewport: _,
             scroll_source,
@@ -1077,11 +1251,18 @@ impl Prepared {
             saved_scroll_target,
             background_drag_response,
             animated,
+            mut rubber_banding,
+            has_scrolling_ancestor,
+            axis_physics,
+            requested_offset,
         } = self;
 
         let content_size = content_ui.min_size();
 
-        let mut had_explicit_scroll_adjustment = Vec2b::FALSE;
+        // An explicit offset counts as an adjustment, so `stick_to_end` below cannot
+        // pull the stored position away from it.
+        let mut had_explicit_scroll_adjustment =
+            Vec2b::new(requested_offset[0].is_some(), requested_offset[1].is_some());
 
         for d in 0..2 {
             // We always take both scroll targets regardless of which scroll axes are enabled. This
@@ -1192,7 +1373,12 @@ impl Prepared {
             Rect::from_min_size(inner_rect.min, inner_size)
         };
 
-        let outer_rect = Rect::from_min_size(inner_rect.min, inner_rect.size() + current_bar_use);
+        let outer_min = if vertical_bar_on_left {
+            inner_rect.min - vec2(current_bar_use.x, 0.0)
+        } else {
+            inner_rect.min
+        };
+        let outer_rect = Rect::from_min_size(outer_min, inner_rect.size() + current_bar_use);
 
         let limit_rect = if ui.spacing().scroll.floating {
             outer_rect
@@ -1216,9 +1402,14 @@ impl Prepared {
             && ui.ctx().dragged_id().is_none()
             || is_dragging_background;
 
-        if scroll_source.mouse_wheel && ui.is_enabled() && is_hovering_outer_rect {
+        if scroll_source.mouse_wheel
+            && ui.is_enabled()
+            && (ui.rect_contains_pointer(outer_rect) || is_dragging_background)
+        {
             let always_scroll_enabled_direction = ui.style().always_scroll_the_only_direction
                 && direction_enabled[0] != direction_enabled[1];
+            let scroll_source = ui.input(|i| i.scroll_source());
+
             for d in 0..2 {
                 if direction_enabled[d] {
                     let scroll_delta = ui.input(|input| {
@@ -1231,11 +1422,26 @@ impl Prepared {
                     });
                     let scroll_delta = scroll_delta * wheel_scroll_multiplier[d];
 
-                    let scrolling_up = state.offset[d] > 0.0 && scroll_delta > 0.0;
-                    let scrolling_down = state.offset[d] < max_offset[d] && scroll_delta < 0.0;
+                    let physics = AxisPhysics {
+                        bounds: scroll_bounds(max_offset[d]), // We know this frame's bounds now
+                        ..axis_physics[d]
+                    };
 
-                    if scrolling_up || scrolling_down {
-                        state.offset[d] -= scroll_delta;
+                    let consumed = physics.wheel(
+                        &mut state.offset[d],
+                        &mut state.vel[d],
+                        WheelScroll {
+                            // Offset has an inverted coordinate system compared to the scroll delta:
+                            delta: -scroll_delta,
+                            source: scroll_source,
+                            can_chain_to_parent: has_scrolling_ancestor,
+                            dt: ui.input(|i| i.stable_dt).at_most(0.1),
+                        },
+                        &mut state.bounced_this_momentum[d],
+                    );
+
+                    if consumed {
+                        rubber_banding[d] = physics.is_rubber_banding(state.offset[d]);
 
                         // Clear scroll delta so no parent scroll will use it:
                         ui.input_mut(|input| {
@@ -1296,29 +1502,43 @@ impl Prepared {
             let inner_margin = show_factor * scroll_style.bar_inner_margin;
             let outer_margin = show_factor * scroll_style.bar_outer_margin;
 
-            // bottom of a horizontal scroll (d==0).
-            // right of a vertical scroll (d==1).
-            let mut max_cross = outer_rect.max[1 - d] - outer_margin;
-
-            if ui.clip_rect().max[1 - d] - outer_margin < max_cross {
-                // Move the scrollbar so it is visible. This is needed in some cases.
-                // For instance:
-                // * When we have a vertical-only scroll area in a top level panel,
-                //   and that panel is not wide enough for the contents.
-                // * When one ScrollArea is nested inside another, and the outer
-                //   is scrolled so that the scroll-bars of the inner ScrollArea (us)
-                //   is outside the clip rectangle.
-                max_cross = ui.clip_rect().max[1 - d] - outer_margin;
-            }
-
             let full_width = scroll_style.bar_width;
 
-            // The bounding rect of a fully visible bar.
-            // When we hover this area, we should show the full bar:
-            let max_bar_rect = if d == 0 {
-                outer_rect.with_min_y(max_cross - full_width)
+            // The bar's cross-axis edge that faces away from the content:
+            // bottom of a horizontal scroll (d==0),
+            // right (or left, with `vertical_bar_on_left`) of a vertical scroll (d==1).
+            let bar_on_min_side = d == 1 && vertical_bar_on_left;
+            // Moving the edge so the bar stays inside the clip rectangle is needed in some cases.
+            // For instance:
+            // * When we have a vertical-only scroll area in a top level panel,
+            //   and that panel is not wide enough for the contents.
+            // * When one ScrollArea is nested inside another, and the outer
+            //   is scrolled so that the scroll-bars of the inner ScrollArea (us)
+            //   is outside the clip rectangle.
+            let outer_edge = if bar_on_min_side {
+                outer_rect.min[1 - d].max(ui.clip_rect().min[1 - d]) + outer_margin
             } else {
-                outer_rect.with_min_x(max_cross - full_width)
+                outer_rect.max[1 - d].min(ui.clip_rect().max[1 - d]) - outer_margin
+            };
+            // The cross range of a bar `width` wide at the outer edge.
+            let at_outer_edge = |width: f32| {
+                if bar_on_min_side {
+                    Rangef::new(outer_edge, outer_edge + width)
+                } else {
+                    Rangef::new(outer_edge - width, outer_edge)
+                }
+            };
+
+            // The bounding rect of a fully visible bar.
+            // When we hover this area, we should show the full bar.
+            // The interaction rect must match where the scroll bar is drawn (outer_scroll_bar_rect),
+            // i.e. use `scroll_bar_rect` along the scrolling axis. Otherwise a press in a region
+            // where no scrollbar is drawn is sensed as a scrollbar press, creating a dead zone
+            // and snapping the offset to the minimum (see issue #8495).
+            let max_bar_rect = if d == 0 {
+                Rect::from_x_y_ranges(scroll_bar_rect.x_range(), at_outer_edge(full_width))
+            } else {
+                Rect::from_x_y_ranges(at_outer_edge(full_width), scroll_bar_rect.y_range())
             };
 
             let sense = if scroll_source.scroll_bar && ui.is_enabled() {
@@ -1333,7 +1553,7 @@ impl Prepared {
             // Also: it make sense to detect any hover where the scroll bar _will_ be.
             let response = ui.interact(max_bar_rect, interact_id, sense);
 
-            response.widget_info(|| WidgetInfo::new(crate::WidgetType::ScrollBar));
+            response.widget_info(|| WidgetInfo::new(Role::ScrollBar));
 
             // top/bottom of a horizontal scroll (d==0).
             // left/rigth of a vertical scroll (d==1).
@@ -1350,11 +1570,11 @@ impl Prepared {
                         is_hovering_bar_area_t,
                     );
 
-                let min_cross = max_cross - width;
-                Rangef::new(min_cross, max_cross)
+                at_outer_edge(width)
+            } else if bar_on_min_side {
+                Rangef::new(outer_edge, inner_rect.min[1 - d] - inner_margin)
             } else {
-                let min_cross = inner_rect.max[1 - d] + inner_margin;
-                Rangef::new(min_cross, max_cross)
+                Rangef::new(inner_rect.max[1 - d] + inner_margin, outer_edge)
             };
 
             let outer_scroll_bar_rect = if d == 0 {
@@ -1411,7 +1631,7 @@ impl Prepared {
                             let handle_top_pos_at_bottom =
                                 scroll_bar_rect.max[d] - handle_rect.size()[d];
                             // Calculate the new handle top position, centering the handle on the mouse.
-                            let new_handle_top_pos = (pointer_pos[d] - handle_rect.size()[d] / 2.0)
+                            let new_handle_top_pos = (pointer_pos[d] - handle_rect.size()[d] * 0.5)
                                 .clamp(scroll_bar_rect.min[d], handle_top_pos_at_bottom);
                             pointer_pos[d] - new_handle_top_pos
                         }
@@ -1433,12 +1653,13 @@ impl Prepared {
                 state.scroll_start_offset_from_top_left[d] = None;
             }
 
-            let unbounded_offset = state.offset[d];
-            state.offset[d] = state.offset[d].max(0.0);
-            state.offset[d] = state.offset[d].min(max_offset[d]);
+            if !rubber_banding[d] {
+                let unbounded_offset = state.offset[d];
+                state.offset[d] = scroll_bounds(max_offset[d]).clamp(state.offset[d]);
 
-            if state.offset[d] != unbounded_offset {
-                state.vel[d] = 0.0;
+                if state.offset[d] != unbounded_offset {
+                    state.vel[d] = 0.0;
+                }
             }
 
             if ui.is_rect_visible(outer_scroll_bar_rect) {
@@ -1525,8 +1746,12 @@ impl Prepared {
         }
 
         let available_offset = content_size - inner_rect.size();
-        state.offset = state.offset.min(available_offset);
-        state.offset = state.offset.max(Vec2::ZERO);
+        for d in 0..2 {
+            if !rubber_banding[d] {
+                state.offset[d] = scroll_bounds(available_offset[d]).clamp(state.offset[d]);
+            }
+        }
+        state.max_offset = available_offset;
 
         let suppress_stuck_recompute = Vec2b::new(
             had_explicit_scroll_adjustment[0] && state.offset_target[0].is_some(),
@@ -1637,5 +1862,504 @@ fn paint_fade_areas_impl(ui: &Ui, inner_rect: Rect, content_size: Vec2, offset: 
             Direction::RightToLeft,
             [bg_faded, Color32::TRANSPARENT],
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Event, Modifiers, MouseWheelSource, MouseWheelUnit, PointerButton, RawInput, TouchPhase,
+        style::ScrollStyle,
+    };
+
+    #[test]
+    fn clamped_offset() {
+        let state = State {
+            offset: Vec2::new(-10.0, 150.0),
+            max_offset: Vec2::new(-20.0, 100.0),
+            ..Default::default()
+        };
+        assert_eq!(state.clamped_offset(), Vec2::new(0.0, 100.0));
+        assert_eq!(state.overscroll(), Vec2::new(-10.0, 50.0));
+    }
+
+    fn frame_input(time: f64, events: Vec<Event>) -> RawInput {
+        RawInput {
+            time: Some(time),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+            events,
+            ..Default::default()
+        }
+    }
+
+    /// Run one frame of a 200×200 scroll area that fills `size` with content.
+    fn run_scroll_frame(
+        ctx: &Context,
+        input: RawInput,
+        size: Vec2,
+        mut configure: impl FnMut(ScrollArea) -> ScrollArea,
+        mut add_contents: impl FnMut(&mut Ui, Rect),
+    ) -> (Id, State, Vec2) {
+        let mut result = None;
+        ctx.run_ui(input, |ui| {
+            ui.spacing_mut().scroll.kinetic.rubber_band = true;
+            let scroll = configure(
+                ScrollArea::both()
+                    .id_salt("explicit-offset")
+                    .auto_shrink(false)
+                    .max_width(200.0)
+                    .max_height(200.0),
+            );
+            let out = scroll.show_viewport(ui, |ui, viewport| {
+                ui.set_min_size(size);
+                add_contents(ui, viewport);
+                viewport.min.to_vec2()
+            });
+            result = Some((out.id, out.state, out.inner));
+        })
+        .drop_without_applying_deltas();
+        result.expect("one UI pass")
+    }
+
+    fn explicit_offset_frame(ctx: &Context, offset: Option<Vec2>, size: Vec2) -> (Id, State, Vec2) {
+        run_scroll_frame(
+            ctx,
+            frame_input(0.0, vec![]),
+            size,
+            |scroll| match offset {
+                Some(offset) => scroll.scroll_offset(offset),
+                None => scroll,
+            },
+            |_, _| {},
+        )
+    }
+
+    fn pointer_frame(time: f64, pos: Pos2, pressed: Option<bool>) -> RawInput {
+        let event = match pressed {
+            Some(pressed) => Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            },
+            None => Event::PointerMoved(pos),
+        };
+        frame_input(time, vec![event])
+    }
+
+    fn drag_frame(ctx: &Context, input: RawInput, size: Vec2) -> (Id, State, Vec2) {
+        run_scroll_frame(
+            ctx,
+            input,
+            size,
+            |scroll| scroll.scroll_source(ScrollSource::DRAG),
+            |_, _| {},
+        )
+    }
+
+    #[test]
+    fn explicit_offset_can_follow_content_growth_without_a_spring_back() {
+        let ctx = Context::default();
+        explicit_offset_frame(&ctx, None, vec2(1000.0, 1000.0));
+        let desired = vec2(1800.0, 1800.0);
+        let (_, state, painted) = explicit_offset_frame(&ctx, Some(desired), vec2(3000.0, 3000.0));
+        assert_eq!(painted, desired);
+        assert_eq!(
+            state.unclamped_offset(),
+            desired,
+            "last frame's smaller bounds must not spring back a new programmatic offset"
+        );
+        for _ in 0..3 {
+            let (_, state, painted) = explicit_offset_frame(&ctx, None, vec2(3000.0, 3000.0));
+            assert_eq!(state.unclamped_offset(), desired);
+            assert_eq!(painted, desired);
+        }
+    }
+
+    #[test]
+    fn explicit_offset_cancels_previous_momentum() {
+        let ctx = Context::default();
+        let (id, mut state, _) = explicit_offset_frame(&ctx, None, vec2(3000.0, 3000.0));
+        state.offset = vec2(500.0, 500.0);
+        state.vel = vec2(1000.0, 1000.0);
+        state.store(&ctx, id);
+        let desired = vec2(800.0, 800.0);
+        let (_, state, painted) = explicit_offset_frame(&ctx, Some(desired), vec2(3000.0, 3000.0));
+        assert_eq!(painted, desired);
+        assert_eq!(state.unclamped_offset(), desired);
+        assert_eq!(state.velocity(), Vec2::ZERO);
+        let (_, state, painted) = explicit_offset_frame(&ctx, None, vec2(3000.0, 3000.0));
+        assert_eq!(painted, desired);
+        assert_eq!(state.unclamped_offset(), desired);
+    }
+
+    #[test]
+    fn explicit_offset_cancels_previous_scroll_target() {
+        let ctx = Context::default();
+        let (id, mut state, _) = explicit_offset_frame(&ctx, None, vec2(3000.0, 3000.0));
+        state.offset_target[1] = Some(ScrollingToTarget {
+            animation_time_span: (0.0, 1.0),
+            target_offset: 2000.0,
+        });
+        state.store(&ctx, id);
+        let desired = vec2(800.0, 800.0);
+        let (_, state, painted) = explicit_offset_frame(&ctx, Some(desired), vec2(3000.0, 3000.0));
+        assert_eq!(painted, desired);
+        assert_eq!(state.unclamped_offset(), desired);
+        assert!(state.offset_target.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn explicit_horizontal_offset_keeps_vertical_momentum() {
+        let ctx = Context::default();
+        let (id, mut state, _) = explicit_offset_frame(&ctx, None, vec2(3000.0, 3000.0));
+        state.offset = vec2(500.0, 500.0);
+        state.vel = vec2(1000.0, 1000.0);
+        state.store(&ctx, id);
+        let mut result = None;
+        ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let out = ScrollArea::both()
+                    .id_salt("explicit-offset")
+                    .auto_shrink(false)
+                    .max_width(200.0)
+                    .max_height(200.0)
+                    .horizontal_scroll_offset(800.0)
+                    .show(ui, |ui| ui.set_min_size(vec2(3000.0, 3000.0)));
+                result = Some(out.state);
+            },
+        )
+        .drop_without_applying_deltas();
+        let state = result.expect("one UI pass");
+        assert_eq!(state.unclamped_offset().x, 800.0);
+        assert_eq!(state.velocity().x, 0.0);
+        assert!(state.unclamped_offset().y > 500.0);
+        assert!(state.velocity().y > 0.0);
+    }
+
+    #[test]
+    fn explicit_offset_escapes_stick_to_end_per_axis() {
+        let ctx = Context::default();
+        let size = vec2(3000.0, 3000.0);
+        let stick = |scroll: ScrollArea| scroll.stick_to_bottom(true).stick_to_right(true);
+
+        let (_, state, _) =
+            run_scroll_frame(&ctx, frame_input(0.0, vec![]), size, stick, |_, _| {});
+        assert_eq!(state.unclamped_offset(), vec2(2800.0, 2800.0));
+
+        // Explicitly moving the horizontal axis away from the end must win over
+        // `stick_to_right`, while the untouched vertical axis stays stuck.
+        let (_, state, painted) = run_scroll_frame(
+            &ctx,
+            frame_input(0.1, vec![]),
+            size,
+            |scroll| stick(scroll).horizontal_scroll_offset(800.0),
+            |_, _| {},
+        );
+        assert_eq!(painted, vec2(800.0, 2800.0));
+        assert_eq!(state.unclamped_offset(), vec2(800.0, 2800.0));
+        assert!(!state.scroll_stuck_to_end[0]);
+        assert!(state.scroll_stuck_to_end[1]);
+
+        // The escape must persist on following frames, still without affecting vertical stickiness.
+        let (_, state, _) =
+            run_scroll_frame(&ctx, frame_input(0.2, vec![]), size, stick, |_, _| {});
+        assert_eq!(state.unclamped_offset(), vec2(800.0, 2800.0));
+
+        // And the vertical axis can escape independently too.
+        let (_, state, painted) = run_scroll_frame(
+            &ctx,
+            frame_input(0.3, vec![]),
+            size,
+            |scroll| stick(scroll).vertical_scroll_offset(800.0),
+            |_, _| {},
+        );
+        assert_eq!(painted, vec2(800.0, 800.0));
+        assert_eq!(state.unclamped_offset(), vec2(800.0, 800.0));
+        assert!(!state.scroll_stuck_to_end.any());
+    }
+
+    #[test]
+    fn explicit_horizontal_offset_keeps_vertical_scroll_target() {
+        let ctx = Context::default();
+        let size = vec2(3000.0, 3000.0);
+        let (id, mut state, _) = explicit_offset_frame(&ctx, None, size);
+        state.offset = vec2(500.0, 500.0);
+        state.offset_target = [
+            Some(ScrollingToTarget {
+                animation_time_span: (0.0, 1.0),
+                target_offset: 2000.0,
+            }),
+            Some(ScrollingToTarget {
+                animation_time_span: (0.0, 1.0),
+                target_offset: 2000.0,
+            }),
+        ];
+        state.store(&ctx, id);
+
+        let (_, state, _) = run_scroll_frame(
+            &ctx,
+            frame_input(0.1, vec![]),
+            size,
+            |scroll| scroll.horizontal_scroll_offset(800.0),
+            |_, _| {},
+        );
+        assert_eq!(state.unclamped_offset().x, 800.0);
+        assert!(state.offset_target[0].is_none());
+        assert!(
+            state.offset_target[1].is_some(),
+            "the untouched axis keeps its animation"
+        );
+        assert!(state.unclamped_offset().y > 500.0);
+        assert!(!state.scroll_stuck_to_end.any());
+    }
+
+    #[test]
+    fn explicit_offset_uses_current_bounds_while_dragging() {
+        let ctx = Context::default();
+        let pointer = pos2(100.0, 100.0);
+        let small = vec2(1000.0, 1000.0); // old max offset: 800
+        let grown = vec2(2000.0, 2000.0); // new max offset: 1800
+
+        drag_frame(&ctx, pointer_frame(0.0, pointer, None), small);
+        // The first frame learns content bounds; the next registers the drag hit area.
+        drag_frame(&ctx, pointer_frame(0.01, pointer, None), small);
+        drag_frame(&ctx, pointer_frame(0.02, pointer, Some(true)), small);
+        drag_frame(&ctx, pointer_frame(0.04, pos2(90.0, 90.0), None), small);
+
+        // The vertical explicit offset is valid for the grown content but beyond the
+        // old bounds. It must be used exactly, while the horizontal drag still moves.
+        let (_, state, painted) = run_scroll_frame(
+            &ctx,
+            pointer_frame(0.06, pos2(80.0, 80.0), None),
+            grown,
+            |scroll| {
+                scroll
+                    .scroll_source(ScrollSource::DRAG)
+                    .vertical_scroll_offset(900.0)
+            },
+            |_, _| {},
+        );
+        assert_eq!(painted.y, 900.0);
+        assert_eq!(state.unclamped_offset().y, 900.0);
+        assert!(
+            state.unclamped_offset().x > 0.0,
+            "the unrequested axis still follows the drag"
+        );
+    }
+
+    #[test]
+    fn drag_release_does_not_revive_velocity_on_explicit_axis() {
+        let ctx = Context::default();
+        let size = vec2(3000.0, 3000.0);
+        let pointer = pos2(100.0, 100.0);
+
+        drag_frame(&ctx, pointer_frame(0.0, pointer, None), size);
+        // The first frame learns content bounds; the next registers the drag hit area.
+        drag_frame(&ctx, pointer_frame(0.01, pointer, None), size);
+        drag_frame(&ctx, pointer_frame(0.02, pointer, Some(true)), size);
+        drag_frame(&ctx, pointer_frame(0.04, pos2(90.0, 80.0), None), size);
+        drag_frame(&ctx, pointer_frame(0.06, pos2(80.0, 60.0), None), size);
+        drag_frame(&ctx, pointer_frame(0.08, pos2(70.0, 40.0), None), size);
+
+        let (_, released, _) = run_scroll_frame(
+            &ctx,
+            pointer_frame(0.10, pos2(70.0, 40.0), Some(false)),
+            size,
+            |scroll| {
+                scroll
+                    .scroll_source(ScrollSource::DRAG)
+                    .horizontal_scroll_offset(800.0)
+            },
+            |_, _| {},
+        );
+        assert_eq!(released.unclamped_offset().x, 800.0);
+        assert_eq!(
+            released.velocity().x,
+            0.0,
+            "release velocity must not be re-injected on the explicitly positioned axis"
+        );
+        assert!(
+            released.velocity().y > 0.0,
+            "the unrequested axis still inherits the release velocity"
+        );
+
+        let (_, next, _) = run_scroll_frame(
+            &ctx,
+            frame_input(0.12, vec![]),
+            size,
+            |scroll| scroll.scroll_source(ScrollSource::DRAG),
+            |_, _| {},
+        );
+        assert_eq!(next.unclamped_offset().x, 800.0);
+        assert!(next.unclamped_offset().y > released.unclamped_offset().y);
+    }
+
+    #[test]
+    fn explicit_offset_allows_same_frame_scroll_target() {
+        let ctx = Context::default();
+        let size = vec2(3000.0, 3000.0);
+        explicit_offset_frame(&ctx, None, size);
+
+        let (_, state, _) = run_scroll_frame(
+            &ctx,
+            frame_input(0.1, vec![]),
+            size,
+            |scroll| scroll.scroll_offset(vec2(800.0, 800.0)).animated(false),
+            |ui, _| {
+                ui.scroll_to_rect(
+                    Rect::from_min_size(pos2(0.0, 1000.0), vec2(10.0, 10.0)),
+                    None,
+                );
+            },
+        );
+        assert_eq!(state.unclamped_offset().x, 800.0);
+        assert!(
+            state.unclamped_offset().y > 1500.0,
+            "a scroll target created in the same frame still applies: {}",
+            state.unclamped_offset().y
+        );
+        assert!(state.offset_target.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn explicit_offset_allows_same_frame_scroll_delta() {
+        let ctx = Context::default();
+        let size = vec2(3000.0, 3000.0);
+        explicit_offset_frame(&ctx, None, size);
+
+        let (_, state, _) = run_scroll_frame(
+            &ctx,
+            frame_input(0.1, vec![]),
+            size,
+            |scroll| scroll.scroll_offset(vec2(800.0, 800.0)).animated(false),
+            |ui, _| ui.scroll_with_delta(vec2(0.0, -100.0)),
+        );
+        assert_eq!(state.unclamped_offset(), vec2(800.0, 900.0));
+    }
+
+    #[test]
+    fn explicit_offset_allows_same_frame_wheel() {
+        let ctx = Context::default();
+        let size = vec2(3000.0, 3000.0);
+        explicit_offset_frame(&ctx, None, size);
+
+        let wheel = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: vec2(0.0, -50.0),
+            phase: TouchPhase::Move,
+            source: MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        };
+        let input = frame_input(0.1, vec![Event::PointerMoved(pos2(50.0, 50.0)), wheel]);
+        let (_, state, _) = run_scroll_frame(
+            &ctx,
+            input,
+            size,
+            |scroll| scroll.scroll_offset(vec2(800.0, 800.0)),
+            |_, _| {},
+        );
+        assert_eq!(state.unclamped_offset().x, 800.0);
+        assert!(
+            state.unclamped_offset().y > 800.0,
+            "a wheel event in the same frame still scrolls: {}",
+            state.unclamped_offset().y
+        );
+    }
+
+    #[test]
+    fn out_of_range_explicit_offset_clamps_the_stored_state() {
+        let ctx = Context::default();
+        let (_, state, _) =
+            explicit_offset_frame(&ctx, Some(vec2(2500.0, 2500.0)), vec2(3000.0, 3000.0));
+        assert_eq!(state.unclamped_offset(), vec2(2500.0, 2500.0));
+
+        // Content shrinks under an over-large request. The begin pass paints at the
+        // request (pre-existing begin/end mismatch), but the stored state is clamped to
+        // the new bounds and classified per axis.
+        let (_, state, painted) =
+            explicit_offset_frame(&ctx, Some(vec2(2500.0, -100.0)), vec2(500.0, 500.0));
+        assert_eq!(painted, vec2(2500.0, -100.0));
+        assert_eq!(state.unclamped_offset(), vec2(300.0, 0.0));
+        assert_eq!(state.overscroll(), Vec2::ZERO);
+        assert!(state.scroll_stuck_to_end[0]);
+        assert!(!state.scroll_stuck_to_end[1]);
+    }
+
+    #[test]
+    fn nonfinite_explicit_offset_is_ignored_per_axis() {
+        let ctx = Context::default();
+        let size = vec2(3000.0, 3000.0);
+        explicit_offset_frame(&ctx, Some(vec2(800.0, 800.0)), size);
+
+        let (_, state, painted) = explicit_offset_frame(&ctx, Some(vec2(f32::NAN, 700.0)), size);
+        assert_eq!(painted, vec2(800.0, 700.0));
+        assert_eq!(state.unclamped_offset(), vec2(800.0, 700.0));
+        assert!(state.unclamped_offset().is_finite());
+    }
+
+    /// Shows a vertical scroll area with too much content,
+    /// and returns the rects of its viewport and its vertical scroll bar.
+    fn vertical_scroll_bar(right_to_left: bool, scroll_style: ScrollStyle) -> (Rect, Rect) {
+        let ctx = Context::default();
+        ctx.all_styles_mut(|style| {
+            style.right_to_left = right_to_left;
+            style.spacing.scroll = scroll_style;
+        });
+        let mut output = None;
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            ctx.run_ui(input.clone(), |ui| {
+                output = Some(
+                    ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .max_height(200.0)
+                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+                        .show(ui, |ui| {
+                            for _ in 0..50 {
+                                ui.label("Line");
+                            }
+                        }),
+                );
+            })
+            .drop_without_applying_deltas();
+        }
+        let output = output.expect("The scroll area was not shown");
+        let bar = ctx
+            .read_response(output.id.with(1_usize))
+            .expect("No vertical scroll bar")
+            .rect;
+        (output.inner_rect, bar)
+    }
+
+    #[test]
+    fn vertical_scroll_bar_on_the_right() {
+        for scroll_style in [ScrollStyle::solid(), ScrollStyle::floating()] {
+            let (inner, bar) = vertical_scroll_bar(false, scroll_style);
+            assert!(bar.left() > inner.center().x, "{inner:?} {bar:?}");
+            if !scroll_style.floating {
+                assert!(bar.left() >= inner.right(), "{inner:?} {bar:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_scroll_bar_on_the_left_right_to_left() {
+        for scroll_style in [ScrollStyle::solid(), ScrollStyle::floating()] {
+            let (inner, bar) = vertical_scroll_bar(true, scroll_style);
+            assert!(bar.right() < inner.center().x, "{inner:?} {bar:?}");
+            if !scroll_style.floating {
+                assert!(bar.right() <= inner.left(), "{inner:?} {bar:?}");
+                assert!(bar.left() >= 0.0, "{inner:?} {bar:?}");
+            }
+        }
     }
 }

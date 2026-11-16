@@ -13,5 +13,9 @@ printcraft-cos = { workspace = true }
 printcraft-annot = { workspace = true }
 printcraft-forms = { workspace = true }
 printcraft-model = { workspace = true }
-roxmltree = "0.20"
+roxmltree = "0.21"
+base64 = "0.23"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

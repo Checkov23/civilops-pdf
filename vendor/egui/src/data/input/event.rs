@@ -1,5 +1,6 @@
 use epaint::ColorImage;
 
+use crate::MouseWheelSource;
 use crate::{
     Key,
     emath::{Pos2, Vec2},
@@ -23,6 +24,26 @@ pub enum Event {
 
     /// The integration detected a "paste" event (e.g. Cmd+V).
     Paste(String),
+
+    /// The integration detected a "paste" event (e.g. Cmd+V) where the clipboard held an
+    /// image instead of text (e.g. a screenshot, or an image copied from another app).
+    ///
+    /// Mirrors [`crate::OutputCommand::CopyImage`] for the opposite direction: an integration
+    /// that supports copying an image out (via `arboard`, say) should support pasting one back
+    /// in the same way. Only emitted when the clipboard has no usable text representation —
+    /// [`Self::Paste`] still takes priority when both are available.
+    PasteImage(alloc::sync::Arc<ColorImage>),
+
+    /// Paste the X11/Wayland PRIMARY selection where the user middle-clicked.
+    ///
+    /// Unlike [`Self::Paste`], this goes to the hovered `TextEdit` and inserts the text at `pos`.
+    MiddleClickPaste {
+        /// Where the user clicked, in points.
+        pos: Pos2,
+
+        /// The contents of the PRIMARY selection.
+        text: String,
+    },
 
     /// Text input, e.g. via keyboard.
     ///
@@ -121,6 +142,17 @@ pub enum Event {
     /// IME Event
     Ime(ImeEvent),
 
+    /// Actual ordered completion of an application-requested native composition reset.
+    ///
+    /// Integrations emit this only for the corresponding viewport/window's completed local
+    /// cancellation fence, never immediately upon calling the reset API. Custom editors must
+    /// match their latest request at this exact position in the raw event stream. Stock
+    /// [`crate::TextEdit`] ignores this control event; it does not mutate text or focus.
+    ImeResetCompleted {
+        /// The exact opaque request retained by the integration.
+        request_id: crate::ImeResetId,
+    },
+
     /// On touch screens, report this *in addition to*
     /// [`Self::PointerMoved`], [`Self::PointerButton`], [`Self::PointerGone`]
     Touch {
@@ -167,6 +199,12 @@ pub enum Event {
         /// If unknown set this to [`TouchPhase::Move`].
         phase: TouchPhase,
 
+        /// What is driving the scroll: a wheel, fingers on a trackpad,
+        /// or the system continuing a finger scroll with momentum.
+        ///
+        /// Set this to [`MouseWheelSource::Unknown`] if unknown.
+        source: MouseWheelSource,
+
         /// The state of the modifier keys at the time of the event.
         modifiers: Modifiers,
     },
@@ -176,14 +214,4 @@ pub enum Event {
 
     /// An assistive technology (e.g. screen reader) requested an action.
     AccessKitActionRequest(accesskit::ActionRequest),
-
-    /// The reply of a screenshot requested with [`crate::ViewportCommand::Screenshot`].
-    Screenshot {
-        viewport_id: crate::ViewportId,
-
-        /// Whatever was passed to [`crate::ViewportCommand::Screenshot`].
-        user_data: crate::UserData,
-
-        image: std::sync::Arc<ColorImage>,
-    },
 }

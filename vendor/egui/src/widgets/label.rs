@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use crate::{
-    Align, Direction, FontSelection, Galley, Pos2, Response, Sense, Stroke, TextWrapMode, Ui,
-    Widget, WidgetInfo, WidgetText, WidgetType, epaint, pos2, text_selection::LabelSelectionState,
+    Align, Direction, FontSelection, Galley, Pos2, Response, Role, Sense, Stroke, TextWrapMode, Ui,
+    Widget, WidgetInfo, WidgetText, epaint, pos2, text_selection::LabelSelectionState,
 };
 
 /// Static text.
@@ -82,6 +82,11 @@ impl Label {
     }
 
     /// Sets the horizontal alignment of the Label to the given `Align` value.
+    ///
+    /// Without this, the alignment comes from the [`crate::Layout`]. When that is
+    /// `Align::Min`, each right-to-left paragraph is aligned to the right, where it starts
+    /// (see [`epaint::text::LayoutJob::halign_min_is_start`]).
+    /// An explicit `Align::LEFT` here puts right-to-left text on the left too.
     #[inline]
     pub fn halign(mut self, align: Align) -> Self {
         self.halign = Some(align);
@@ -185,6 +190,9 @@ impl Label {
             FontSelection::Default,
             valign,
         ));
+        if layout_job.language.is_none() {
+            layout_job.language = ui.language();
+        }
 
         let available_width = ui.available_width();
 
@@ -207,6 +215,8 @@ impl Label {
             layout_job.wrap.max_width = available_width;
             layout_job.first_row_min_height = cursor.height();
             layout_job.halign = Align::Min;
+            // The text continues the row of the previous widget, from the left:
+            layout_job.halign_min_is_start = false;
             layout_job.justify = false;
             if let Some(first_section) = layout_job.sections.first_mut() {
                 first_section.leading_space = first_row_indentation;
@@ -251,6 +261,7 @@ impl Label {
                 layout_job.halign = self
                     .halign
                     .unwrap_or_else(|| ui.layout().horizontal_placement());
+                layout_job.halign_min_is_start &= self.halign.is_none();
                 layout_job.justify = ui.layout().horizontal_justify();
             }
 
@@ -278,8 +289,7 @@ impl Widget for Label {
         let show_tooltip_when_elided = self.show_tooltip_when_elided;
 
         let (galley_pos, galley, mut response) = self.layout_in_ui(ui);
-        response
-            .widget_info(|| WidgetInfo::labeled(WidgetType::Label, ui.is_enabled(), galley.text()));
+        response.widget_info(|| WidgetInfo::labeled(Role::Label, ui.is_enabled(), galley.text()));
 
         if ui.is_rect_visible(response.rect) {
             if show_tooltip_when_elided && galley.elided {
@@ -287,6 +297,7 @@ impl Widget for Label {
                 let job = crate::text::LayoutJob {
                     sections: galley.job.sections.clone(),
                     text: galley.job.text.clone(),
+                    language: galley.job.language.clone(),
                     ..crate::text::LayoutJob::default()
                 };
                 // Show the full (non-elided) text on hover:

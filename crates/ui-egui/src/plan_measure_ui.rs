@@ -29,8 +29,9 @@ pub struct ScaleDraft {
 }
 
 /// What the dialog asks for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ScaleAction {
+    #[default]
     None,
     Apply,
     Cancel,

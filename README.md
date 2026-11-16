@@ -85,7 +85,7 @@ Kanals. Das Protokoll der Update-Prüfung steht in `%LOCALAPPDATA%\CivilOpsPDF\a
 | Objekte | `crates/edit/src/plan_objects.rs`, `crates/ui-egui/src/objects_ui.rs` |
 | Texte | `crates/edit/src/text.rs`, `crates/ui-egui/src/edit_text_ui.rs` |
 | Texterkennung | `crates/ocr` (Windows: `win.rs`) |
-| Deutsch | `crates/ui-egui/src/i18n_de.rs` (gilt vor der deutschen Übersetzung von PDFCraft, `crates/ui-egui/src/i18n/de.tsv`); weitere Sprachen in `crates/ui-egui/src/i18n/` |
+| Deutsch | `crates/ui-egui/src/i18n_de.rs` (gilt vor der deutschen Übersetzung von PDFCraft, `vendor/craft-i18n/locales/de/`); weitere Sprachen in `vendor/craft-i18n/locales/` (aus craft-i18n, siehe dortiges README) |
 | Drucken | `crates/print`, `crates/ui-egui/src/print_ui.rs` (unter Windows über craft-print) |
 | Automatik und Kommandozeile | `crates/automation`, `apps/printcraft-cli` |
 | Installer und Updates | `crates/aktualisierung` (Velopack), `crates/ui-egui/src/updates.rs`, `packaging/civilops/` |

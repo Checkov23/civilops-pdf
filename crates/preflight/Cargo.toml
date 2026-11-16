@@ -14,7 +14,7 @@ workspace = true
 printcraft-content = { workspace = true }
 printcraft-cos = { workspace = true }
 printcraft-model = { workspace = true }
-roxmltree = "0.20"
+roxmltree = "0.21"
 
 [dev-dependencies]
 flate2 = { workspace = true }

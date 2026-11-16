@@ -1,0 +1,3796 @@
+# 简体中文 (zh-hans) interface catalog for CivilOps PDF.
+# Columns, separated by a TAB:  context <TAB> English source text <TAB> translation
+#   context  usually empty. `@plural`, `@id` and `@msg` mean something to the apps; any other
+#            word is a label that tells apart two meanings of the same English.
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns (in any
+#            order), and a trailing "…" in one needs one in the other.
+#   @plural  English `one|other`; the translation lists this language's plural forms, `|`-separated.
+#   Lines starting with # and blank lines are ignored. A missing entry shows in English.
+#
+# Clean room: every entry was written from the plain meaning of the English text in ordinary
+# computing vocabulary. No other product's localisation, string table or translated UI was
+# consulted or copied; add entries the same way.
+
+	  · not fixable here	 · 此处无法修复
+	 (page {p})	（第 {p} 页）
+	 (searching… {s} of {p} pages)	（正在搜索… {s}/{p} 页）
+	 ({n} at {dpi} dpi, the largest size they can be drawn at)	（{n} 张以可绘制的最大尺寸 {dpi} dpi 导出）
+	 ({s} not exported: {first})	（{s} 个未导出：{first}）
+	 ({s} warnings: {first})	（{s} 个警告：{first}）
+	 on page {p}	（第 {p} 页）
+	 · password-protected	 · 受密码保护
+	+ Dictionary	+ 词典
+	+ Page {p}	+ 第 {p} 页
+	+Bin	新增资源
+	+LOC	新增行
+	, Expires: 	，有效期至：
+	1 difference found	发现 1 处差异
+	1 file done	1 个文件已完成
+	1 file needs attention	1 个文件需要处理
+	1 instance	1 个匹配
+	1 issue	1 个问题
+	1 mark	1 个标记
+	1 page	1 页
+	1 page scanned	已扫描 1 页
+	1 page selected	已选择 1 页
+	1 page selected.	已选择 1 页。
+	1 page was scanned.	已扫描 1 页。
+	180 degrees	180 度
+	3D model	3D模型
+	3D model canvas	3D模型画布
+	3D models on this page	此页的3D模型
+	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 英寸标签 (101.6 × 152.4 毫米)
+	9 digit, A letter, O letter or digit, X any character	9 表示数字，A 表示字母，O 表示字母或数字，X 表示任意字符
+	; 1 page already had text	；1 页已有文本
+	; 1 page skipped	; 已跳过 1 页
+	; cancelled — {n} files were not run	；已取消——{n} 个文件未运行
+	; corrected {n} pages	; 已校正 {n} 页
+	; failed: {list}	；失败：{list}
+	; skipped: {n}	；已跳过：{n}
+	; {n} files already had text	；{n} 个文件已包含文本
+	; {n} pages already had text	；{n} 页已有文本
+	; {n} pages skipped	; 已跳过 {n} 页
+	? of {n}	?/{n}
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}：{prs} 个 PR，{commits} 次提交，新增 {added} 行 / 删除 {deleted} 行（净增 {delta} 行），新增 {bin_added} 个 / 删除 {bin_deleted} 个二进制资源，{first} – {last}
+	[Custom]	[自定义]
+	`{command}` {when}	`{command}` {when}
+	A 3×3 median filter against scan speckle	3×3 中值滤波，去除扫描噪点
+	a bookmark cannot be moved inside itself	无法将书签移入其自身内部
+	A clean-room, open-source PDF application written in Rust. MIT OR Apache-2.0.	用 Rust 从零编写的开源 PDF 应用。MIT OR Apache-2.0 许可。
+	A colour on this page couldn't be computed and is shown in a fallback colour.	此页面上的某种颜色无法计算，已使用替代颜色显示。
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某列太窄：请加宽区域、给该列更多宽度，或减少列数或列间距
+	A cover on the scanner is open.	扫描仪盖板处于打开状态。
+	A diagonal CONFIDENTIAL watermark on every page.	每页上的对角线 CONFIDENTIAL 水印。
+	a document must keep at least one page	文档必须保留至少一页
+	A document needs at least one page: copy instead	文档至少需要保留一页，请改用复制
+	A document timestamp covers the whole file and is no one's signature, so it can't be removed on its own.	文档时间戳覆盖整个文件，不属于任何人的签名，因此无法单独移除。
+	a field named {name} already exists	已存在名为 {name} 的字段
+	A folder is asked for when a multiple-file run starts	多文件运行开始时会询问文件夹
+	A form field has additional actions	表单字段包含附加动作
+	A link or special file, which isn't followed	A link or special file, which isn't followed
+	A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it.	本地模型不是最先进的云端模型：它可能出错，较长的回答在处理器上需要时间。重要事项请务必核实，下载前也请留意模型大小与这台机器是否匹配。
+	A logo or name at the left of the tabs, where a title bar would show one: CivilOps PDF's own, or your company's.	在标签左侧、标题栏通常显示的位置放一个徽标或名称：CivilOps PDF 自己的，或你公司的。
+	A page count stops the feeder after that many sheets. Cancel ends the transfer early; pages already received stay in the document.	指定页数会在扫完这些页后停止进纸器。取消会提前结束传输；已收到的页面仍保留在文档中。
+	A password-protected file is only checked to reopen when saved; its bytes are not searched again for the removed text.	受密码保护的文件在保存时只检查能否重新打开，不会再次在其字节中搜索已删除的文本。
+	A picture covers page {pages} (a scan?), so the background won't show there.	第 {pages} 页被一张图片覆盖（扫描件？），因此那里不会显示背景。
+	A placed signature is a comment until it is locked: anyone with a PDF editor can move or remove it. Locking makes your Fill & Sign text, marks and signatures part of the page.	放置的签名在锁定前只是注释：任何有 PDF 编辑器的人都能移动或删除它。锁定后，“填写和签名”的文字、标记和签名会成为页面的一部分。
+	A PNG or SVG file. It is read from this place each time CivilOps PDF starts.	一个 PNG 或 SVG 文件。每次 CivilOps PDF 启动时都从此位置读取。
+	A selected field has no widget on any page, so the fields can't be edited together.	某个所选字段在任何页面上都没有控件，因此无法一起编辑这些字段。
+	A setting isn't valid	某项设置无效
+	A signature that is part of a page's content, like a scanned page, is not a field or an annotation, so it can't be removed on its own, and CivilOps PDF doesn't erase parts of a page to hide it. To take it out, redact that area (Redact), or delete the picture with Edit PDF when the signature is an image of its own.	属于页面内容一部分的签名（例如扫描页面上的签名）既不是字段也不是注释，因此无法单独移除，CivilOps PDF 也不会为隐藏它而擦除页面的某些部分。要去掉它，请对该区域进行密文处理（密文），如果签名是一张独立的图像，也可以用“编辑 PDF”删除该图像。
+	A stream refers to an external file	数据流引用了外部文件
+	A stream uses LZW compression	数据流使用 LZW 压缩
+	A summary describes the table's purpose and layout. Add a Summary attribute to each table.	摘要描述表格的用途和布局。请为每个表格添加 Summary 属性。
+	A table that runs across pages stays together; the pages follow one another down the sheet.	跨页的表格保持完整；各页在工作表中依次向下排列。
+	About CivilOps PDF	关于 CivilOps PDF
+	About {app}	关于 {app}
+	about {h} h {m} min left	剩余约 {h} 小时 {m} 分钟
+	about {n} min left	剩余约 {n} 分钟
+	Accent-sensitive	区分变音符号
+	Accept	接受
+	Accept entire page	接受整页
+	Accepted	已接受
+	Accepted by {printer}	已被 {printer} 接受
+	Accessibility Checker	无障碍检查器
+	Accessibility Checker Options	无障碍检查器选项
+	Accessibility panel	辅助功能面板
+	Accessibility permission flag	无障碍许可标志
+	Accessibility permission flag is set	已设置无障碍许可标志
+	Acres	英亩
+	Acrobat 3.0 and later (40-bit RC4)	Acrobat 3.0 及更高版本（40 位 RC4）
+	Acrobat 5.0 and later (128-bit RC4)	Acrobat 5.0 及更高版本（128 位 RC4）
+	Acrobat 7.0 and later (128-bit AES)	Acrobat 7.0 及更高版本（128 位 AES）
+	Acrobat X and later (256-bit AES)	Acrobat X 及更高版本（256 位 AES）
+	Action name:	操作名称：
+	Action Wizard	操作向导
+	Action Wizard…	操作向导…
+	Actions	操作
+	Actions list	操作列表
+	Activate Read Out Loud	启用大声朗读
+	Actual size	实际大小
+	Actual text	实际文本
+	Add a bookmark for each file	为每个文件添加书签
+	Add a button	添加按钮
+	Add a callout	添加标注
+	Add a checkbox	添加复选框
+	Add a date field	添加日期字段
+	Add a digital signature field	添加数字签名字段
+	Add a drop-down list	添加下拉列表
+	Add a line filled in when the stamp is placed	添加一行，在放置图章时填入
+	Add a list box	添加列表框
+	Add a page from template {name}	从模板 {name} 添加页面
+	Add a paper size of your own to the list	将自己的纸张尺寸添加到列表
+	Add a radio button	添加单选按钮
+	Add a reply	添加回复
+	Add a second engine's reading when the first is unsure	当第一个引擎没有把握时，加入第二个引擎的读取结果
+	Add a stamp	添加图章
+	Add a sticky note	添加附注
+	Add a sticky note here	在此处添加附注
+	Add a text box	添加文本框
+	Add a text field	添加文本字段
+	Add alternate text	添加替代文本
+	Add alternate text…	添加替代文本…
+	Add an Action	添加操作
+	Add an image field	添加图像字段
+	Add arrow	添加箭头
+	Add at least one recipient.	请至少添加一位收件人。
+	Add at least two files	至少添加两个文件
+	Add background	添加背景
+	Add background…	添加背景…
+	Add Bates numbering…	添加贝茨编号…
+	Add bookmark	添加书签
+	Add boundary point	添加边界点
+	Add callout	添加标注框
+	Add certificate file…	添加证书文件…
+	Add checkmark	添加勾选标记
+	Add circle	添加圆形
+	Add cloud	添加云形
+	Add comment	添加注释
+	Add comments	添加注释
+	Add connected lines	添加折线
+	Add content	添加内容
+	Add control point	添加控制点
+	Add cross	添加叉号
+	Add dot	添加圆点
+	Add drawing	添加绘图
+	Add field	添加字段
+	Add fields	添加字段
+	Add file attachment	添加文件附件
+	Add files or folders to recognize.	添加要识别的文件或文件夹。
+	Add files to combine	添加要合并的文件
+	Add files…	添加文件…
+	Add folder	添加文件夹
+	Add folder and subfolders	添加文件夹及子文件夹
+	Add folder and subfolders…	添加文件夹及子文件夹…
+	Add folder…	添加文件夹…
+	Add footer	添加页脚
+	Add form components	添加表单组件
+	Add header	添加页眉
+	Add header & footer	添加页眉和页脚
+	Add header & footer…	添加页眉和页脚…
+	Add highlight	添加高亮
+	Add image	添加图像
+	Add image…	添加图像…
+	Add inserted text	添加插入文本标记
+	Add line	添加直线
+	Add link	添加链接
+	Add open documents	添加已打开的文档
+	Add or edit links	添加或编辑链接
+	Add oval	添加椭圆
+	Add Page Numbers	添加页码
+	Add polygon	添加多边形
+	Add printer marks	添加打印机标记
+	Add printer marks…	添加打印标记…
+	Add rectangle	添加矩形
+	Add redaction mark	添加密文标记
+	Add search index	添加搜索索引
+	Add searchable text	添加可搜索文本
+	Add signature	添加签名
+	Add smaller unit	添加较小单位
+	Add squiggly underline	添加波浪下划线
+	Add stamp	添加图章
+	Add Step	添加步骤
+	Add sticky note	添加便笺
+	Add strikethrough	添加删除线
+	Add text	添加文本
+	Add text box	添加文本框
+	Add text field table	添加文本字段表格
+	Add the choices people pick from.	添加供人选择的选项。
+	Add the files to combine	添加要合并的文件
+	Add the PDFs to combine	添加要合并的 PDF
+	Add the steps this action runs, in order.	按顺序添加此操作运行的步骤。
+	Add to dictionary	添加到词典
+	Add to Trusted Certificates	添加到受信任的证书
+	Add to trusted certificates	添加到受信任的证书
+	Add underline	添加下划线
+	Add watermark	添加水印
+	Add watermark…	添加水印…
+	Add your digital ID	添加你的数字 ID
+	Added 1 comment	已添加 1 条注释
+	Added more than once	重复添加
+	Added text	已添加的文本
+	Added the first {n} files in {folder}	已添加 {folder} 中的前 {n} 个文件
+	Added the first {n} PDFs in {folder}	已添加 {folder} 中的前 {n} 个 PDF
+	Added {n} comments	已添加 {n} 条注释
+	Adding images arrives on the web with file pickers for images	Web 端添加图像将使用图像文件选择器
+	Additional Metadata	附加元数据
+	Adds invisible text over each word; the page image is not changed	在每个词上添加不可见文本；页面图像保持不变
+	Advanced optimization	高级优化
+	Advanced options	高级选项
+	Advanced Options {chevron}	高级选项 {chevron}
+	Advanced search…	高级搜索…
+	Advanced unit formats	高级单位格式
+	Advanced…	高级…
+	After Sign, enter the OTT code from the mSzafir app in CloudSigner's window and approve the signature in the app. With CloudSigner's persistent OTT code on, the code is asked for only once every few minutes.	点击“签名”后，在 CloudSigner 窗口中输入 mSzafir 应用里的 OTT 代码，并在应用中批准签名。在 CloudSigner 中开启持久 OTT 代码后，每隔几分钟才需输入一次代码。
+	AI Assistant	AI 助手
+	AI assistant	AI 助手
+	AI chat isn't available in the web build; use the desktop app or CLI.	网页版不支持 AI 聊天；请使用桌面应用或 CLI。
+	Algorithm	算法
+	Align bottom	底端对齐
+	Align middle	垂直居中
+	Align objects	对齐对象
+	Align top	顶端对齐
+	Alignment	对齐
+	All annotations are tagged	所有注释都已标记
+	All document contents	所有文档内容
+	All document contents except metadata	除元数据外的所有文档内容
+	All form fields are tagged	所有表单域都已标记
+	All form fields have description	所有表单域都有描述
+	All marks	所有标记
+	All multimedia objects are tagged	所有多媒体对象都已标记
+	All open documents	所有已打开的文档
+	All page content is tagged	所有页面内容都已标记
+	All pages asks the driver for the whole stack.	“全部页面”会向驱动程序请求整叠纸张。
+	All pages in document	文档中的所有页面
+	All pages in range	范围内的所有页面
+	All permissions	所有权限
+	All tools	所有工具
+	Allow	允许
+	Allow Rich Text Formatting	允许富文本格式
+	Allow user to enter custom text	允许用户输入自定义文本
+	Allowed	允许
+	already a PDF	已经是 PDF
+	Also	同时
+	Also recognize pages that already have text	同时识别已有文本的页面
+	Alt combinations can't be shortcuts. Try Ctrl or Shift.	Alt 组合不能作为快捷键。请尝试 Ctrl 或 Shift。
+	Alternate Text	替代文本
+	Alternate text	替代文本
+	Alternate text inside an element that already has alternate text is never read. Remove the inner alternate text.	已有替代文本的元素内部的替代文本永远不会被朗读。请删除内部替代文本。
+	Alternate text must be associated with some content	替代文本必须与某些内容关联
+	Alternate text on an element that contains a link or field hides that annotation from assistive technology. Move the alternate text.	包含链接或字段的元素上的替代文本会向辅助技术隐藏该注释。请移动替代文本。
+	Alternate text on an element without page content is never reached. Remove it or attach the element to content.	没有页面内容的元素上的替代文本永远无法到达。请删除它或将元素附加到内容。
+	Alternate text should not hide annotation	替代文本不应隐藏注释
+	Alternate text that will never be read	永远不会被朗读的替代文本
+	Always read with both engines and merge the words	始终用两个引擎读取并合并词语
+	Always use my default zoom and page layout	始终使用我的默认缩放和页面布局
+	An action is already running	已有操作正在运行
+	An action with this name already exists.	已存在同名的操作。
+	an Aruba account needs its domain (the "dominio" Aruba gives with the account): enter it	Aruba 账户需要其域（Aruba 随账户提供的“dominio”）：请输入
+	An embedded file has no AFRelationship	嵌入文件缺少 AFRelationship
+	An image asks to be interpolated	图像要求进行插值
+	An image has alternates or OPI information	图像包含替代图像或 OPI 信息
+	An open-source PDF workbench — local, private, and scriptable.	开源 PDF 工作台——本地、私密、可编写脚本。
+	and {n} more	以及另外 {n} 个
+	Angular unit	角度单位
+	Animation that flashes can cause seizures. Check scripts and media for flicker.	闪烁的动画可能导致癫痫发作。请检查脚本和媒体是否存在闪烁。
+	Annotation	注释
+	Annotations, form fill-in, and digital signatures	注释、填写表单和数字签名
+	Another file dialog is still open. Finish with it first.	另一个文件对话框仍处于打开状态。请先完成该操作。
+	Any	任何
+	Any except extracting pages	除提取页面外的任何操作
+	Anyone opening the document will need this password. It's applied when you save.	打开文档的任何人都需要此密码。保存时应用。
+	API key:	API 密钥：
+	App icon	应用图标
+	Appear behind page	显示在页面后面
+	Appear on top of page	显示在页面上层
+	Appearance mode	外观模式
+	Appearance settings…	外观设置…
+	Applied 1 redaction mark. Save to remove the content from the file.	已应用 1 个密文标记。保存以从文件中删除内容。
+	Applied immediately and saved for next time. Keep the font file in its current location.	立即生效并自动保存。请将字体文件保留在当前位置。
+	Applied {n} redaction marks. Save to remove the content from the file.	已应用 {n} 个密文标记。保存以从文件中删除内容。
+	Applies the next time CivilOps PDF starts. Choose OpenGL if the window flickers on a display with G-SYNC, FreeSync or another variable refresh rate.	下次启动 CivilOps PDF 时生效。如果窗口在支持 G-SYNC、FreeSync 或其他可变刷新率的显示器上闪烁，请选择 OpenGL。
+	Applies to 1 page	应用于 1 页
+	Applies to {n} pages	应用于 {n} 页
+	Apply PDF standards	应用 PDF 标准
+	Apply redactions	应用密文
+	Apply redactions…	应用密文…
+	Apply scale	应用比例
+	Applying a scale switches units to m / mm.	应用比例会将单位切换为 m / mm。
+	Applying also sanitizes the document: bookmarks, named destinations, attachments, document information, metadata and XFA form data are deleted, and hidden layers are locked hidden for good.	应用同时会清理文档：书签、命名目标、附件、文档信息、元数据和 XFA 表单数据将被删除，隐藏图层将被永久锁定隐藏。
+	Appropriate nesting	适当的嵌套
+	April	四月
+	Arbitrary Mask	任意掩码
+	Archive documents	存档文档
+	Area unit	面积单位
+	Area units	面积单位
+	Arrange image	排列图像
+	ArtCraft website	ArtCraft 官网
+	As declared in the PDF	按 PDF 中的声明
+	Ask	询问
+	Ask about this document	询问本文档
+	Ask Agent	询问代理
+	Ask AI about this document	就本文档询问 AI
+	Ask AI to change the formatting	让 AI 修改格式
+	Ask anything	什么都可以问
+	Ask before a document opens in Full Screen mode	文档以全屏模式打开前询问
+	Ask in any language	可以用任何语言提问
+	Ask to make CivilOps PDF the default PDF app	询问是否将 CivilOps PDF 设为默认 PDF 应用
+	Ask to scan more pages	询问是否继续扫描更多页面
+	Ask whether to recognize the current page or all pages when editing a scan.	编辑扫描文档时，询问是识别当前页还是所有页面。
+	Asking the printer…	正在查询打印机…
+	Asking {server}…	正在询问 {server}…
+	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
+	Assistant	助手
+	Associated with content	与内容关联
+	At least one signature has problems.	至少一个签名存在问题。
+	At least one signature is invalid.	至少一个签名无效。
+	At most	至多
+	At the current {ppi} ppi this line should measure {length} {unit}.	按当前的 {ppi} ppi，这条线应为 {length} {unit}。
+	Atelier	Atelier
+	Attach a file	附加文件
+	Attach a file…	附加文件…
+	Attach file	附加文件
+	Attach {name}	附加 {name}
+	Attaching files is not available on the web yet	网页版尚不支持附加文件
+	Attaching {name} to a new email message…	正在将 {name} 附加到新邮件…
+	Attachment	附件
+	Attachments	附件
+	Attachments panel	附件面板
+	Attachments Panel and Page	附件面板和页面
+	Audit space usage	审计空间使用情况
+	Audit space usage…	审计空间使用情况…
+	August	八月
+	Author title	作者职务
+	Auto follows the system's text size. Pages always render at the display's full resolution.	“自动”会跟随系统的文字大小。页面始终以显示器的完整分辨率渲染。
+	Auto portrait/landscape	自动纵向/横向
+	Auto-deskew	自动纠偏
+	Auto-detect	自动检测
+	Auto-rotate	自动旋转
+	Auto-rotate pages	自动旋转页面
+	Auto-size text to fit redaction region	自动调整文本大小以适应密文区域
+	Automatic (historical model)	自动（历史文字模型）
+	Automatic AcroForm scripts are disabled until safe execution isolation is available; saved field values were preserved. Explicit button and console scripts are still available.	在具备安全的执行隔离之前，AcroForm 的自动脚本已停用；已保存的域值保持不变。按钮脚本和控制台脚本仍可手动运行。
+	Automatically rotate sideways and upside-down pages	自动旋转侧向和倒置的页面
+	Automatically tag PDF	自动标记 PDF
+	Available version: {v}	可用版本：{v}
+	average	平均值
+	AVG CONFIDENCE	平均置信度
+	Azimuth	方位角
+	Back	返回
+	Back side only	仅背面
+	Back to all tools	返回所有工具
+	Back to measurement	返回测量
+	Back to Prepare a form	返回准备表单
+	Back to the default keys	恢复为默认按键
+	Back to the document	返回文档
+	background	背景
+	Balanced	均衡
+	Balanced and Compact reduce image quality to make a smaller file. Text and forms stay editable.	“均衡”和“紧凑”会降低图像质量以缩小文件。文本和表单仍可编辑。
+	Bates numbering	贝茨编号
+	Bed	稿台
+	Before each selected page (select pages in Organize)	在每个选定页面之前拆分（在组织页面中选择）
+	Before the number	在数字之前
+	Behind text and images	在文本和图像后方
+	Best for: a step up in quality, still light	最适合：品质再上一阶，依然轻巧
+	Best for: balanced everyday and technical work	最适合：日常与技术工作并重
+	Best for: everyday help on the lightest machines	最适合：在最轻量的机器上处理日常事务
+	Best for: near-flagship answers at MoE speed	最适合：以 MoE 速度给出接近旗舰级的回答
+	Best for: the deepest reasoning this family has	最适合：这个系列中最深入的推理
+	Between paragraphs: press Enter in the box to start one	段落之间：在框中按 Enter 开始新段落
+	Beveled	斜面
+	Bicubic downsampling to	双三次降采样至
+	Binarize	二值化
+	Binding	装订
+	Binding:	装订：
+	Black	黑色
+	Black & White Document	黑白文档
+	Black on white	白底黑字
+	Blank page	空白页
+	Bleed marks	出血标记
+	Blend with page content	与页面内容混合
+	Booklet	小册子
+	Booklet subset:	小册子子集：
+	Bookmark options	书签选项
+	Bookmarks	书签
+	Bookmarks are present in large documents	大文档中有书签
+	Bookmarks panel	书签面板
+	Bookmarks Panel and Page	书签面板和页面
+	Border Color:	边框颜色：
+	Border colour	边框颜色
+	Border opacity	边框不透明度
+	Border shape	边框形状
+	Border:	边框：
+	Borders and Colors	边框和颜色
+	Both engines, combined as the Strategy says	两个引擎，按所选策略组合
+	Bottom left	左下
+	Bottom right	右下
+	Boundary coordinates run from 0 to 1 across the viewport.	边界坐标在视口内的范围为 0 到 1。
+	Boundary point	边界点
+	Box	框
+	Bring All to Front	前置全部窗口
+	Bring forward	上移一层
+	Bring to front	置于顶层
+	Bring your own model (off by default)	自备模型（默认关闭）
+	Browser's print dialog	浏览器的打印对话框
+	Bulleted list	项目符号列表
+	Butt	平头
+	Button	按钮
+	Button is checked by default	默认选中按钮
+	Button Properties	按钮属性
+	Button Style:	按钮样式：
+	Buttons with the same name and value are selected in unison	同名同值的按钮一起选中
+	By the standard device formulas; profiles are not applied.	按标准设备公式转换;不应用配置文件。
+	Bytes	字节
+	CAdES signature (.p7m, .p7s)	CAdES 签名 (.p7m, .p7s)
+	CAdES signature envelope	CAdES 签名信封
+	Calculation order	计算顺序
+	Calibrate from two points	使用两点校准
+	Calibrate screen	校准屏幕
+	Calibrate…	校准…
+	Callout	标注
+	Can't be read: {e}	无法读取：{e}
+	Can't save as {level}; nothing was changed:	无法另存为 {level}；未做任何更改：
+	Cancel caption placement	取消标题放置
+	Cancel drawing	取消绘制
+	Cancel reverse sides	取消背面扫描
+	Canceling…	正在取消…
+	Cancelled	已取消
+	Cancelled — {n} words were read on {m} of {t} pages; the rest were not read	已取消——已读取 {t} 页中的 {m} 页共 {n} 个词，其余页面未读取
+	Cancelling…	正在取消…
+	Card driver (PKCS #11)	卡驱动程序 (PKCS #11)
+	Card PIN	卡 PIN
+	Case-sensitive	区分大小写
+	Category:	类别：
+	CCITT Group 4	CCITT 第 4 组
+	Center Footer Text	居中页脚文本
+	Center Header Text	居中页眉文本
+	Center horizontally	水平居中
+	Center vertically	垂直居中
+	Center window on screen	在屏幕上居中窗口
+	Centre	居中
+	Centre point	中心
+	Centre points	中心点
+	Certificate	证书
+	Certificate encryption will be applied when you save	证书加密将在保存时应用
+	Certificate Viewer	证书查看器
+	Certificates	证书
+	Certification signature (level {p})	认证签名（级别 {p}）
+	Certified by {by}	认证方{by}
+	Certify	认证
+	Certify (invisible signature)	认证（不可见签名）
+	Certify (visible signature)	认证（可见签名）
+	Challenge: {challenge}	质询：{challenge}
+	Change a signed document?	要更改已签名的文档吗？
+	Change additional metadata	更改附加元数据
+	Change anyway	仍要更改
+	Change colour	更改颜色
+	Change comment properties	更改注释属性
+	Change drawing scale	更改图纸比例
+	Change field properties	更改字段属性
+	Change initial view	更改初始视图
+	Change initials	更改姓名首字母
+	Change link properties	更改链接属性
+	Change reading options	更改阅读选项
+	Change reading options…	更改阅读选项…
+	Change role map	更改角色映射
+	Change settings…	更改设置…
+	Change signature	更改签名
+	Change tag properties	更改标签属性
+	Change the colour of line art as well as text	除文本外也更改线条的颜色
+	Change {key}	更改{key}
+	Change {what}	更改{what}
+	Changes allowed	允许的更改
+	Changes here apply to all {n} selected comments	此处的更改将应用于所有 {n} 条选中的注释
+	Changing the document	更改文档
+	Character encoding	字符编码
+	Character limit 0 means no limit. A comb of characters needs a limit.	字符数限制为 0 表示无限制。分格字符必须设置字符数限制。
+	Character limit:	字符数限制：
+	Character spacing	字符间距
+	characters	个字符
+	Characters without spaces	不含空白的字符数
+	Check	勾选
+	Check Again	重新检查
+	Check again	重新检查
+	Check box is checked by default	默认选中复选框
+	Check Box Properties	复选框属性
+	Check Box Style:	复选框样式：
+	Check for accessibility	无障碍检查
+	Check for accessibility…	无障碍检查…
+	Check for updates…	检查更新…
+	Check spelling	检查拼写
+	Check spelling while typing	输入时检查拼写
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Continue.	请检查进纸器中是否有纸张，或等待扫描仪完成，然后选择“继续扫描”。
+	Check that the feeder has paper, or wait for the scanner to finish, then choose Try again.	请检查进纸器中是否有纸张，或等待扫描仪完成，然后选择“重试”。
+	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	检查标记的阅读顺序是否与明眼读者一致。使用阅读顺序工具或标记面板进行更正。
+	Check the pages	请检查页码
+	Check the pages of {name}: {why}	请检查 {name} 的页码：{why}
+	Check the scanner is on and connected, then choose Continue.	请检查扫描仪已开机并已连接，然后选择“继续扫描”。
+	Check the scanner is on and connected, then choose Try again.	请检查扫描仪已开机并已连接，然后选择“重试”。
+	CheckBox	复选框
+	Checkbox	复选框
+	Checked	已勾选
+	Checked when applied: 1 region found clear of the removed text. Text that exists only as pixels of an image is not searched.	应用时已检查：1 个区域中未发现已删除的文本。仅以图像像素形式存在的文本不会被搜索。
+	Checked when applied: {n} regions found clear of the removed text. Text that exists only as pixels of an image is not searched.	应用时已检查：{n} 个区域中未发现已删除的文本。仅以图像像素形式存在的文本不会被搜索。
+	Checked {objects} objects against the Arlington PDF Model for PDF {version}.	已按 PDF {version} 的 Arlington PDF Model 检查了 {objects} 个对象。
+	Checking form detection…	正在检查表单检测…
+	Checking Hungarian OCR installation…	正在检查匈牙利语 OCR 的安装…
+	Checking Options ({on} of 32 in all categories)	检查选项（所有类别共 32 项，已选 {on} 项）
+	Checking pages…	正在检查页面…
+	Checking the scanner…	正在检查扫描仪…
+	Checking the structure… {n} objects so far	正在检查结构… 已检查 {n} 个对象
+	Checkmark	对勾
+	Chinese (Simplified) and English	简体中文和英语
+	Choose a control point inside the viewport.	请选择视口内的控制点。
+	Choose a digital ID file	选择数字 ID 文件
+	Choose a folder for the exported files	选择导出文件的文件夹
+	Choose a folder for the extracted pages	选择提取页面的文件夹
+	Choose a folder for the results	选择结果文件夹
+	Choose a folder for the searchable files	选择可搜索文件的文件夹
+	Choose a folder for the split files	选择拆分文件的文件夹
+	Choose a folder on this computer to pin	请选择此电脑上要固定的文件夹
+	Choose a layout:	选择布局：
+	Choose a logo	选择徽标
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	选择 PNG 或 JPEG 图像（最大 4 MiB）。透明度会保留。
+	Choose a point, then the two endpoints of a reference line.	先选择一个点，再选择参考线的两个端点。
+	Choose a provider.	请选择提供商。
+	Choose a signature that can be removed.	请选择一个可以移除的签名。
+	Choose a stamp, then click on the page to place it.	选择图章，然后单击页面放置。
+	Choose a tool to start measuring.	选择工具开始测量。
+	Choose a visible point on the model.	请选择模型上的可见点。
+	Choose advanced unit formats first.	请先设置高级单位格式。
+	Choose an endpoint, the angle vertex, then the other endpoint.	依次选择端点、角的顶点、另一个端点。
+	Choose an image	选择图像
+	Choose another file: the original is kept as it is, and the version without the signature is saved next to it.	请选择其他文件：原始文件保持不变，不含该签名的版本会保存在它旁边。
+	Choose font…	选择字体…
+	Choose ICC profile…	选择 ICC 配置文件…
+	Choose images	选择图像
+	Choose image…	选择图像…
+	Choose individual tools	逐个选择工具
+	Choose new keys for {command}	为 {command} 选择新按键
+	Choose paper by PDF page size	按 PDF 页面大小选择纸张
+	Choose CivilOps PDF for .pdf files in Windows Settings.	请在 Windows 设置中为 .pdf 文件选择 CivilOps PDF。
+	Choose photo…	选择照片…
+	Choose raw file…	选择原始文件…
+	Choose reference…	选择参考文件…
+	Choose the digital ID that you want to use for signing:	选择要用于签名的数字 ID：
+	Choose the module's library file.	请选择模块的库文件。
+	Choose the signature to remove:	选择要移除的签名：
+	Choose the two endpoints.	选择两个端点。
+	Choose three points on the circle.	选择圆周上的三个点。
+	Choose where to save the signed file. The service signs it once you have.	请选择签名文件的保存位置。选好后，服务才会签名。
+	Clean Up	清理
+	Clean-up	清理
+	Clear all	全部清除
+	Clear form	清除表单
+	Clear personal dictionary	清空个人词典
+	Clear points	清除点
+	Clear Recent Files	清除最近的文件
+	Clear redaction marks	清除密文标记
+	Clear region	清除区域
+	Clear search	清除搜索
+	Clear selection / close find	清除选择/关闭查找
+	Clear the jam and load the remaining sheets squarely, then choose Continue.	请清除卡纸，并将剩余纸张摆放整齐后装入，然后选择“继续扫描”。
+	Clear the jam and load the sheets squarely, then choose Try again.	请清除卡纸，并将纸张摆放整齐后装入，然后选择“重试”。
+	Click a word to inspect it; drag a rectangle to re-read part of the page	点击词语可检查；拖出矩形可重新识别页面的一部分
+	Click each vertex. Enter finishes the perimeter.	依次点击各顶点，按 Enter 完成周长测量。
+	Click on the page to add a {tool}, or drag to set its size	单击页面添加{tool}，或拖动设置其大小
+	Click on the page to add text; each click starts a new box, and ✓ finishes. Drag items to move them, drag a corner to resize, double-click text to edit it.	单击页面添加文本；每次单击开始一个新文本框，✓ 完成。拖动项目以移动，拖动角落以调整大小，双击文本进行编辑。
+	Click text or an image to edit it	单击文本或图像进行编辑
+	Click the boundary. Enter or the first point closes the area.	点击边界，按 Enter 或点击起点闭合区域。
+	Click the control point on the map.	请单击地图上的控制点。
+	Click the ends of a known reference length.	点击已知长度参照线的两端。
+	Click the first point to begin.	单击起点以开始。
+	Click the preview to place the caption on its measurement plane.	点击预览，在测量平面上放置标题。
+	Click to sort, drag to move the column. Drag its edge to resize it.	单击以排序，拖动以移动列。拖动列边缘可调整宽度。
+	Click two points to measure a distance.	点击两点以测量距离。
+	Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area.	单击顶点。按 Enter 或双击以完成周长或面积测量。单击起点以闭合区域。
+	Click where the copied comments go; Escape lets them go	点击复制的注释要放置的位置；按 Escape 放弃
+	Clockwise 90 degrees	顺时针 90 度
+	Close all	关闭全部
+	Close comment pop-up	关闭注释弹出窗口
+	Close file	关闭文件
+	Close Other Tabs	关闭其他标签页
+	Close other tabs	关闭其他标签页
+	Close panel	关闭面板
+	Close Tab	关闭标签页
+	Close Tabs to the Right	关闭右侧标签页
+	Close tabs to the right	关闭右侧标签页
+	Close the feeder cover and check the paper, then choose Continue.	请合上进纸器盖板并检查纸张，然后选择“继续扫描”。
+	Close the feeder cover and check the paper, then choose Try again.	请合上进纸器盖板并检查纸张，然后选择“重试”。
+	Close Window	关闭窗口
+	Close window	关闭窗口
+	Closed arrow	闭合箭头
+	Cloud	云形
+	CloudSigner (mSzafir) is found by itself when it is installed: start it and log in before signing.	如果已安装 CloudSigner (mSzafir)，会被自动找到：签名前请启动它并登录。
+	CMYK	CMYK
+	Code sent	验证码已发送
+	Collapse all	全部折叠
+	Collapse all bookmarks	折叠所有书签
+	Collapse all pages	折叠所有页面
+	Collapse all tools	折叠所有工具
+	Collapse tag	折叠标签
+	Collapse {folder}	折叠 {folder}
+	Color	彩色
+	Color contrast	颜色对比度
+	Color Document	彩色文档
+	Color document	彩色文档
+	Color Images	彩色图像
+	Color Photo	彩色照片
+	Color Spaces	颜色空间
+	Colour bars	色条
+	Colours are remapped while rendering; the document itself never changes.	颜色仅在渲染时替换；文档本身不会改变。
+	Column select	列选择
+	Column spacing	列间距
+	Column widths	列宽
+	Column {n}	第 {n} 列
+	Comb of	梳状（每格一字符），共
+	Comb of characters	字符梳
+	Combine files	合并文件
+	Combine files in CivilOps PDF…	在 CivilOps PDF 中合并文件…
+	Combine files…	合并文件…
+	Combine the rest	合并其余文件
+	Combined {n} files	已合并{n}个文件
+	Combo	下拉列表
+	Coming in milestone	计划推出的里程碑
+	Coming in milestone {m}. Items marked Ready work today.	{m} 里程碑推出。标记为就绪的项目现已可用。
+	Coming soon	即将推出
+	Comment	Comment
+	Comment and form data	注释和表单数据
+	Comment list	注释列表
+	Commenting	注释
+	Commenting, filling in form fields, and signing existing signature fields	注释、填写表单域并签署现有签名字段
+	Comments & Forms	注释和表单
+	Comments & Markup	注释与标记
+	Comments and form fields	注释和表单字段
+	Comments and markups	注释和标记
+	Comments only	仅注释
+	Comments panel	注释面板
+	Comments to send	要发送的批注
+	Comments, links and fields must be in the tag tree to be announced. Tag the annotations.	注释、链接和字段必须位于标记树中才能被播报。请标记注释。
+	Comments: {n}	注释：{n}
+	Commit selected value immediately	立即提交所选值
+	Common Properties	常规属性
+	Common scales	常用比例
+	Compact	紧凑
+	Compact Home (tools and recent files only)	精简主页（仅工具和最近的文件）
+	Compare Files	比较文件
+	Compare files	比较文件
+	Compare files…	比较文件…
+	Compare panel	比较面板
+	Compare this file with an older version: Compare files… in All tools.	将此文件与旧版本比较：在所有工具中使用“比较文件…”。
+	Complete	完成
+	Completed	已完成
+	Compress a PDF	压缩 PDF
+	Compress and export	压缩与导出
+	Compress document structure (object streams)	压缩文档结构（对象流）
+	Compressing combined PDF…	正在压缩合并后的 PDF…
+	CONFIDENCE	置信度
+	Confidence weighted	按置信度加权
+	Configure a Digital ID for Signing	配置用于签名的数字 ID
+	Configure New Digital ID	配置新数字 ID
+	Confirm Password	确认密码
+	Conformance level:	一致性级别：
+	Connected by USB.	已通过 USB 连接。
+	Connected lines	连接线
+	Connected over the network (Web Services). Options come from that driver, not the USB one.	通过网络（Web 服务）连接。选项来自该驱动，而非 USB 驱动。
+	Console	控制台
+	Content copying	内容复制
+	Content copying for accessibility	为无障碍复制内容
+	Content Streams	内容流
+	Continue scanning	继续扫描
+	Continue scanning fronts	继续扫描正面
+	Continue scanning reverse sides	继续扫描背面
+	Continuous scrolling	连续滚动
+	Control point	控制点
+	Control points	控制点
+	Conversion factor	换算系数
+	Convert colors	转换颜色
+	Convert colours	转换颜色
+	Convert colours…	转换颜色…
+	Convert mode	转换模式
+	Convert to	转换为
+	Convert to PDF and email…	转换为 PDF 并通过电子邮件发送…
+	Convert to PDF with CivilOps PDF	使用 CivilOps PDF 转换为 PDF
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	已从 EPUB 图书转换。详细信息说明了排版方式以及省略的内容。
+	Converted to {level} ({n} changes)	已转换为 {level}（{n} 处更改）
+	Converted {c} colours and {i} pictures on {p} pages	已在 {p} 页上转换 {c} 种颜色和 {i} 张图片
+	Converted {name}. Approximated: {notes}	已转换{name}。近似处理：{notes}
+	Converting {name}…	正在转换 {name}…
+	Converts PDF user coordinates to easting, northing and elevation.	将 PDF 用户坐标转换为东坐标、北坐标和高程。
+	Copied {what}	已复制{what}
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	份数、双面打印和颜色在浏览器的打印对话框中选择。
+	Copies, two-sided printing, colour and the printer are chosen in the system print dialog, which opens when you print.	份数、双面打印、颜色和打印机在打印时打开的系统打印对话框中选择。
+	Copy a text box or an image first	请先复制一个文本框或图像
+	Copy comment	复制注释
+	Copy comments	复制注释
+	Copy comments first	请先复制注释
+	Copy Image	复制图像
+	Copy Image in Original Format	以原始格式复制图像
+	Copy or cut pages first	请先复制或剪切页面
+	Copy page numbers	复制页码
+	Copy pages	复制页面
+	Copy path	复制路径
+	Copy selected text	复制所选文本
+	Copy text	复制文本
+	Copy the pages with a match as a list such as 1-3, 7	将有匹配项的页面复制为列表，例如 1-3, 7
+	Copyright info URL	版权信息 URL
+	Copyright notice	版权声明
+	Copyright status	版权状态
+	Copyrighted	受版权保护
+	Correct recognized text	更正识别文本
+	Correct recognized text…	更正识别文本…
+	Correct scans	校正扫描件
+	corrected	已更正
+	Corrected scan	已校正的扫描件
+	Corrected text (Enter commits)	更正后的文本（按 Enter 提交）
+	Could not copy the selection because text could not be read on every page	无法复制选区，因为无法读取所有页面上的文本
+	Could not mark the selection because text could not be read on every page	无法标记选区，因为无法读取所有页面上的文本
+	Could not save: {e}	无法保存：{e}
+	Couldn't add {name}: {e}	无法添加{name}：{e}
+	Couldn't attach the file	无法附加文件
+	Couldn't be read: {reason}	Couldn't be read: {reason}
+	Couldn't combine files: {e}	无法合并文件：{e}
+	Couldn't copy the image: {e}	无法复制图像：{e}
+	Couldn't create a PDF: {e}	无法创建 PDF：{e}
+	Couldn't download the text recognition models: {e}	无法下载文本识别模型：{e}
+	Couldn't download {name}: {e}	无法下载{name}：{e}
+	Couldn't encrypt: {e}	无法加密：{e}
+	Couldn't extract pages: {e}	无法提取页面：{e}
+	Couldn't extract the original PDF: {e}	无法提取原始 PDF：{e}
+	Couldn't fit the visible content: {e}	无法适应可见内容：{e}
+	Couldn't follow linked PDF: {reason}	无法打开链接的 PDF：{reason}
+	Couldn't import the signature image: {e}	无法导入签名图像：{e}
+	Couldn't open revision {n}: {e}	无法打开修订版本{n}：{e}
+	Couldn't open the email draft: {e}	无法打开电子邮件草稿：{e}
+	Couldn't open the printer's preferences: {e}	无法打开打印机首选项：{e}
+	Couldn't open the result: {e}	无法打开结果：{e}
+	Couldn't open the signed version: {e}	无法打开已签名版本：{e}
+	Couldn't open Windows default app settings: {error}	无法打开 Windows 默认应用设置：{error}
+	Couldn't optimize the file	无法优化文件
+	Couldn't optimize the file: {e}	无法优化文件：{e}
+	Couldn't prepare the email draft: {e}	无法准备电子邮件草稿：{e}
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	无法从浏览器打印（{e}）；已改为下载 {name} 以便打印
+	Couldn't reach the printer	无法连接到打印机
+	Couldn't read the ICC profile {name}: {e}	无法读取 ICC 配置文件 {name}：{e}
+	Couldn't read {name}: {e}	无法读取{name}：{e}
+	Couldn't recover {name}: {e}	无法恢复{name}：{e}
+	Couldn't reload {name}: {e}	无法重新加载{name}：{e}
+	Couldn't rename {name}: {e}	无法重命名 {name}：{e}
+	Couldn't save the image: {e}	无法保存图像：{e}
+	Couldn't save {name}: {e}	无法保存{name}：{e}
+	Couldn't save: {e}	无法保存：{e}
+	Couldn't send the form: {error}	无法提交表单：{error}
+	Couldn't split: {e}	无法拆分：{e}
+	Couldn't start scanning	无法开始扫描
+	Couldn't summarize comments: {e}	无法汇总注释：{e}
+	Couldn't take the snapshot: {e}	无法拍摄快照：{e}
+	Couldn't unlock {name}: {e}	无法解锁 {name}：{e}
+	Couldn't use the photo: {e}	无法使用该照片：{e}
+	Couldn't use {name}: {e}	无法使用{name}：{e}
+	Couldn't write {name}: {e}	无法写入{name}：{e}
+	Couldn't write {path}: {e}	无法写入{path}：{e}
+	Counterclockwise 90 degrees	逆时针 90 度
+	Counting words… {n} pages read	正在统计字词… 已读取{n}页
+	Country/Region	国家/地区
+	Courier can't draw “{c}” ({code}) in other PDF viewers. Choose Helvetica or Times.	Courier 在其他 PDF 阅读器中无法显示“{c}”（{code}）。请选择 Helvetica 或 Times。
+	Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1.	Craft AI 在这台机器上运行本地 Gemma 模型。你在这里写的任何内容都不会离开这台机器：没有账户、没有云端服务、没有遥测 — 面板只与 127.0.0.1 上的模型运行环境通信。
+	Craft AI runs in the native app — it needs a local model runtime.	Craft AI 在原生应用中运行 — 需要本地模型运行环境。
+	Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh.	Craft AI 只与这台机器上的模型运行环境通信 — Ollama、LM Studio 或 llama.cpp 的服务器 — 绝不与云端服务通信。启动其中一个后点击“刷新”。
+	Create & Edit	创建和编辑
+	Create a new Digital ID (self-signed, saved to a password-protected file)	创建新数字 ID（自签名，保存到受密码保护的文件）
+	Create a PDF	创建 PDF
+	Create accessibility report	创建无障碍报告
+	Create Custom Stamp	创建自定义图章
+	Create custom stamp…	创建自定义图章…
+	Create from	创建来源
+	Create Link	创建链接
+	Create link	创建链接
+	Create links from URLs	从 URL 创建链接
+	Create Link…	创建链接…
+	Create PDF	创建 PDF
+	Create PDF Comment Summary	创建 PDF 注释摘要
+	Create PDF comment summary…	创建 PDF 注释摘要…
+	Create PDF from clipboard	从剪贴板创建 PDF
+	Create PDF from file…	从文件创建 PDF…
+	Create PDF from images	从图像创建 PDF
+	Create PDF from images…	从图像创建 PDF…
+	Create PDF from multiple files…	从多个文件创建 PDF…
+	Create PDF from Scanner	从扫描仪创建 PDF
+	Create PDF from scanner…	从扫描仪创建 PDF…
+	Create separate PDFs…	创建单独的 PDF…
+	Create {what}	创建{what}
+	Created 1 link	已创建 1 个链接
+	Created a comment summary	已创建注释摘要
+	Created a PDF from the first {n} files	已从前 {n} 个文件创建 PDF
+	Created a PDF from {n} files	已从 {n} 个文件创建 PDF
+	Created a PDF from {n} files; left out: {names}	已从 {n} 个文件创建 PDF；已忽略：{names}
+	Created Scan.pdf	已创建 Scan.pdf
+	Created {n} links	已创建{n}个链接
+	Created {n} scanned files	已创建 {n} 个扫描文件
+	Creates 1 file from {n} pages.	从 {n} 页创建 1 个文件。
+	Creates {f} files from {n} pages.	从 {n} 页创建 {f} 个文件。
+	Credit Cards	信用卡
+	Crop (% trimmed from each side)	裁剪（从每条边修剪的百分比）
+	Crop Image	裁剪图像
+	Crop page	裁剪页面
+	Crop pages	裁剪页面
+	Crop scanner borders to the paper edge	将扫描边框裁剪至纸张边缘
+key	Ctrl	Ctrl
+	Currency symbol:	货币符号：
+	Current document	当前文档
+	Current page ({n})	当前页（第 {n} 页）
+	Current page only	仅当前页
+	Current page — type a page number or label (such as iv) and press Enter	当前页 — 输入页码或标签（如 iv）后按 Enter
+	Cursor coordinates	光标坐标
+	Custom font	自定义字体
+	Custom page…	自定义页面…
+	Custom role	自定义角色
+	Custom scale:	自定义比例：
+	Custom selection	自定义选择
+	Custom size	自定义尺寸
+	Custom stamps arrive on the web with file pickers for images	Web 端自定义图章将使用图像文件选择器
+	Custom text:	自定义文本：
+	Custom theme	自定义主题
+	Custom:	自定义：
+	Customize & Automate	自定义和自动化
+	Custom…	自定义…
+	Cut and stack	裁切后堆叠
+	Cut Image	剪切图像
+	Cut marks	裁剪标记
+	Cut pages	剪切页面
+	Cut {what}	已剪切{what}
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	将每页裁切到其打印区域，转正后不拉伸地适合纸张。每张纸一个标签。
+	Dark gray theme	深灰色主题
+	Dark ink	深色墨迹
+	Dark page	深色页面
+	Dark page colours	深色页面配色
+	Dark PDF pages	深色 PDF 页面
+	Dark theme	深色主题
+	Date field	日期字段
+	Date: 	日期：
+	Datum accuracy	基准精度
+	Deactivate Read Out Loud	停用大声朗读
+	December	十二月
+	Decimal	小数
+	Decimal places:	小数位数：
+	Decimal separator	小数分隔符
+	Decimals	小数位数
+	Declared conformance: {shown}	声明的一致性：{shown}
+	Decorative figure	装饰性图形
+	Default (p11-kit, then OpenSC)	默认(先 p11-kit,再 OpenSC)
+	Default page display	默认页面显示
+	Default paper size	默认纸张大小
+	Default Value:	默认值：
+	Default view	默认视图
+	Default workspace mode	默认工作区模式
+	Default zoom	默认缩放
+	Default:	默认值：
+	Degrees	度
+key	Delete	Delete
+	Delete attachment	删除附件
+	Delete attachment {key}	删除附件 {key}
+	Delete bookmark	删除书签
+	Delete bookmarks	删除书签
+	Delete comment	删除注释
+	Delete comments	删除注释
+	Delete content	删除内容
+	Delete document JavaScript	删除文档 JavaScript
+	Delete field	删除字段
+	Delete file	删除文件
+	Delete image	删除图像
+	Delete link	删除链接
+	Delete measurement	删除测量
+	Delete object	删除对象
+	Delete objects	删除多个对象
+	Delete page	删除页面
+	Delete page {label}	删除页面 {label}
+	Delete pages	删除页面
+	Delete pages (Delete)	删除页面 (Delete)
+	Delete pages after extracting	提取后删除页面
+	Delete selected fields	删除所选字段
+	Delete selected pages (Organize)	删除选定页面（组织页面）
+	Delete Settings	删除设置
+	Delete stamp	删除图章
+	Delete tag	删除标签
+	Delete the selected pages	删除所选页面
+	Delete the selection	删除所选内容
+	Delete XMP metadata	删除 XMP 元数据
+@plural	Delete {n} bookmark|Delete {n} bookmarks	删除 {n} 个书签
+	Delete {o}	删除 {o}
+	Deleted page	删除的页
+	Denoise	降噪
+	Denominator	分母
+	Describe the figure	描述该图形
+	Description writer	描述撰写者
+	Deskew	纠偏
+	Deskew pages	纠正页面倾斜
+	Detached signature file	分离式签名文件
+	Details	详情
+	Detect form fields	检测表单域
+	Detected 1 form field	检测到 1 个表单域
+	Detected {n} form fields	检测到 {n} 个表单域
+	Device colour is used, but there is no PDF/A output intent	使用了设备颜色，但未设置 PDF/A 输出意图
+	Device library (PKCS #11)	设备库 (PKCS #11)
+	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	使用了 DeviceCMYK：需要设置 CMYK 输出意图（不会自动添加）
+	Diagnostic details	诊断详情
+	Digital ID	数字 ID
+	Digital ID password	数字 ID 密码
+	Digital ID required	需要数字 ID
+	Digital signature	数字签名
+	Digital Signature Properties	数字签名属性
+	Digitally sign	数字签名
+	Digitally signed by	数字签名者
+	Disabled	已禁用
+	Discard all comments, forms and multimedia	丢弃所有注释、表单和多媒体
+	Discard all form submission, import and reset actions	丢弃所有表单提交、导入和重置操作
+	Discard all links, actions and JavaScript	丢弃所有链接、动作和 JavaScript
+	Discard all object data (file attachments)	丢弃所有对象数据（文件附件）
+	Discard alternate images	丢弃备用图像
+	Discard bookmarks	丢弃书签
+	Discard document information and metadata	丢弃文档信息和元数据
+	Discard document tags	丢弃文档标记
+	Discard embedded page thumbnails	丢弃嵌入的页面缩略图
+	Discard embedded print settings	丢弃嵌入的打印设置
+	Discard hidden layer content	丢弃隐藏图层内容
+	Discard hidden text	丢弃隐藏文本
+	Discard Objects	丢弃对象
+	Discard private data of other applications	丢弃其他应用程序的私有数据
+	Discard this text (Esc)	放弃此文本 (Esc)
+	Discard User Data	丢弃用户数据
+	Disk {size}	磁盘 {size}
+	Display theme	显示主题
+	Distance unit	距离单位
+	Distance units	距离单位
+	Distinguished name	可分辨名称
+	Distribute evenly	平均分布
+	Distribute horizontally	水平分布
+	Distribute objects	分布对象
+	Distribute vertically	垂直分布
+	DN: 	DN：
+	Do not ask again	不再询问
+	Document actions	文档操作
+	Document and markups	文档和标记
+	Document and stamps	文档和图章
+	Document assembly	文档组装
+	Document feeder	文档进纸器
+	Document feeder (both sides)	文档进纸器（双面）
+	Document has appropriate color contrast	文档颜色对比度合适
+	Document is not image-only PDF	文档不是纯图像 PDF
+	Document is tagged PDF	文档是标记的 PDF
+	Document JavaScripts	文档 JavaScript
+	Document JavaScripts…	文档 JavaScript…
+	Document language	文档语言
+	Document Overhead	文档开销
+	Document Properties	文档属性
+	Document properties ({key})	文档属性 ({key})
+	Document properties…	文档属性…
+	Document sanitized. Save to finish: saving rewrites the whole file.	文档已清理。保存以完成：保存将重写整个文件。
+	Document scrollbar width	文档滚动条宽度
+	Document structure provides a logical reading order	文档结构提供逻辑阅读顺序
+	Document timestamp	文档时间戳
+	Document title is showing in title bar	标题栏中显示文档标题
+	Documents and view	文档与视图
+	Documents of more than 20 pages need bookmarks for navigation. Add bookmarks for the main sections.	超过 20 页的文档需要书签以便导航。请为主要章节添加书签。
+	Does not match what was signed	与所签内容不一致
+	Domain	域
+	Don't ask again	不再询问
+	Don't save	不保存
+	Don't show again	不再显示
+	Done adding text	完成添加文本
+	Double-click also finishes a perimeter or area.	双击也可完成周长或面积测量。
+	Download 121 MB to find text fields, checkboxes and signature areas automatically.	下载 121 MB 即可自动查找文本字段、复选框和签名区域。
+	Download and detect	下载并检测
+	Download historical OCR add-on (13 MB)	下载历史文字 OCR 附加组件（13 MB）
+	Download package…	下载软件包…
+	Download size: {size}	下载大小：{size}
+	Download with Ollama	用 Ollama 下载
+	Downloaded {name}	已下载{name}
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	已下载 {n} 个 PDF
+	Downloading attachments on the web arrives with M3.10 ({n} bytes ready)	Web 端附件下载将于 M3.10 到来（{n} 字节已就绪）
+	Downloading form detection…	正在下载表单检测…
+	Downloading the text recognition models…	正在下载文本识别模型…
+	Downloading… {pct}% — {note}	下载中… {pct}% — {note}
+	Downloads open in your browser. Installation is manual; nothing is installed automatically.	下载会在浏览器中打开。安装需手动进行；不会自动安装任何内容。
+	Downsample to	降采样至
+	DPI sets the printed page size without resampling the image.	DPI 用于设置打印页面尺寸，不会对图像重新采样。
+	Drag a field to move it, or select it and press {up} or {down}.	拖动字段以移动它，或选中它后按 {up} 或 {down}。
+	Drag a point to reshape the line. Delete removes it.	拖动点可改变线条形状。按 Delete 键删除。
+	Drag a rectangle around the area to copy	拖动框选要复制的区域
+	Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes	拖动页面上的矩形进行裁剪；双击页面可设置页面框
+	Drag a rectangle to create a link; double-click a link to edit it	拖动矩形创建链接；双击链接进行编辑
+	Drag on the preview to choose a region. An empty selection scans the whole area.	在预览上拖选区域。空选则扫描整页。
+	Drag the corners onto the document's edges, then choose Enhance page.	将四个角拖到文档边缘，然后选择“增强页面”。
+	Drag the selection to move it. Esc clears the selection.	拖动选区即可移动。按 Esc 清除选择。
+	Drag to draw the area where the signature should appear.	拖动绘制签名应显示的区域。
+	Drag to move	拖动以移动
+	Drag to move; double-click to put it back	拖动以移动；双击以放回原处
+	Drag to orbit. Right or middle drag pans. Scroll zooms. Click the model to measure.	拖动旋转，右键或中键拖动平移，滚动缩放。点击模型进行测量。
+	Drag to reorder	拖动以重新排序
+	Drag to rotate · Shift: 15° steps · Tab while dragging: quarter turns	拖动以旋转 · Shift：以 15° 为步长 · 拖动时按 Tab：每次 90°
+	Drag to rotate. Hold Shift for 15° steps; Esc cancels.	拖动以旋转。按住 Shift 以 15° 为步长；按 Esc 取消。
+	Draw a cloud	画云形
+	Draw a line	画直线
+	Draw a polygon	画多边形
+	Draw a rectangle	画矩形
+	Draw a rectangle on the page or click content, then choose its tag.	在页面上绘制矩形或单击内容，然后选择其标签。
+	Draw an arrow	画箭头
+	Draw an oval	画椭圆
+	Draw connected lines	画连接线
+	Draw freehand	徒手画
+	Draw your {what} below.	请在下方绘制您的{what}。
+	Drawing	绘图
+	Drawing scale	图面比例
+	Drawing scale changes. Use Actual size for full-scale plans.	图纸比例发生变化。按原比例打印图纸时请使用实际大小。
+	Driver default	驱动默认
+	Drop PDFs or folders here, or choose them.	将 PDF 或文件夹拖放到此处，或选择它们。
+	Drop PDFs, images, text files or folders here, or choose them.	将 PDF、图像、文本文件或文件夹拖放到此处，或选择它们。
+	Drop-down list	下拉列表
+	Dropdown Properties	下拉列表属性
+	Duplex	双面
+	Duplex is not offered.	不提供双面。
+	Duplicate "{name}" onto:	将“{name}”复制到：
+	Duplicate Field	复制字段
+	Duplicate field	复制字段
+	Duplicate page	复制页面
+	Duplicate pages	重复页面
+	Duplicate pages with new field names	以新的字段名称重复页面
+	Duplicate pages — 1 field renamed	重复页面 — 已重命名 1 个字段
+	Duplicate pages — fields renamed	重复页面 — 已重命名字段
+	Duplicate Tab	复制标签页
+	Duplicate…	重复…
+	Dynamic XFA form laid out from its template: {pages}, {fields}.	动态 XFA 表单已按模板排版：{pages}，{fields}。
+	Dynamic zoom	动态缩放
+	E-Sign	电子签名
+	e.g. 192.168.1.20	例如 192.168.1.20
+	e.g. bigger headings, numbered pages	例如更大的标题、页码
+	e.g. en-US	例如 en-US
+	e.g. My stamps	例如：我的图章
+	Each field needs a tooltip that says what to enter. Add one in Field Properties > General > Tooltip.	每个字段都需要说明输入内容的提示。在“字段属性”>“常规”>“提示”中添加。
+	Each file holds as many of the {n} pages as fit.	每个文件容纳 {n} 页中尽量多的页面。
+	Each image is measured where pages draw it; an image is replaced only if the result is smaller.	按页面绘制位置测量每个图像；仅在结果更小时替换图像。
+	Each image once, named after the document and page. JPEG images are saved unchanged; others as PNG.	每个图像一次，以文档和页面命名。JPEG 图像原样保存，其他为 PNG。
+	Each page as it looks, its text kept searchable. For documents whose layout matters.	每页保持原样，文本仍可搜索。适合版式重要的文档。
+	Each page on its own sheet, named Page 1, Page 2…	每页单独一个工作表，名为 Page 1、Page 2…
+	Each page prints on the standard sheet it matches (A4, US Letter, …); pages of another size print on the paper above. Only with Size.	每一页打印在与其匹配的标准纸张上（A4、US Letter 等）；其他大小的页面打印在上方所选纸张上。仅在“大小”模式下有效。
+	Earlier in calculation order	在计算顺序中前移
+	Earlier in tab order	在 Tab 顺序中前移
+	earlier saves are still waiting for the website	之前的保存仍在等待网站响应
+	Easting	东坐标
+	Edge snapping	吸附边
+	Edit a PDF	编辑 PDF
+	Edit Action	编辑操作
+	Edit comment	编辑注释
+	Edit Content	编辑内容
+	Edit content	编辑内容
+	Edit document JavaScript	编辑文档 JavaScript
+	Edit fields	编辑字段
+	Edit image	编辑图像
+	Edit measurement	编辑测量
+	Edit measurement viewport	编辑测量视口
+	Edit mode	编辑模式
+	Edit script of {name}	编辑 {name} 的脚本
+	Edit text	编辑文本
+	Edit text & images	编辑文本和图像
+	Edit text…	编辑文本…
+	Edit this PDF	编辑此 PDF
+	Edit {field}'s formula	编辑 {field} 的公式
+	Editable text	可编辑文本
+	Editorial	Editorial
+	Email Address	电子邮件地址
+	Email Addresses	电子邮件地址
+	Email draft saved to {path}	电子邮件草稿已保存到 {path}
+	Embedded Files	嵌入文件
+	Embedded files must be PDF/A files themselves (use PDF/A-3 for others)	嵌入文件本身必须符合 PDF/A 标准（其他类型的文件请使用 PDF/A-3）
+	Enable Acrobat JavaScript	启用 Acrobat JavaScript
+	Enable copying of text, images, and other content	允许复制文本、图像和其他内容
+	Enable snapping	启用吸附
+	Enable text access for screen reader devices for the visually impaired	允许屏幕阅读器设备访问文本以帮助视障人士
+	Enabled	已启用
+	Encrypt	加密
+	Encrypt for recipient	为收件人加密
+	Encrypt for recipients	为收件人加密
+	Encrypt with Certificate	使用证书加密
+	Encrypt with certificate	使用证书加密
+	Encrypt with certificate…	使用证书加密…
+	Encryption	加密
+key	End	End
+	Endpoints	端点
+	ENGINE · STRATEGY	引擎 · 策略
+	English	英语
+	Enhance camera image	增强相机图像
+	Enhance page	增强页面
+	Enhance scanned file	增强扫描文件
+	Enter a scale such as 1:50.	请输入比例，例如 1:50。
+	Enter Full Screen	进入全屏幕
+	Enter known map coordinates for at least three page positions.	请输入至少三个页面位置的已知地图坐标。
+	Enter page numbers or ranges, such as 1, 3-5. Leave blank for all pages.	输入页码或范围，例如 1, 3-5。留空表示所有页面。
+	Enter permissions password…	输入权限密码…
+	Enter the device's PIN.	请输入设备的 PIN。
+	Enter the password that opens it	输入打开该文件的密码
+	Enter the permissions password to allow combining	输入权限密码以允许合并
+	Entire page	整个页面
+	Entire PDF document to send: {bytes} bytes	要发送的完整 PDF 文档：{bytes} 字节
+	EPSG code	EPSG 代码
+	EPUB book (.epub)	EPUB 图书 (.epub)
+	Erase drawings	擦除绘图
+	Errors	错误
+key	Esc	Esc
+	Estimated size: about {size}	预计大小：约 {size}
+	Estimating size…	正在估算大小…
+	Even and Odd Pages	奇偶页
+	Even pages	偶数页
+	Even Pages Only	仅偶数页
+	Every field calculates after the fields it reads.	每个字段都在它读取的字段之后计算。
+	Every field outside a loop calculates after the fields it reads.	循环之外的每个字段都在它读取的字段之后计算。
+	Every PDF in the folder	文件夹中的所有 PDF
+	Every PDF in the folder and the folders inside it	文件夹及其子文件夹中的所有 PDF
+	Every PDF, image and text file in the folder	文件夹中的所有 PDF、图像和文本文件
+	Every PDF, image and text file in the folder and the folders inside it	文件夹及其子文件夹中的所有 PDF、图像和文本文件
+	Everything on a page must be tagged or marked as an artifact (decoration, headers, footers). Tag the untagged content.	页面上的所有内容都必须标记或标为 artifact（装饰、页眉、页脚）。请标记未标记的内容。
+	Exclude image/OCR text	排除图像/OCR文本
+	Exclude images smaller than	排除小于以下尺寸的图像
+	Exclude tagged code blocks	排除带标签的代码块
+	Exclude tagged tables	排除带标签的表格
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	排除规则使用PDF标签。无标签的表格和代码仍计入统计。排除图像时也会排除不可见文本。
+	Execute a menu item	执行菜单项
+	Executive	Executive
+	Expand	展开
+	Expand all	全部展开
+	Expand all bookmarks	展开所有书签
+	Expand all pages	展开所有页面
+	Expand all tools	展开所有工具
+	Expand tag	展开标签
+	Expand top-level bookmarks	展开顶层书签
+	Expand {folder}	展开 {folder}
+	Expires {date}	到期 {date}
+	Explain	解释
+	Explorer selection exceeds the {size} MiB memory limit.	资源管理器中的所选文件超出 {size} MiB 内存限制。
+	Explorer selection is limited to {count} files.	资源管理器中最多可选择 {count} 个文件。
+	Export & Convert	导出与转换
+	Export a PDF	导出 PDF
+	Export all comments to data file…	将所有注释导出到数据文件…
+	Export All Images	导出所有图像
+	Export all images	导出所有图像
+	Export all images…	导出所有图像…
+	Export all to data file…	全部导出到数据文件…
+	Export certificate	导出证书
+	Export certificate…	导出证书…
+	Export comments	导出注释
+	Export data	导出数据
+	Export form data	导出表单数据
+	Export form data…	导出表单数据…
+	Export measurements	导出测量结果
+	Export measurements as CSV	将测量结果导出为 CSV
+	Export stopped: {e}	导出中止：{e}
+	Export this PDF	导出此 PDF
+	Export to EPUB	导出为 EPUB
+	Export to EPUB…	导出为 EPUB…
+	Export to Excel	导出为 Excel
+	Export to Excel…	导出为 Excel…
+	Export to HTML…	导出为 HTML…
+	Export to Image	导出为图像
+	Export to image…	导出为图像…
+	Export to Markdown…	导出为 Markdown…
+	Export to PostScript…	导出为 PostScript…
+	Export to PowerPoint…	导出为 PowerPoint…
+	Export to RTF…	导出为 RTF…
+	Export to Text	导出为文本
+	Export to text…	导出为文本…
+	Export to Word…	导出为 Word…
+	Export value	导出值
+	Export Value: {on}	导出值：{on}
+	Export XMP metadata	导出 XMP 元数据
+	Exported 1 image	已导出 1 张图像
+	Exported the text of 1 page	已导出 1 页的文本
+	Exported the text of {n} pages	已导出{n}页的文本
+	Exported to {path}	已导出到{path}
+	Exported {name}	已导出 {name}
+	Exported {n} images	已导出{n}张图像
+	Exporting… {d} of {t}	正在导出…第{d}个，共{t}个
+	Extended Graphics States	扩展图形状态
+	Extension length (points)	延长线长度（点）
+	Extract pages	提取页面
+	Extract pages as separate files	将页面提取为单独文件
+	Extract pages to a new document	将页面提取到新文档
+	Extract pages…	提取页面…
+	Extract the original PDF…	提取原始 PDF…
+	Extract the selected pages…	提取所选页面…
+	Extracted 1 page	已提取 1 页
+	Extracted {n} pages	已提取{n}页
+	F8: next word to review; Shift+F8 goes back	F8：下一个待校对词；Shift+F8 上一个
+	Failed	未通过
+scroll speed	Fast	快
+	Fast Web View	快速 Web 查看
+	February	二月
+	Feeder	进纸器
+	Feet	英尺
+	Feet and inches	英尺和英寸
+	Feet and inches uses ft as the scale unit.	英尺和英寸格式使用 ft 作为比例单位。
+	Field descriptions	字段描述
+	Field is used for file selection	字段用于文件选择
+	Field list	字段列表
+	Field names	字段名称
+	Field names (comma-separated)	字段名（逗号分隔）
+	field names can't contain a period: {name}	字段名称不能包含句点：{name}
+	Field names with + - * / and parentheses; put \\ before spaces in names.	字段名支持 + - * / 和括号；名称中的空格前加 \\。
+	Field properties…	字段属性…
+	Field value is in range:	字段值在范围内：
+	Field value is not validated	不验证字段值
+	Field: {field}	字段：{field}
+	Field: {field} on page {p}	字段：{field}，第 {p} 页
+	Fields to reset (comma-separated; empty: all)	要重置的字段（逗号分隔；为空表示全部）
+	Figure {i} of {n}{page}	图形 {i}/{n}{page}
+	Figures alternate text	图形替代文本
+	Figures require alternate text	图形需要替代文本
+	File (.p12, .pfx)	文件 (.p12, .pfx)
+	File attachments	文件附件
+	File name	文件名
+	File size	文件大小
+@id	file.word_count	字词统计…
+	Files are combined from top to bottom. Leave Pages empty to take every page.	文件按从上到下的顺序合并。页码留空表示取全部页面。
+	Files are combined in the order shown. Drag them to change it.	文件按显示的顺序合并。拖动可更改顺序。
+	Files for {name}	{name} 的文件
+	Files you open in CivilOps PDF appear here. Drop a PDF anywhere to open it.	在 CivilOps PDF 中打开的文件会显示在这里。将 PDF 拖放到任意位置即可打开。
+	Fill	填写
+	Fill & Sign	填写与签名
+	Fill & Sign dates	填写与签名的日期
+	Fill & sign mode	填写并签名模式
+	Fill & Sign signature	填写与签名中的签名
+	Fill & Sign: add another saved signature	填写与签名：再添加一个已保存的签名
+	Fill & Sign: add other saved initials	填写与签名：再添加一组已保存的姓名首字母
+	Fill & Sign: add text	填写与签名：添加文本
+	Fill & Sign: change initials	填写与签名：更改姓名首字母
+	Fill & Sign: change signature	填写与签名：更改签名
+	Fill & Sign: checkmark	填写与签名：对勾
+	Fill & Sign: circle	填写与签名：圆形
+	Fill & Sign: cross	填写与签名：叉号
+	Fill & Sign: date	填写与签名：日期
+	Fill & Sign: dot	填写与签名：圆点
+	Fill & Sign: initials	填写与签名：姓名首字母
+	Fill & Sign: line	填写与签名：直线
+	Fill & Sign: remove saved initials	填写与签名：移除已保存的姓名首字母
+	Fill & Sign: remove saved signature	填写与签名：移除已保存的签名
+	Fill & Sign: sign	填写与签名：签名
+	Fill Color:	填充颜色：
+	Fill colour	填充颜色
+	Fill colour:	填充颜色:
+	Fill colour: none	填充颜色：无
+	Fill in {name}	填写 {name}
+	Fill opacity	填充不透明度
+	Filling in form fields and signing existing signature fields	填写表单域并签署现有签名字段
+	Filling of form fields	填写表单域
+	Filter comments	筛选注释
+	Find a command	查找命令
+	Find a tag	查找标签
+	Find certificates	查找证书
+	Find form fields	查找表单字段
+	Find options	查找选项
+	Find text	查找文本
+	Find text and redact	查找文本并密文
+	Find text and redact…	查找文本并密文…
+	Find text in the toolbar	在工具栏中查找文本
+	Find text or tools	查找文本或工具
+	Find tools and commands	查找工具和命令
+	Find tools and commands…	查找工具和命令…
+	Find untagged content	查找未标记的内容
+	Finding document fonts…	正在查找文档字体…
+	Finding fields… page {d} of {t}	正在查找字段…第 {d} 页，共 {t} 页
+	Finish measurement	完成测量
+	Finish or discard the text being edited before selecting several objects.	请先完成或放弃正在编辑的文本，再选择多个对象。
+	Finished measurements appear here and are saved in the PDF.	完成的测量显示在此处，并保存在 PDF 中。
+	First / last page	首页/末页
+	First page	第一页
+	First row number	起始行号
+	Fit Height	适合高度
+	Fit model	适合模型
+	Fit one full page	单页完整显示
+	Fit Page	适合页面
+	Fit to height	适合高度
+	Fit to page	适合页面
+	Fit to width	适合宽度
+	Fit to width scrolling	适合宽度连续滚动
+	Fit Visible	适合可见区域
+	Fit visible	适合可见区域
+	Fit Width	适合宽度
+	Fits this machine	适合这台机器
+	Fix	修复
+	Fix hairlines	修复细线
+	Fix hairlines…	修复细线…
+	Fix order	修正顺序
+	Fix reading order	修复阅读顺序
+	Fixed layout	固定版式
+	Fixed what could be fixed; 1 problem remains	已修复能修复的问题；还剩 1 个问题
+	Fixed what could be fixed; {n} problems remain	已修复能修复的问题；还剩{n}个问题
+	Fixed {n} hairlines on {p} pages	已修复 {p} 页上的 {n} 条细线
+	Flatbed	平板
+	Flatpak manages this installation. Check for updates in your system software manager or with flatpak update.	此安装由 Flatpak 管理。请在系统软件管理器中检查更新，或运行 flatpak update。
+	Flatten comments	拼合注释
+	Flatten comments and form fields	拼合注释和表单域
+	Flatten Fill & Sign when saving	保存时拼合填写与签名
+	Flatten form fields	拼合表单域
+	Flip horizontal	水平翻转
+	Flip image	翻转图像
+	Flip on long edge	沿长边翻转
+	Flip on short edge	沿短边翻转
+	Flip text up	翻转文字朝上方向
+	Flip vertical	垂直翻转
+	Float panel	浮动面板
+	Folder	Folder
+	Folders	文件夹
+	Font colour:	字体颜色：
+	Font file	字体文件
+	Font size 0 uses automatic sizing.	字号为 0 时自动调整大小。
+	Font size:	字号：
+	Font: Helvetica	字体：Helvetica
+	Fonts must map their characters to Unicode so text can be read and copied. Fix the fonts or recreate the PDF.	字体必须将其字符映射到 Unicode，以便读取和复制文本。请修复字体或重新生成 PDF。
+	for images above	（高于此分辨率的图像）
+	For page sizes and margins.	用于页面尺寸和边距。
+	Force OCR (override skip options)	强制 OCR（覆盖跳过选项）
+	Form data and PDF forms	表单数据和 PDF 表单
+	Form field advice	表单字段建议
+	Form field detection is already running	表单字段检测已在运行
+	Form fields	表单域
+	Form fields are flattened: their values stay visible. Saving rewrites the whole file.	表单域将被拼合：其值保持可见。保存将重写整个文件。
+	Form fields must be in the tag tree (Form tags) to be announced. Tag the form fields.	表单域必须位于标记树（表单标记）中才能被播报。请标记表单域。
+	Form fields only	仅表单域
+	Form fields panel	表单域面板
+	Form fill-in and digital signatures	填写表单和数字签名
+	Form sent to {url} (HTTP {status}).	表单已发送至 {url}（HTTP {status}）。
+	Form submission is not available in the browser.	浏览器中无法提交表单。
+	Form values to send: {count}	要发送的表单值：{count} 个
+	Format Studio	格式工作室
+	Format Studio…	格式工作室…
+	Format text	设置文本格式
+	Forms	表单
+	Forms & Signatures	表单和签名
+	Forms and signing	表单与签名
+	Formulas and similar non-text elements need alternate text. Add alternate text to them.	公式及类似非文本元素需要替代文本。请为它们添加替代文本。
+	Found {n} untagged content problems.	发现 {n} 个未标记内容问题。
+	Fraction	分数
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur 和 Kurrent 使用可选的 13 MB 附加组件。下载后即可离线识别。
+	From a PDF page or an image	来自 PDF 页面或图像
+	From colour	使用颜色
+	From Finder: select files, then right-click > Quick Actions > Combine files in CivilOps PDF. Not listed? Turn it on once under Quick Actions > Customize.	在访达中：选择文件，然后右键点按 > 快速操作 > “Combine files in CivilOps PDF”。没有列出？请在“快速操作 > 自定”中开启一次。
+	From scanner…	从扫描仪…
+	From template	从模板创建
+	From {file}	来自 {file}
+	From:	从：
+	Front side only	仅正面
+	front(s)	正面
+	Fronts scanned: {n}. Flip the sheet on the bed, then choose Scan reverse sides.	已扫描正面：{n}。请翻转玻璃板上的纸张，然后选择“扫描背面”。
+	Fronts scanned: {n}. Flip the stack so the last sheet is on top, reload it, then choose Scan reverse sides.	已扫描正面：{n}。请翻转整叠纸张，使最后一张在最上面，重新装入，然后选择“扫描背面”。
+	Full area	整页
+	Full screen mode	全屏模式
+	Full screen mode ({key}); Esc leaves it	全屏模式 ({key}); Esc
+	Future placements use this size. Existing signatures are unchanged.	今后放置时将使用此尺寸。现有签名不会更改。
+	Generate styled PDF	生成样式 PDF
+	Geographic	地理坐标
+	Geospatial location	地理空间位置
+	Geospatial map	地理空间地图
+	Get help, share feedback and follow development on Discord.	在 Discord 上获取帮助、分享反馈并关注开发动态。
+	Go	前往
+	Go to a page view	转到页面视图
+	Go to page {p}	转到第 {p} 页
+	Go to page…	转到页面…
+	Go to the page	转到该页面
+	Go to this result	转到此结果
+	Grab bag	名称列表
+	Grads	百分度
+	Grayscale Document	灰度文档
+	Grayscale Images	灰度图像
+	Green on black	黑底绿字
+	Greyscale	灰度
+	Group select	框选组
+	Hand (H)	抓手 (H)
+	Hand Tool	手形工具
+	Hand tool	手形工具
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	手写内容必须为方向正确的水平行，且只有一列文字。不支持多列、表格和页边注释。
+	Has JavaScript actions (run in M6)	含 JavaScript 动作（M6 运行）
+	Header and footer	页眉和页脚
+	Header cells (TH) tell listeners what each column or row holds. Mark the header cells.	表头单元格（TH）告诉听者每列或每行包含的内容。请标记表头单元格。
+	header or footer	页眉或页脚
+	Headers	表头
+	Heading levels shouldn't skip (an H1 followed by an H3). Retag the headings.	标题级别不应跳跃（H1 后面不应直接跟 H3）。请重新标记标题。
+	Hebrew (ISO 8859-8)	希伯来语 (ISO 8859-8)
+	Hebrew (Windows-1255)	希伯来语 (Windows-1255)
+	Hectares	公顷
+	Held by the printer	已被打印机保留
+	Heritage	Heritage
+	Hidden layers	隐藏图层
+	Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts.	隐藏的工具仍可通过菜单、模式标签页和键盘快捷键使用。
+	Hide a field	隐藏字段
+	Hide all comments	隐藏所有注释
+	Hide controls	隐藏控件
+	Hide field highlights	隐藏字段高亮
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	隐藏间距以连接页面边缘。PDF 内的页边距保持不变。
+	Hide hover previews for highlights without comment text	隐藏无评论文字的高亮的悬停预览
+	Hide layer	隐藏图层
+	Hide menu bar	隐藏菜单栏
+	Hide password	隐藏密码
+	Hide CivilOps PDF	隐藏 CivilOps PDF
+	Hide template {name}	隐藏模板 {name}
+	Hide toolbars	隐藏工具栏
+	Hide window controls	隐藏窗口控件
+	Hide {app}	隐藏 {app}
+	Hides annotation	隐藏注释
+	HIGH (>= 90%)	高（≥ 90%）
+	Higher image quality trades off against smaller file size. A copy is saved only if it is smaller.	更高的图像质量意味着更大的文件。仅在文件变小时保存副本。
+	Higher quality, usually larger files. JPEG photos above 450 ppi are reduced to 300 ppi, quality 85. Lossless graphics and masked images keep their pixels.	质量更高，文件通常更大。超过 450 ppi 的 JPEG 照片缩小到 300 ppi，质量为 85。无损图形和带蒙版的图像保留原有像素。
+	Highlight	突出显示
+	Highlight content	突出显示内容
+	Highlight coverage above	突出显示覆盖率高于
+	Highlight fields	高亮显示字段
+	Highlight Style:	高亮样式：
+	Highlight text	突出显示文本
+	Historical handwriting (Kurrent)	历史手写体（Kurrent）
+	Historical OCR add-on installed	历史文字 OCR 附加组件已安装
+	Historical OCR add-ons require the desktop app.	历史文字 OCR 附加组件需要桌面应用。
+	Historical print (Fraktur)	历史印刷体（Fraktur）
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	保留历史拼写。手写内容、缩写和复杂版式需要检查。
+key	Home	Home
+	Horizontal coordinates	横向坐标
+	Horizontal reversed	水平反转
+	Horizontally	水平分布
+	How Edit text reads old fonts that don't say which letters they draw. Auto-detect recognises Hebrew fonts laid out for ISO 8859-8 or Windows-1255.	“编辑文本”如何读取未说明所绘字母的旧字体。自动检测可识别按 ISO 8859-8 或 Windows-1255 排列的希伯来语字体。
+	HTML web page	HTML 网页
+	Hungarian OCR requires the desktop app with Tesseract 5 and the hun language model. Restart CivilOps PDF after installation.	匈牙利语 OCR 需要桌面应用、Tesseract 5 和 hun 语言模型。安装后请重启 CivilOps PDF。
+	I confirm sending this document to this printer	我确认将此文档发送到这台打印机
+	I understand that the redacted content is removed for good	我了解被密文标记的内容将被永久删除
+	ICC profile: {name}	ICC 配置文件：{name}
+	Identity	身份
+	Image (PNG)	图像 (PNG)
+	Image field	图像字段
+	Image pasted	已粘贴图像
+	Image-only PDF	纯图像 PDF
+	Images and text	图像和文本
+	Images and text (converted to PDF)	图像和文本（转换为 PDF）
+	Images on dark pages	深色页面上的图片
+	Import comments…	导入注释…
+	Import data	导入数据
+	Import form data…	导入表单数据…
+	Import list…	导入列表…
+	Import {name}	导入 {name}
+	Importing data arrives on the web with file pickers for data files	Web 端导入数据将使用数据文件选择器
+	In multiple files	多个文件
+	In multiple files: a file with any text is its own skipped bucket, and nothing is written for it	用于多文件：已含文本的文件单独计入跳过，不为其写入任何内容
+	In new window	在新窗口中打开
+	In streams that use LZW encoding, use Flate instead	在使用 LZW 编码的流中改用 Flate
+	In tab order	按标签页顺序
+	In this file	当前文件
+	Include revocation information when signing (LTV)	签名时包含吊销信息 (LTV)
+	Include subfolders	包含子文件夹
+	Includes unsaved changes	包含未保存的更改
+	Incompatible	不兼容
+	Incorrect password. Try again.	密码不正确，请重试。
+	Indent	缩进
+	Information	信息
+	Initial View	初始视图
+	Initials	姓名首字母
+	initials	姓名首字母
+	Initials {n}	姓名首字母 {n}
+	Ink	墨迹
+	Ink sensitivity	墨迹灵敏度
+	Inks	油墨
+	Insert a blank page after the selection	在所选内容后插入空白页
+	Insert a file at the end	在末尾插入文件
+	Insert a file before page {label}	在第 {label} 页之前插入文件
+	Insert a Greek letter or symbol	插入希腊字母或符号
+	Insert blank page	插入空白页
+	Insert Date	插入日期
+	Insert Page Number	插入页码
+	Insert pages	插入页面
+	Insert pages from a file after the selection…	在所选内容后插入文件中的页面…
+	Insert pages from a file…	从文件插入页面…
+	Insert pages from file…	从文件插入页面…
+	Insert pages from {name}	从 {name} 插入页面
+	Insert pages from {name} — 1 field renamed	从 {name} 插入页面 — 已重命名 1 个字段
+	Insert pages from {name} — fields renamed	从 {name} 插入页面 — 已重命名字段
+	Insert scanned pages	插入扫描页
+	Insert text	插入文本
+	Insert the USB token or smart card, then refresh to list its digital IDs.	插入 USB 令牌或智能卡，然后刷新以列出其数字身份证。
+	Inserted	插入
+	Inserted page	插入的页
+	Inserted scanned pages	已插入扫描页
+	Inserting, deleting, and rotating pages	插入、删除和旋转页面
+	Inset	嵌入
+	Inspector	检查器
+	Install a plugin	安装插件
+	Install a plugin…	安装插件…
+	Installation type is unknown or this is a development build. Choose a package on the official release page.	安装类型未知，或这是开发版本。请在官方发布页面选择软件包。
+	Installed fonts…	已安装字体…
+	Installed version: {v}	已安装版本：{v}
+	Instruction	指令
+	Integrity	完整性
+	Intended usage	预期用途
+	Intent	用途
+	Interface and appearance	界面和外观
+	Interface font	界面字体
+	Interface size	界面大小
+	Intersections	交点
+	Invalid page range	页码范围无效
+	Invert	反转
+	Invert colors	反转颜色
+	Invert everything	全部反转
+	Invert tones	反转色调
+	Inverted page background	反转页面背景
+	Inverted text	反转文本
+	Invisible Rectangle	不可见矩形
+	Irregular tables confuse cell navigation. Give every row the same number of cells (counting spans).	不规则表格会干扰单元格导航。请让每行具有相同数量的单元格（计入跨度）。
+	is available	可用
+	is not available yet	暂不可用
+	Issued by	颁发者
+	Issued by: 	颁发者：
+	Issued to	颁发给
+	Issuer	颁发者
+	It is certified with no changes allowed: any change invalidates the certification.	它已认证且不允许任何更改：任何更改都会使认证失效。
+	It is certified: filling in forms and signing are allowed; other changes invalidate the certification.	它已认证：允许填写表单和签名；其他更改会使认证失效。
+	It is certified: filling in forms, signing and commenting are allowed; other changes invalidate the certification.	它已认证：允许填写表单、签名和添加注释；其他更改会使认证失效。
+	it was still in the document afterwards, so the change was undone	移除后它仍在文档中，因此已撤销此更改
+	Item List	项目列表
+	Item:	项目：
+	Items marked Ready work today.	标记为就绪的项目现已可用。
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	其脚本还会读取运行时才拼出名称的字段，因此无法检查这些读取。
+	Its security settings don't allow copying pages	其安全设置不允许复制页面
+	January	一月
+	JavaScript	JavaScript
+	JavaScript Console	JavaScript 控制台
+	JavaScript console…	JavaScript 控制台…
+	JavaScript is turned off (Preferences ▸ JavaScript).	JavaScript 已关闭（首选项 → JavaScript）。
+	JavaScript is turned off (Preferences → JavaScript).	JavaScript 已关闭（首选项 → JavaScript）。
+	JavaScript is turned off by your administrator.	JavaScript 已被管理员关闭。
+	JavaScript, e.g. getField("total").value	JavaScript，例如 getField("total").value
+	JBIG2 (lossless)	JBIG2（无损）
+	Join the ArtCraft community	加入 ArtCraft 社区
+	July	七月
+	June	六月
+	Keep	保留
+	Keep all images	保留所有图片
+	Keep an empty signature field to sign again	保留一个空白签名字段以便重新签名
+	Keep editable	保持可编辑
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	仅将签名的外观保留为页面内容（其中显示的姓名或日期仍可见）
+	Keep opaque images	保留不透明图片
+	Keep source fonts	保留原始字体
+	Keep the Windows title bar above the tab strip. Turned off, the tab strip is the title bar, with the window buttons at its right; Snap Layouts on the maximize button need the Windows title bar.	将 Windows 标题栏保留在标签栏上方。关闭后，标签栏即为标题栏，窗口按钮位于其右侧；最大化按钮上的贴靠布局（Snap Layouts）需要 Windows 标题栏。
+	Keep tool selected	保持工具选中
+	Keep tool selected: on	保持工具选中：开
+	Keep trailing zeros or denominator	保留末尾零或分母
+	Key Algorithm	密钥算法
+	Key usage	密钥用途
+	Keyboard shortcuts	键盘快捷键
+	Keychain  ·  	钥匙串 · 
+	Keys of the document view	文档视图的按键
+	Kilometres	千米
+	Labels: {preview}. Later pages keep their labels.	标签：{preview}。后续页面保留其标签。
+	Lamp	灯
+	Lamp on	开灯
+	Landscape and Portrait Pages	横向和纵向页面
+	Landscape Pages	横向页面
+	Landscape pages	横向页面
+	Language and spelling	语言和拼写
+	Large scan	大图扫描
+	Larger drawing tools. Use two fingers to move or zoom; use Hand to move with one finger.	更大的绘图工具。使用双指移动或缩放；使用抓手工具进行单指移动。
+	Larger pages	放大页面
+	Larger text	放大文字
+	Larger than 512 MiB	Larger than 512 MiB
+	Larger thumbnails	放大缩略图
+	Last page	最后一页
+	Later in calculation order	在计算顺序中后移
+	Later in tab order	在 Tab 顺序中后移
+	Latin (accented)	拉丁字母（含变音符号）
+	Latitude	纬度
+	Layer options	图层选项
+	Layers panel	图层面板
+	Layers Panel and Page	图层和页面
+	Layout	版式
+	Layout and Magnification	布局和缩放
+	Lbl and LBody	Lbl 和 LBody
+	Lbl and LBody must be children of LI	Lbl 和 LBody 必须是 LI 的子级
+	Leave out files that can't be read?	要排除无法读取的文件吗？
+	Left Edge	左边缘
+	Left Footer Text	左页脚文本
+	Left Header Text	左页眉文本
+	Left out: {names}	已略过：{names}
+	Left-to-right text	从左向右文字
+	Legacy text encoding	旧版文本编码
+	Less	收起
+	less than a minute left	剩余不到 1 分钟
+	LI must be a child of L	LI 必须是 L 的子级
+	Light blue	浅蓝色
+	Light ink	浅色墨迹
+	Light theme	浅色主题
+	Like macOS (fuller strokes, sub-pixel placement)	与 macOS 相同（笔画更饱满，亚像素定位）
+	Limit of	限制为
+	Limits	局限
+	Line colour	线条颜色
+	Line delta	净增行数
+	Line ending	线条端点
+	Line opacity	线条不透明度
+	Line Style:	线条样式：
+	Line thickness	线条粗细
+	Line Thickness:	线条粗细：
+	Line weight	线条粗细
+	Line weights	线宽
+	Lines	线条
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	绘制在 Type 3 字形和平铺图案内部的线；默认关闭。
+	Link Action	链接动作
+	Link Appearance	链接外观
+	Link Properties	链接属性
+	Link Type:	链接类型：
+	Link URL	链接 URL
+	Links on page	页面上的关联
+	Links, actions and JavaScripts	链接、动作和 JavaScript
+	List box	列表框
+	List Box Properties	列表框属性
+	List items	列表项
+	List items belong in a list. Fix the list's tags.	列表项应位于列表内。请修复列表标记。
+	List labels and bodies belong in a list item. Fix the list's tags.	列表标签和正文应位于列表项内。请修复列表标记。
+	List PKCS #11 token (smart card, HSM) signing identities	列出 PKCS #11 令牌(智能卡、HSM)上的签名身份
+	Listing scanners…	正在列出扫描仪…
+	Listing the folder…	Listing the folder…
+	Lists	列表
+	Load document font	加载文档字体
+	Load font…	加载字体…
+	Load more sheets, then choose Continue; or choose Finish to keep what was scanned.	请装入更多纸张后选择“继续扫描”，或选择“完成”以保留已扫描的内容。
+	Load sheets in the feeder, then choose Try again.	请将纸张装入进纸器，然后选择“重试”。
+	Load to edit	Load to edit
+	Loading {name}…	Loading {name}…
+	Local and private	本地且私有
+	Local cross-PDF links require the desktop app	PDF 之间的本地链接需要桌面应用
+	Location: 	位置：
+	Lock and save	锁定并保存
+	Lock comment	锁定注释
+	Lock into the page when saving	保存时锁定到页面
+	Lock now	立即锁定
+	Lock your signature into the page?	将签名锁定到页面中？
+	Logical Reading Order	逻辑阅读顺序
+	Logo	徽标
+	Logo and name	徽标和名称
+	Longitude	经度
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Continue.	请查看扫描仪是否显示消息，或是否有门或盖板未关好，并排除问题，然后选择“继续扫描”。
+	Look at the scanner for a message or an open door or cover, fix what it shows, then choose Try again.	请查看扫描仪是否显示消息，或是否有门或盖板未关好，并排除问题，然后选择“重试”。
+	Looking for a local model runtime…	正在寻找本地模型运行环境…
+	Looking for certificates…	正在查找证书…
+	Looking for PDFs…	正在查找 PDF…
+	Looking for printers…	正在查找打印机…
+	Loop	循环
+	LOW (< 70%)	低（< 70%）
+	Low resolution	低分辨率
+	Low Resolution (150 dpi)	低分辨率（150 dpi）
+	LOW-CONFIDENCE WORDS	低置信度词语
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Magnification	缩放
+	Make accessible	设为无障碍
+	Make Current Properties Default	将当前属性设为默认
+	Make default paper size	设为默认纸张大小
+	Make CivilOps PDF your default PDF app?	将 CivilOps PDF 设为默认 PDF 应用？
+	Make Properties Default	将属性设为默认
+	Make properties default	将属性设为默认
+	Make scans searchable, then make them smaller.	使扫描件可搜索，然后将其变小。
+	Make searchable (recognize text)	生成可搜索的 PDF（识别文字）
+	Manage embedded index	管理嵌入式索引
+	Manage levels	管理层级
+	Manage plugins…	管理插件…
+	Manual duplex needs one reverse side for each front.	手动双面要求每一张正面都有一张背面。
+	Map accuracy	地图精度
+	Map boundary	地图边界
+	Map coordinate system	地图坐标系
+	Map coordinates	地图坐标
+	Map registration needs control points.	地图配准需要控制点。
+	Maps to standard role	映射到标准角色
+	March	三月
+	Margins (in)	边距（英寸）
+	Mark all	全部标记
+	Mark as artifact	标记为工件
+	Mark as comments	标记为注释
+	Mark as Confidential	标为机密
+	Mark content as artifact	将内容标记为工件
+	Mark everything in this tag as an artifact and remove the tag from reading order	将此标签中的所有内容标记为工件，并从阅读顺序中移除该标签
+	Mark figure as decorative	将图形标记为装饰性内容
+	Mark Page Range	标记页面范围
+	Mark this page as reviewed (Ctrl+T)	将此页标记为已校对（Ctrl+T）
+	Mark with checkmark	添加勾选标记
+	Marked	已标记
+	Marks	标记
+	Marks do not remove content. Select Redact all, then save.	标记不会删除内容。请选择“全部密文”，然后保存。
+	Markup	标记
+	Markup text	标注文字
+	Marquee Zoom	选框缩放
+	Marquee zoom	选框缩放
+	Mask:	掩码：
+	Match page at 100%	匹配页面并设为 100%
+	Matches what was signed	与所签内容一致
+	Matches: {matches}. Files with matches: {files}. PDFs read to the end: {searched} of {found}.	Matches: {matches}. Files with matches: {files}. PDFs read to the end: {searched} of {found}.
+	maximum	最大值
+	May	五月
+	Measure	测量
+	Measure 3D	测量3D
+	Measure 3D model	测量3D模型
+	Measure area	测量面积
+	Measure distance	测量距离
+	Measure objects	测量对象
+	Measure one of the lines below with a ruler, from one end mark to the other, and type its length beside it. The longest line you can measure is the most accurate; measuring several averages them.	用尺子测量下面任意一条线，从一端的标记量到另一端，并在旁边输入长度。能测量的线越长越准确；测量多条时取平均值。
+	Measure perimeter	测量周长
+	Measured length	测得的长度
+	Measured on a sample of the pages at this resolution and format; the files may differ.	根据此分辨率和格式对部分页面抽样估算；实际文件可能有所不同。
+	Measurement error	测量错误
+	Measurement information	测量信息
+	Measurement snapping	测量吸附
+	Measuring tool	测量工具
+	MEDIUM (70-89%)	中（70-89%）
+	Menu	菜单
+	Merge all windows	合并所有窗口
+	Merge data files into spreadsheet…	将数据文件合并到电子表格…
+	Merge image fragments	合并图像碎片
+	Merged 1 file into {path}	已将 1 个文件合并到{path}
+	Merged {n} files into {path}	已将{n}个文件合并到{path}
+	Merging data files needs the desktop app	合并数据文件需要桌面端应用
+	Metres	米
+	Microsoft Word (.docx)	Microsoft Word（.docx）
+	Middle	中心
+	Midpoints	中点
+	Miles	英里
+	Minimum	最低
+	minimum	最小值
+	Mirror the page	镜像页面
+	Missing field	缺少字段
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Mixed	混合
+	Model:	模型：
+	Modern print	现代印刷体
+	Modified	修改时间
+	Modify page	修改页面
+	Module (.dylib, .so, .dll)	模块（.dylib、.so、.dll）
+	Monochrome Images	单色图像
+	More	更多
+	More options	更多选项
+	More options:	更多选项：
+	More ways to add files	更多添加文件的方式
+	Most recently used first	最近使用的优先
+	Mouse Down	鼠标按下
+	Mouse Enter	鼠标进入
+	Mouse Exit	鼠标离开
+	Mouse Up	鼠标松开
+	Mouse wheel scroll speed	鼠标滚轮滚动速度
+	Move bookmark	移动书签
+	Move comment	移动注释
+	Move comment pop-up	移动注释弹出窗口
+	Move comments	移动注释
+	Move down	下移
+	Move earlier	前移
+	Move image	移动图像
+	Move into previous tag	移入上一个标签
+	Move later	后移
+	Move object	移动对象
+	Move objects	移动多个对象
+	Move only what must move, so every field calculates after the fields it reads.	只移动必须移动的字段，使每个字段都在它读取的字段之后计算。
+	Move out of parent tag	移出父标签
+	Move page	移动页面
+	Move pages	移动页面
+	Move Tab Left	将标签页左移
+	Move Tab Right	将标签页右移
+	Move Tab to New Window	将标签页移至新窗口
+	Move tab to new window	将标签页移到新窗口
+	Move Tab to This Window	将标签页移到此窗口
+	Move tag earlier	将标签前移
+	Move tag later	将标签后移
+	Move the format bar	移动格式栏
+	Move to group	移到组中
+	Move to new window	移到新窗口
+	Move to window	移到窗口
+	Move unit down	下移单位
+	Move unit up	上移单位
+	Move up	上移
+	Moved page	移动的页
+	Moves only what must move	只移动必须移动的
+	Multi-line	多行
+	Multiple	多页
+	Multiple files	多个文件
+	Multiple selection	多选
+	Multiple words or phrases	多个单词或短语
+	Multiplies the background with the page: white areas show it and text stays dark.	将背景与页面正片叠底：白色区域显示背景，文字保持深色。
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 表示行号，{col} 表示列号，{seq} 表示单元格序号。如果都没有，行号加在末尾。
+	Name a text watermark to save it	为文本水印命名以保存它
+	Name on new comments	新注释的作者姓名
+	Named Destinations	命名目标
+	Narrower than	细于
+	Native tabs (as in Finder on macOS and File Explorer on Windows)	原生标签页（如 macOS 的访达和 Windows 的文件资源管理器）
+	Nautical miles	海里
+	Navigation links	导航链接
+	Navigation links are not repetitive	导航链接不重复
+	Navigation tab	导航选项卡
+	Needs a module such as OpenSC or p11-kit installed. The token's own PIN pad is used when it has one.	需要安装 OpenSC 或 p11-kit 等模块。如果令牌自带 PIN 键盘,将使用该键盘。
+	needs an AI provider (off by default)	需要 AI 服务商（默认关闭）
+	Needs manual check	需人工检查
+	Needs {disk} GB of disk	需要 {disk} GB 磁盘
+	Needs {ram} GB of RAM	需要 {ram} GB 内存
+	Negative number style:	负数样式：
+	Nested alternate text	嵌套替代文本
+	Network	网络
+	Network address	网络地址
+	Network printer (WS-Print)	网络打印机 (WS-Print)
+	New Action	新建操作
+	New Action…	新建操作…
+	New blank PDF	新建空白 PDF
+	New bookmark	新建书签
+	New bookmark ({key})	新建书签 ({key})
+	New bookmarks from structure	从结构新建书签
+	New fields of this type will look like this one	此类型的新字段将采用此外观
+	New file only	仅新文件
+	New file:	新文件：
+	New file: {name}	新文件：{name}
+	New tag	新建标签
+	New viewport	新建视口
+	New width	新宽度
+	New window	新建窗口
+	New {tool} comments will look like this one	新的{tool}注释将采用此外观
+	Next	下一页
+	Next ({key})	下一个 ({key})
+	Next / previous match	下一个/上一个匹配
+	Next figure	下一个图形
+	Next month	下个月
+	Next sheet	下一张
+	Next tab	下一个标签页
+	Next tab and Previous tab	下一个标签页和上一个标签页
+	Next uncertain	下一个可疑词
+	Next view	下一个视图
+	Night	夜间
+	No actions	无操作
+	No certificate was found with this provider.	在此提供商处未找到证书。
+	No changes allowed	不允许任何更改
+	No changes to save	没有要保存的更改
+	No check has run yet.	尚未运行检查。
+	No color	无颜色
+	No colour	无颜色
+	No commands available	没有可用的命令
+	No comments match.	没有匹配的注释。
+	No comments yet.	尚无注释。
+	No compatible package is available for this installation.	此安装没有兼容的软件包。
+	No contributor data was built into this copy.	此版本未包含贡献者数据。
+	No desktop portal offers a file chooser, and zenity isn't installed. Install xdg-desktop-portal with a backend such as xdg-desktop-portal-gtk, -kde or -gnome, or install zenity.	没有桌面门户提供文件选择器，且未安装 zenity。请安装 xdg-desktop-portal 及其后端（如 xdg-desktop-portal-gtk, -kde 或 -gnome），或安装 zenity。
+	No differences in the text.	文本没有差异。
+	No digital IDs yet.	尚无数字 ID。
+	No documents are open	没有打开的文档
+	No email app is set up on this computer.	此电脑上没有设置邮件应用。
+	No errors in the rules that were evaluated.	已评估的规则中没有错误。
+	No errors: the structure follows the Arlington PDF Model.	没有错误：结构符合 Arlington PDF Model。
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
+	No field reads it	没有字段读取它
+	No file chosen	未选择文件
+	No file dialog could open	无法打开文件对话框
+	No fill	无填充
+	No fonts are referenced by the pages.	页面未引用任何字体。
+	No form fields were detected	未检测到表单域
+	No hairlines found on those pages	这些页面上未找到细线
+	No image on clipboard to paste	剪贴板中没有可粘贴的图像
+	No inaccessible scripts	没有无障碍脚本
+	No issues found	未发现问题
+	No links to remove	没有可删除的链接
+	No local model runtime found.	找不到本地模型运行环境。
+	No matches	无匹配
+	No matches to replace	没有可替换的匹配项
+	No matches.	无匹配。
+	No matching tools	没有匹配的工具
+	No model credits were built into this copy.	此版本未包含模型贡献记录。
+	No model installed yet — see the Models tab.	尚未安装模型 — 见“模型”标签页。
+	No openly licensed document fonts found. Load a font file.	未找到采用开放许可证的字体。请加载字体文件。
+	No order can fix a loop. Change one of the formulas.	任何顺序都无法修复循环。请修改其中一个公式。
+	no output folder was chosen	未选择输出文件夹
+	No pages match those choices	所选条件没有匹配的页面
+	No pages selected	未选择任何页面
+	No pages were scanned.	没有扫描任何页面。
+	No PDF files were found.	未找到 PDF 文件。
+	No PDFs found in {folder}	在 {folder} 中未找到 PDF
+	No PDFs in this folder yet	此文件夹中还没有 PDF
+	No PDFs, images or text files found in {folder}	在 {folder} 中未找到 PDF、图像或文本文件
+	No photo chosen	未选择照片
+	No plugins installed	未安装插件
+	No plugins installed yet. Install a .wasm plug-in to extend CivilOps PDF.	尚未安装插件。安装 .wasm 插件以扩展 CivilOps PDF。
+	No plugins installed. A plugin is a single .wasm file; install one above.	未安装插件。插件是单个 .wasm 文件；请在上方安装一个。
+	No preview	无预览
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	未找到打印机。请检查打印机是否已安装、打印后台处理程序是否在运行，然后重新打开“打印”。
+	No problems found: the document conforms to {level}.	未发现问题：文档符合 {level}。
+	No raw file yet	尚未选择原始文件
+	No recipients yet.	尚无收件人。
+	No reference yet	尚未选择参考文件
+	No release notes were provided.	未提供发行说明。
+	No saved measurements in this view.	此视图中没有已保存的测量。
+	No scanner found	未找到扫描仪
+	No scanner is connected.	未连接扫描仪。
+	No scanners were found. Check that the scanner is on and connected, or enter its network address.	未找到扫描仪。请检查扫描仪是否已开机并连接，或输入其网络地址。
+	No security	无安全性
+	No sheets	无纸张
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	框内未找到签名。请将框移到签名上，或提高墨迹灵敏度。
+	No signature was found. Adjust the ink sensitivity or keep the original image.	未找到签名。请调整墨迹灵敏度或保留原始图像。
+	No signing certificate was found on a card. Is the card in the reader?	未在卡上找到签名证书。卡是否已插入读卡器？
+	No signing certificate was found on this device. Is it connected?	此设备上未找到签名证书。设备已连接吗？
+	No size estimate: {e}	无法估算大小：{e}
+	No status has been set.	尚未设置状态。
+	no such document	找不到该文档
+	No suggestions	无建议
+	No tools are shown. Choose them in Preferences.	未显示任何工具。请在首选项中选择。
+	No tools match your search.	没有与搜索匹配的工具。
+	No unlinked web addresses were found in the text	文本中未发现未链接的网址
+	No untagged content was found.	未找到未标记的内容。
+	no unused output name	没有可用的输出文件名
+	No usable CMYK output intent: RGB and CIE-based colours separate by the ISO 32000 device formulas.	没有可用的 CMYK 输出意图：RGB 和基于 CIE 的颜色按 ISO 32000 设备公式分色。
+	none	无
+	None (prefix only)	无（仅前缀）
+	None found	未发现
+	None of the recipients is one of your digital IDs: you won't be able to open the saved document.	收件人中没有你的数字 ID：你将无法打开保存的文档。
+	None of these signatures can be removed.	这些签名都无法移除。
+	None of those files can be made into a PDF; use PDFs, images or .txt files	这些文件都无法转换为 PDF；请使用 PDF、图像或 .txt 文件
+	None of your digital IDs can open this document.	你的数字 ID 均无法打开此文档。
+	None — everything is allowed	无 — 允许一切操作
+	None: sRGB for RGB and gray documents	无：RGB 和灰度文档使用 sRGB
+scroll speed	Normal	正常
+	Normal page	普通页面
+	Northing	北坐标
+	Not allowed	不允许
+	Not checked	未检查
+	Not confirmed by the printer	打印机未确认
+	not editable text	不可编辑的文本
+	Not evaluated: {list}	未评估：{list}
+	Not in order	不在顺序中
+	Not now	暂不
+	Not present	不存在
+	Not rated	未评级
+	Not replaced: {why}	未替换：{why}
+	Not searched: {n}	Not searched: {n}
+	Note	附注
+	Nothing	无
+	nothing in the file matches this document	文件中没有与此文档匹配的数据
+	Nothing on those pages needed converting	这些页面上没有需要转换的内容
+	Nothing replaced	未替换任何内容
+	Nothing to redo	没有可重做的操作
+	nothing to redo	没有可重做的操作
+	Nothing to undo	没有可撤销的操作
+	nothing to undo	没有可撤销的操作
+	November	十一月
+	Number	数字
+	Number every page in the footer.	在页脚为每页编号。
+	Number format	数字格式
+	Number of pages	页数
+	Number pages	页面编号
+	Number pages…	页面编号…
+	Numbered list	编号列表
+	OCR complete — no text recognized on this page.	OCR 完成——此页未识别出文本。
+	OCR results rejected.	已放弃 OCR 结果。
+	October	十月
+	Odd pages	奇数页
+	Odd Pages Only	仅奇数页
+	of the following fields:	以下字段的：
+	of {name}	共 {name} 个
+	of {pages}	共 {pages} 页
+	OFD (early alpha): converted to PDF. Compare it with the original.	OFD（早期 Alpha 版）：已转换为 PDF。请与原件核对。
+	OFD (early alpha): converted to PDF. Objects not shown: {n}.	OFD（早期 Alpha 版）：已转换为 PDF。未显示的对象：{n}。
+	OFD documents	OFD 文档
+animation effects	Off	关
+	Off, a document's request to open in Full Screen mode is ignored. You can still enter it from the View menu.	关闭后，文档要求以全屏模式打开的请求将被忽略。仍可从“视图”菜单进入全屏模式。
+	Office documents	Office 文档
+	Offset from centre	与中心的偏移
+	Old file:	旧文件：
+	Old file: {name}	旧文件：{name}
+animation effects	On	开
+	On Blur	失去焦点
+	On Focus	获得焦点
+	on page {label}	第 {label} 页
+	On the web, open or drop an image to convert it	在 Web 端，打开或拖入图像进行转换
+	On X11, the touchpad follows the mouse wheel speed.	在 X11 上，触控板使用鼠标滚轮的速度。
+	One download serves every ArtCraft app: the model lands in a shared folder all of them read.	下载一次即可供所有 ArtCraft 应用使用：模型放在所有应用共同读取的共享文件夹。
+	One sheet for the whole document	整个文档一个工作表
+	One sheet per page	每页一个工作表
+	One word or phrase per line	每行一个单词或短语
+	One {f} file per page, named after the document.	每页一个 {f} 文件，以文档命名。
+	One-time code (OTP)	一次性验证码 (OTP)
+	Only allow this if you trust the source document.	仅在您信任源文档时才允许此操作。
+	Only certificates with RSA keys can be recipients.	只有带 RSA 密钥的证书才能作为收件人。
+	Only change the colour of black text or line art	仅更改黑色文本和线条的颜色
+	Only checked properties will change. Mixed means the selected fields have different values.	只会更改勾选的属性。“混合”表示所选字段的值不同。
+	Only clear paper edges are cropped. Indistinguishable white borders are kept.	仅裁剪清晰的纸张边缘。无法区分的白色边框将保留。
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	仅在您信任此文档时继续。链接地址可能携带文档中的信息，例如您在表单中输入的内容。
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	只接受本网络内的 IP 地址（专用、链路本地或环回地址），不接受主机名。
+	Only send if you trust this document and destination. GET puts form values in the URL.	仅在信任此文档和目标地址时发送。GET 会将表单值放入 URL。
+	Only send if you trust this document and destination. The entire PDF leaves this computer.	仅在信任此文档和目标地址时发送。完整 PDF 将离开此计算机。
+	Only send if you trust this document and destination. The form values leave this computer.	仅当您信任此文档和目标地址时才发送。表单值将离开这台电脑。
+	Only the document's owner can change its security (open it with the permissions password)	只有文档所有者才能更改安全性（请使用权限密码打开）
+	Only the first {n} of each kind are listed.	每类仅列出前 {n} 项。
+	Only the page content changes: links, comments, form fields and bookmarks on the original pages stay.	仅更改页面内容：原页面的链接、注释、表单域和书签保留。
+	Only the recipients can open the document, each with the private key of their own certificate.	只有收件人可以打开此文档，每人使用自己证书的私钥。
+	Opacity:	不透明度:
+	Open a document first	请先打开文档
+	Open a new message without it, and CivilOps PDF will show {name} in its folder so you can attach it yourself.	请打开一封不带附件的新邮件，CivilOps PDF 会在文件夹中显示 {name}，以便你自行附加。
+	Open a PDF ({key})	打开 PDF ({key})
+	Open a PDF to measure it.	打开 PDF 以进行测量。
+	Open a web link	打开网页链接
+	Open a web page	打开网页
+	Open accessibility report	打开无障碍报告
+	Open arrow	开口箭头
+	Open comment pop-up	打开注释弹出窗口
+	Open default app settings	打开默认应用设置
+	Open email app	打开邮件应用
+	Open file	打开文件
+	Open from cloud	从云端打开
+	Open from cloud…	从云端打开…
+	Open in a new tab	在新选项卡中打开
+	Open in Full Screen mode	以全屏模式打开
+	Open in Full Screen mode?	以全屏模式打开？
+	Open local file…	打开本地文件…
+	Open message and show file	打开邮件并显示文件
+	Open next PDF in folder	打开文件夹中的下一个 PDF
+	Open OFD (early alpha)…	打开 OFD（早期 Alpha 版）…
+	Open previous PDF in folder	打开文件夹中的上一个 PDF
+	Open Recent	打开最近的文件
+	Open tabs and edits update the search automatically.	打开的标签页和编辑内容会自动更新搜索。
+	Open the cover, clear any jam or sheets fed together, load the remaining sheets squarely, then choose Continue.	请打开盖板，清除可能的卡纸或一同送入的纸张，并将剩余纸张摆放整齐后装入，然后选择“继续扫描”。
+	Open the cover, clear any jam or sheets fed together, load the sheets squarely, then choose Try again.	请打开盖板，清除可能的卡纸或一同送入的纸张，并将纸张摆放整齐后装入，然后选择“重试”。
+	Open the file as it was saved then	打开当时保存的文件
+	Open the older version first	请先打开旧版本
+	Open this local PDF?	是否打开此本地 PDF？
+	Open this web page?	是否打开此网页？
+	Open to page	打开到页面
+	open to see what it will include	打开以查看计划包含的功能
+	Opened from a CAdES signature envelope — read-only.	从 CAdES 签名信封打开 — 只读。
+	Opened from a detached CAdES signature — read-only.	从分离式 CAdES 签名打开 — 只读。
+	Opened with	打开方式
+	Opened, but its security settings don't allow combining. Enter the permissions password.	已打开，但其安全设置不允许合并。请输入权限密码。
+	Opening documents	打开文档
+	Opening the browser's print dialog…	正在打开浏览器的打印对话框…
+	Opening {name}…	正在打开 {name}…
+	Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.	打开打印机驱动程序的首选项。这些设置会保存并用于此电脑上的所有打印；此处选择的份数、双面、灰度和纸张仍然适用。
+	Optical resolution {x} × {y} dpi.	光学分辨率 {x} × {y} dpi。
+	Optimization cancelled	已取消优化
+	Optimization is already running	优化已在运行
+	Optimize	优化
+	Optimize PDF…	优化 PDF…
+	Optimize Scanned Documents	优化扫描文档
+	Optimize scanned documents	优化扫描文档
+	Optimize scanned documents…	优化扫描文档…
+	Optimizing… cleaning up	正在优化…清理
+	Optimizing… image {d} of {t}	正在优化…第{d}张图像，共{t}张
+	Optimizing… merging identical objects	正在优化…合并相同对象
+	Optimizing… merging image fragments	正在优化… 正在合并图像碎片
+	Optimizing… removing user data	正在优化…删除用户数据
+	Optimizing… writing the copy	正在优化…写入副本
+	Optional	可选
+	Optional: needs an AI provider you configure	可选：需要您自行配置 AI 服务商
+	Options for this reply	此回复的选项
+	Order · top calculates first	顺序 · 上方的先计算
+	Organization Name	组织名称
+	Organizational Unit	组织单位
+	Organize pages	组织页面
+	Organize pages plan	页面整理方案
+	Original (lossless)	原始（无损）
+	Original: replace pages	原文档：替换页面
+	Other colour…	其他颜色…
+	Other elements alternate text	其他元素替代文本
+	Other elements that require alternate text	需要替代文本的其他元素
+	Other options	其他选项
+	Other provider (CSC API)	其他提供商 (CSC API)
+	Other signatures remain, so the copy is saved as an update of the signed file: the removed signature stays in its earlier revision, where it can be recovered.	仍有其他签名，因此副本会作为已签名文件的增量更新保存：已移除的签名保留在早期修订中，可以从那里恢复。
+	Other signatures remain, so the removed one is still in the file's earlier revision; check the remaining signatures again.	仍有其他签名，因此已移除的签名仍保留在文件的早期修订中；请重新验证其余签名。
+	Otherwise, ask on the first save after a signature is placed	否则，在放置签名后首次保存时询问
+	Outdent	减少缩进
+	Outline colour:	轮廓颜色:
+	Outline over page	页面上叠加轮廓
+	Outline view	轮廓视图
+	Output appears here.	输出显示在此处。
+	Output folder	输出文件夹
+	Output intent profile:	输出意图配置文件：
+	Output intent: {list}	输出意图：{list}
+	Output preview	输出预览
+	Owner password (no restrictions apply)	所有者密码（无限制）
+	Package: {name}	软件包：{name}
+	PAGE	页码
+	Page background	页面背景
+	Page Content	页面内容
+	Page display	页面显示
+	Page display: {layout}	页面显示：{layout}
+	Page does not require timed responses	页面不需要限时响应
+	Page grid	页面网格
+	Page information	页面信息
+	Page labels	页面标签
+	Page layout	页面布局
+	Page maximum: {n}%	页面最大值：{n}%
+	Page navigation	页面导航
+	Page number	页码
+	Page Only	仅页面
+	Page options	页面选项
+	Page order:	页面顺序：
+	Page properties	页面属性
+	Page Range	页面范围
+	Page Range Options	页面范围选项
+	Page size	页面大小
+	Page Sizing & Handling	页面大小和处理
+	Page thumbnails	页面缩略图
+	Page thumbnails panel	页面缩略图面板
+	Page tools	页面工具
+	Page transitions	页面切换
+	Page verified	整页已校对
+	Page will not cause screen flicker	页面不会导致屏幕闪烁
+	Page X	页面 X
+	Page Y	页面 Y
+	Page {label}	第 {label} 页
+	Page {old} → Page {new}	第 {old} 页 → 第 {new} 页
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	第 {pages} 页在添加背景后有改动，因此其自身的白色填充保持关闭。在白纸上看起来一样。
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	第 {pages} 页有自己的白色填充，会遮住背景。替换它
+	Page {page} holds more content than CivilOps PDF can read: part of it isn't drawn, and only part of its text can be found or copied.	第 {page} 页的内容超过 CivilOps PDF 能读取的量：其中一部分没有绘制，文字也只有部分能搜索或复制。
+	Page {p}	第 {p} 页
+	Page {p} of {n}	第 {p} 页，共 {n} 页
+	pages	页
+	Pages counted	已统计页数
+	Pages from	页面范围从
+	Pages of {name} to combine, e.g. 1-3, 6	要合并的{name}的页面，例如 1-3、6
+	Pages Panel and Page	页面面板和页面
+	Pages per file	每文件页数
+	Pages per sheet:	每张纸页数：
+	Pages selected	选定的页面
+	Pages that are only pictures of text can't be read aloud or searched. Recognize text (OCR) to add a text layer.	仅为文本图片的页面无法朗读或搜索。请识别文本（OCR）以添加文本层。
+	Pages that couldn't be read: {n}	Pages that couldn't be read: {n}
+	Pages that use Type 3 fonts print as images, because Windows can close CivilOps PDF while printing them. The other pages print as usual.	使用 Type 3 字体的页面将作为图像打印，因为打印这些页面时 Windows 可能会关闭 CivilOps PDF。其他页面照常打印。
+	Pages to Print	要打印的页面
+	Pages whose text couldn't be read: {n}. A match on them isn't listed.	无法读取文本的页面：{n}。这些页面上的匹配项未列出。
+	Pages with links, comments or fields should tab in structure order. The fix sets each page's tab order to Use Document Structure.	包含链接、注释或字段的页面应按结构顺序 Tab。修复操作将每页的 Tab 顺序设为“使用文档结构”。
+	Pages with renderable text are left alone and reported as skipped	已含可渲染文本的页面保持原样，并报告为已跳过
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	第 {pages} 页在添加背景后有改动，因此它们自身的白色填充保持关闭。在白纸上看起来一样。
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	第 {pages} 页各有自己的白色填充，会遮住背景。替换它们
+	Pages:	页面：
+	Pages: {k} of {n}	页面：{k}/{n}
+	Pan & zoom	平移和缩放
+	Paper & Ink	纸与墨
+	Paper size	纸张大小
+	Paper:	纸张：
+	Paragraph spacing	段落间距
+	Part of	隶属于
+	Part of this page isn't shown: its content goes past the most CivilOps PDF draws for one page.	此页面的部分内容未显示：其内容超出了 CivilOps PDF 为单个页面绘制的上限。
+	Passed	通过
+	Password & Security	密码与安全性
+	Password protection will be applied when you save	保存时将应用密码保护
+	Password required	需要密码
+	Password security	密码安全性
+	Password-protected	受密码保护
+	Paste after	在后面粘贴
+	Paste an OpenRouter key	粘贴 OpenRouter 密钥
+	Paste comments	粘贴注释
+	Paste field	粘贴字段
+	Paste fields	粘贴字段
+	Paste Image	粘贴图像
+	Paste pages	粘贴页面
+	Pattern	模式
+	Pattern strokes	图案描边
+	Patterns	模式
+	Patterns (graphics objects)	图案
+	Pause / resume reading	暂停 / 继续朗读
+	Pause reading	暂停朗读
+	Paused	已暂停
+	Paused (page {page})	已暂停（第 {page} 页）
+	PDF and text	PDF 和文本
+	PDF attachments	PDF 附件
+	PDF Optimizer	PDF 优化器
+	PDF or image	PDF 或图像
+	PDF page: {size}	PDF 页面：{size}
+	PDF producer	PDF 生成器
+	PDF scale: {scale}%	PDF 缩放：{scale}%
+	PDF version	PDF 版本
+	PDF, images and text	PDF、图像和文本
+	PDF, images, text and Office documents	PDF、图像、文本和 Office 文档
+	PDF/A and standards advice	PDF/A 与标准建议
+	PDF/A…	PDF/A…
+	PDF/X…	PDF/X…
+	CivilOps PDF didn't shut down normally. These documents had changes that were autosaved:	CivilOps PDF 未正常关闭。以下文档的更改已自动保存：
+	CivilOps PDF is drawing without a graphics processor, so it may be slow. Updating the graphics driver may help.	CivilOps PDF 正在不使用图形处理器的情况下绘制，因此可能较慢。更新显卡驱动程序可能会有帮助。
+	CivilOps PDF is keeping what you were doing. Once the file chooser works, choose Try again.	CivilOps PDF 正在保留你刚才的操作。文件选择器恢复正常后，请选择“重试”。
+	CivilOps PDF looks for the libraries device vendors install. Choose one only if your device isn't found.	CivilOps PDF 会查找设备厂商安装的库。仅当找不到你的设备时才需要选择。
+	CivilOps PDF on GitHub	GitHub 上的 CivilOps PDF
+	CivilOps PDF opens the provider's page, where you sign in with your CPF, PIN and one-time code.	CivilOps PDF 会打开提供商页面，你在那里用 CPF、PIN 和一次性验证码登录。
+	CivilOps PDF web page	CivilOps PDF 网页
+	CivilOps PDF works offline. No telemetry, no account, and no cloud processing unless you add a provider.	CivilOps PDF 可离线工作。无遥测、无账号，除非您自行添加服务商，否则无云端处理。
+	CivilOps PDF {v} is available.	CivilOps PDF {v} 可用。
+	CivilOps PDF's own	CivilOps PDF 自己的
+	People may need more time to respond. Check that nothing has a time limit.	人们可能需要更多时间来响应。请检查确认没有时间限制。
+	Permissions password	权限密码
+	Permitted actions after certifying	认证后允许的操作
+	Perpendicular	垂直距离
+	Phone Number	电话号码
+	Phone Numbers	电话号码
+	Photometric	光度
+	Pick a tool in the quick bar, or type above.	在快捷栏中选择工具，或在上方输入。
+	Pick page position	在页面上选取位置
+	Pictures cover pages {pages} (scans?), so the background won't show there.	第 {pages} 页被图片覆盖（扫描件？），因此那里不会显示背景。
+	Pictures need alternate text that describes them, or must be marked decorative. Add alternate text to each figure.	图片需要描述性的替代文本，或标为装饰性。请为每个图形添加替代文本。
+	Pictures on those pages are recognized too; words already in the page's text are not added again	这些页面上的图片也会被识别；页面文本中已有的单词不会重复添加
+	Pictures too	图片也一起
+	PIN	PIN
+	Pin	固定
+	Pin a folder to Home	将文件夹固定到主页
+	Pin a folder to list its newest PDFs here, such as where your scanner or a synced cloud drive saves them.	固定一个文件夹，即可在此列出其中最新的 PDF，例如扫描仪或同步云盘保存文件的位置。
+	Pin a folder…	固定文件夹…
+	Pin a tool…	固定工具…
+	Pin folder to Home…	将文件夹固定到主页…
+	Pin to Home	固定到主页
+	Pin tools to Home	将工具固定到主页
+	Pin your favorite tools here for quick access.	将常用的工具固定在此处以便快速访问。
+	Pink	粉色
+	Pinned	已固定
+	Pinned folders need the desktop app	固定文件夹需要桌面版应用
+	Pinned Tools	已固定的工具
+	Pinned {folder} to Home	已将 {folder} 固定到主页
+	Pinned {tool} to Home	已将 {tool} 固定到主页
+	Pitch:	音调：
+	Pixels	Pixels
+	PKCS #11 device  ·  	PKCS #11 设备 · 
+	PKCS #11 module	PKCS #11 模块
+	PKCS #11 modules	PKCS #11 模块
+	PKCS #11 token  ·  	PKCS #11 令牌 · 
+	Place caption	放置标题
+	Plain text in reading order; pages are separated by form feeds.	按阅读顺序的纯文本；页面之间用换页符分隔。
+	Planned	计划中
+	Planned for milestone	计划推出的里程碑
+	Planned for milestone {m} — open to see what it will include	计划于 {m} 里程碑——打开查看将包含的内容
+	Planned · {m}	计划中 · {m}
+	Plugins	插件
+	Plugins are sandboxed WebAssembly packages. They survive CivilOps PDF updates as long as their API version is supported.	插件是沙盒化的 WebAssembly 包。只要其 API 版本受支持，它们就能在 CivilOps PDF 更新后继续使用。
+	Point at the page to read its ink coverage.	将指针移到页面上即可查看油墨覆盖率。
+	Points from the page's bottom-left corner.	从页面左下角算起的点数。
+	Portable mode is off: {folder} can't be written ({error}). Settings are kept in your user folder instead.	便携模式已关闭：无法写入{folder}（{error}）。设置改为保存在你的用户文件夹中。
+	Portrait Pages	纵向页面
+	Portrait pages	纵向页面
+	Post	发布
+	PostScript / EPS	PostScript / EPS
+	PostScript XObjects aren't allowed	不允许使用 PostScript XObject
+	Precision	精度
+	Preflight	印前检查
+	Prepare a form	准备表单
+	Prepare email draft	准备电子邮件草稿
+	Prepare for accessibility	无障碍准备
+	Prepare for Distribution	准备分发
+	Prepare for distribution	准备分发
+	Prepare for distribution…	准备分发…
+	Preparing form detection…	正在准备表单检测…
+	Preparing OCR add-on…	正在准备 OCR 附加组件…
+	Preparing read-aloud text…	正在准备朗读文本…
+	Preparing sheet {done} of {total} for printing…	正在准备打印第 {done} 张，共 {total} 张…
+	Preparing {n} sheets for printing…	正在准备 {n} 张纸用于打印…
+	Presentation (.pptx)	演示文稿（.pptx）
+	Preserve black	保留黑色
+	Press the new keys (Esc cancels)	按下新按键（Esc 取消）
+	Prevent G-SYNC/FreeSync flicker (applies at next launch)	防止 G-SYNC/FreeSync 闪烁（下次启动时生效）
+	Preview is for the bed. Set a region in inches below, or leave it empty for the whole sheet.	预览用于稿台。在下方用英寸设置区域，留空则扫描整张。
+	Preview unavailable: {e}	无法预览：{e}
+	Preview uses the bed. Switch the source to Bed, or scan without a preview.	预览使用稿台。将来源改为稿台，或不预览直接扫描。
+	Preview: page {p} of {n}	预览：第 {p} 页，共 {n} 页
+	Previous	上一页
+	Previous ({key})	上一个 ({key})
+	Previous / next page	上一页/下一页
+	Previous figure	上一个图形
+	Previous month	上个月
+	Previous sheet	上一张
+	Previous tab	上一个标签页
+	Previous uncertain	上一个可疑词
+	Previous view	上一个视图
+	Primary language	主要语言
+	Primary only	仅主引擎
+	Print ({key})	打印 ({key})
+	Print area…	打印区域…
+	Print as image	作为图像打印
+	Print in grayscale	灰度打印
+	Print page border	打印页面边框
+	Print production	印刷制作
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	请使用单面打印。保持纸张顺序，沿裁切标记切开，然后按从左到右、从上到下的顺序叠放各摞纸张。
+	Print, NextPage, PrevPage, FirstPage or LastPage	Print、NextPage、PrevPage、FirstPage 或 LastPage
+	Printed through the system print dialog	已通过系统打印对话框打印
+	Printed with errors	已打印，有错误
+	Printed with warnings	已打印，有警告
+	Printer address:	打印机地址：
+	Printer default	打印机默认
+	printer marks	打印标记
+	Printer marks added	已添加打印标记
+	Printer orientation:	打印机方向：
+	Printer paper and scaling may differ. Check driver settings.	打印机纸张和缩放可能不同。请检查驱动程序设置。
+	Printer properties	打印机属性
+	Printer status: {state}	打印机状态：{state}
+	Printing allowed	允许打印
+	Printing condition:	印刷条件：
+	Privacy	隐私
+	Private data of other applications	其他应用程序的私有数据
+	product (x)	求积 (x)
+	Projected	投影坐标
+	Projected coordinate matrix	投影坐标矩阵
+	Properties…	属性…
+	Protect & Standardize	保护和标准化
+	Protect a PDF	保护 PDF
+	Protect Using Password	使用密码保护
+	Protect using password…	使用密码保护…
+	Protect with password	使用密码保护
+	Protected: the combined file won't keep its security settings	受保护：合并后的文件不会保留其安全设置
+	Provider	提供商
+	Public domain	公有领域
+	Public key	公钥
+	pure black stays 100% K or gray 0 instead of a mix	纯黑保持为 100% K 或灰度 0,而不是混合色
+	Purple	紫色
+	PushButton	按钮
+	Quality:	质量：
+	Quantity	测量量
+	Query printer	查询打印机
+	Query the printer first to see what it supports.	请先查询打印机，了解它支持哪些功能。
+	Quirks	特例
+	Quit	退出
+	Quit CivilOps PDF	退出 CivilOps PDF
+	Quit {app}	退出 {app}
+	Radio	单选按钮
+	Radio button	单选按钮
+	Radio Button Properties	单选按钮属性
+	Radius / diameter	半径／直径
+	RAM {gb} GB	内存 {gb} GB
+	Rating	评级
+	Raw:	原始文件：
+	re-encoded in the target space; JPEGs stay JPEG	在目标颜色空间中重新编码;JPEG 仍为 JPEG
+	Re-OCR entire page	重新识别整页
+	Re-OCR this region	重新识别此区域
+	Re-type Password	重新输入密码
+	Read	阅读
+	Read and comment	阅读与注释
+	Read mode	阅读模式
+	Read Only	只读
+	Read Out Loud	大声朗读
+	Read out loud	朗读
+	Read Out Loud ({key})	大声朗读 ({key})
+	Read Out Loud ready	大声朗读准备就绪
+	Read out loud requires Windows, macOS or Linux.	朗读功能目前需要Windows / macOS / Linux。
+	Read this page only	仅朗读此页
+	Read to end of document	朗读到文档末尾
+	Read {n} words on {m} of {t} pages	在 {t} 页中的 {m} 页上读取了 {n} 个词
+	Reading colours	阅读配色
+	Reading file {n} of {total}: {name}	Reading file {n} of {total}: {name}
+	Reading options…	朗读选项…
+	Reading page {page}…	正在朗读第 {page} 页…
+	Reading Preferences	朗读偏好设置
+	Reading preferences…	朗读偏好设置…
+	Reading the printer's settings…	正在读取打印机设置…
+	Reading the raw document…	正在读取原始文档…
+	Reading theme	阅读主题
+	Reads pages and files even where the skip options would leave them alone	即使跳过选项会放过这些页面和文件，也照样读取
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
+	Reads {name}, which calculates later, so it shows an old value.	读取 {name}，而它在之后才计算，因此显示的是旧值。
+	Reads {name}, which the form doesn't have, so it gets no value there.	读取表单中不存在的 {name}，因此从中得不到值。
+	Real length	实际长度
+	Reason	原因
+	Reason: 	原因：
+	Reasons: {reasons}	原因：{reasons}
+	Reassign	重新分配
+	Recent colours	最近使用的颜色
+	Recent files to keep	Recent files to keep
+	Recipients	收件人
+	Recognize scanned text automatically	自动识别扫描文本
+	Recognize Text	识别文本
+	Recognize text	识别文本
+	Recognize text in multiple files…	识别多个文件中的文本…
+	Recognize text on this page or throughout the document?	识别此页还是整个文档中的文本？
+	Recognize Text…	识别文本…
+	Recognize text…	识别文本…
+	Recognize the text of scanned pages in the background (the file is not changed)	在后台识别扫描页面的文本（不会更改文件）
+	Recognized 1 word	识别了 1 个单词
+	Recognized text	识别的文本
+	Recognized text applied ({n} words, one undoable step)	识别文本已应用（{n} 个词，可一步撤销）
+	Recognized {n} words	识别了{n}个单词
+	Recognized {w} words in 1 file	在 1 个文件中识别了{w}个单词
+	Recognized {w} words in {n} files	在{n}个文件中识别了{w}个单词
+	Recognizing text… file {d} of {t}	正在识别文本…第{d}个文件，共{t}个
+	Recognizing text… page {d} of {t}	正在识别文本…第{d}页，共{t}页
+	Recolour images	重新着色图片
+	Recommended tools	推荐工具
+	Recover unsaved documents?	要恢复未保存的文档吗？
+	Redact	密文
+	Redact a PDF	密文 PDF
+	Redact all	全部密文
+	Redact Image	密文图像
+	Redact pages	密文页面
+	Redact pages…	密文页面…
+	Redact text and images	密文文本和图像
+	Redacted area fill colour:	密文区域填充颜色：
+	Redaction checklist	密文遮盖清单
+	Redaction code:	密文代码：
+	Redaction mark appearance	涂黑标记外观
+	Redaction properties…	密文属性…
+	Redaction Tool Properties	密文工具属性
+	Redid {label}	已重做{label}
+	Redo ({key})	重做 ({key})
+	Reduce	缩小
+	Reduce & Optimize	缩减与优化
+	Reduce file size	减小文件大小
+	Reduce file size…	减小文件大小…
+	Reference captured. Enter its real length below.	已获取参照线，请在下方输入实际长度。
+	Reference length (page points)	参照长度（页面点）
+	Reference length must be positive.	参照长度必须为正数。
+	Reference point: {point} (Tab: next)	参考点：{point}（Tab：下一个）
+	Reference preview	基准预览
+	Reference:	参考文件：
+	Reflowable	可重排
+	Refresh lists scanners. It does not feed paper.	刷新会重新列出扫描仪。不会进纸。
+	Refresh plugins	刷新插件
+	Region in inches. Leave the width or the height at zero to scan the whole area.	区域（英寸）。宽度或高度留 0 则扫描整页。
+	Registration marks	套准标记
+	Registration residual	配准残差
+	Regularity	规则性
+	Reject	放弃
+	Reject entire page	放弃整页
+	Rejected	已拒绝
+	Release notes	发行说明
+	Reliable character encoding is provided	提供了可靠的字符编码
+	Reload documents when their files change on disk	文件在磁盘上更改时重新加载对应的文档
+	Remember this paper for {printer}	为 {printer} 记住此纸张
+	Remind Me Later	稍后提醒我
+	Remote signature (OTP)	远程签名 (OTP)
+	Remote signing isn't available in this build	此版本不支持远程签名
+	Remove "{name}" from this list? The certificate stays with the signing service.	从此列表中移除“{name}”？证书仍保留在签名服务中。
+	Remove "{name}" from this list? The file itself is not deleted.	从此列表中移除“{name}”？文件本身不会被删除。
+	Remove add-on	移除附加组件
+	Remove all links	删除所有链接
+	Remove and Save As…	移除并另存为…
+	Remove background	删除背景
+	Remove boundary point	移除边界点
+	Remove checkmark	删除勾选标记
+	Remove control point	移除控制点
+	Remove Crop	移除裁剪
+	Remove crop	移除裁剪
+	Remove from Recent	从最近的文件中移除
+	Remove header & footer	删除页眉和页脚
+	Remove hidden information	删除隐藏信息
+	Remove hidden information and flatten comments and form fields, so recipients see only the pages.	删除隐藏信息并拼合注释和表单域，使接收者仅看到页面。
+	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	删除隐藏信息、元数据、脚本和嵌入内容，并重写文件。
+	Remove hidden information…	删除隐藏信息…
+	Remove invalid links and bookmarks	删除无效链接和书签
+	Remove measurement viewport	移除测量视口
+	Remove page	删除页面
+	Remove printer marks	移除打印标记
+	Remove redaction marks	移除密文标记
+	Remove security	删除安全性设置
+	Remove security?	要移除安全性吗？
+	Remove Signature	移除签名
+	Remove signature	移除签名
+	Remove signature…	移除签名…
+	Remove tag, keep its contents	移除标签，保留其内容
+	Remove the digital signatures: their fields, how they look on the page and their validation data	删除数字签名：签名字段、在页面上的外观及其验证数据
+	Remove the signature {name}	移除签名 {name}
+	Remove unit	移除单位
+	Remove unreferenced named destinations	删除未引用的命名目标
+	Remove unused objects and merge identical ones	删除未使用的对象并合并相同的对象
+	Remove viewport	移除视口
+	Remove watermark	删除水印
+	Remove white margins	移除白边
+	Remove white margins is already running	移除白边已在进行中
+	Remove {name}	删除{name}
+	Remove {name} from Recent	从最近的文件中移除{name}
+	Remove {n} files	删除 {n} 个文件
+	Remove {n} pages	删除 {n} 页
+	removed	已删除
+	Removed 1 hidden item. Save to remove them from the file.	已删除 1 个隐藏项。保存以从文件中删除它们。
+	Removed 1 link	已删除 1 个链接
+	Removed the signature {field} and kept its empty field	已移除签名 {field}，并保留其空白字段
+	Removed the signature {field} with its field	已移除签名 {field} 及其字段
+	Removed the visual signature on page {p}	已移除第 {p} 页上的可视签名
+	Removed {n} hidden items. Save to remove them from the file.	已删除 {n} 个隐藏项。保存以从文件中删除它们。
+	Removed {n} links	已删除 {n} 个链接
+	Removing the background puts the page's own backdrop back.	移除背景后，页面自己的白色填充会恢复。
+	Removing this signature changes the document and invalidates this signature in the version that results. It can affect the other signatures and certifications. The original file is kept as it is.	移除此签名会更改文档，并使此签名在生成的版本中失效。这可能会影响其他签名和认证。原始文件保持不变。
+	Removing this signature changes the document and invalidates this signature in the version that results. The original file is kept as it is.	移除此签名会更改文档，并使此签名在生成的版本中失效。原始文件保持不变。
+	Removing white margins… page {d} of {t}	正在移除白边… 第 {d} 页，共 {t} 页
+	Rename bookmark	重命名书签
+	Rename “{name}”	重命名“{name}”
+	Renamed to {name}	已重命名为 {name}
+	Rendering: hayro (bootstrap) · UI: egui · Icons: Lucide (ISC) · Fonts: Inter, JetBrains Mono, Dancing Script (OFL)	渲染：hayro（初期实现） · 界面：egui · 图标：Lucide（ISC） · 字体：Inter、JetBrains Mono、Dancing Script（OFL）
+	Reopen Closed Tab	重新打开已关闭的标签页
+	Reopen the files that were open when CivilOps PDF last closed	重新打开上次关闭 CivilOps PDF 时打开的文件
+	Repair log	修复日志
+	Repairs	修复记录
+	Repeat on pages	在页面上重复
+	Repeat on pages…	在页面上重复…
+	Repeat overlay text	重复覆盖文本
+	Repeated navigation links should be skippable. Check links that appear on every page.	重复的导航链接应可跳过。请检查出现在每一页上的链接。
+	Replace ({key})	替换 ({key})
+	Replace all	全部替换
+	Replace document colours	替换文档颜色
+	Replace image	替换图像
+	Replace Image…	替换图像…
+	Replace page	替换页面
+	Replace Pages	替换页面
+	Replace pages	替换页面
+	Replace pages…	替换页面…
+	Replace text	替换文本
+	Replace with	替换为
+	Replace XMP metadata	替换 XMP 元数据
+	Replaced	替换
+	Replaced {n} on {pages}	已替换 {n} 处（{pages}）
+	Replacement text	替换文本
+	Replacement: pages of {name}	替换文件：{name} 的页面
+	Replaces the existing one on those pages.	替换这些页面上的现有内容。
+	Replace…	替换…
+	Replacing images arrives on the web with image file pickers	Web 端替换图像将使用图像文件选择器
+	Replacing images on page {p} arrives on the web with image pickers ({i})	在 Web 端替换第{p}页的图像将使用图像选择器（{i}）
+	Report Options	报告选项
+	Report…	报告…
+	Required	必填
+	Required, given by Aruba with the account	必填，由 Aruba 随账户提供
+	Requires user to enter a password for:	需要用户输入密码，用于：
+	Reset a form	重置表单
+	Reset all shortcuts	重置所有快捷键
+	Reset caption	重置标题
+	Reset columns	重置列
+	Reset page size	重置页面大小
+	Reset panel layout	重置面板布局
+	Reset to Initial Visibility	重置为初始可见性
+	Reset to printer defaults	恢复打印机默认设置
+	Reshape comment	更改注释形状
+	Resize comment	调整注释大小
+	Resize object	调整对象大小
+	Resize window to initial page	调整窗口大小以适合初始页面
+	Restore	还原
+	Restore the last view (page, zoom and page display) when a document is opened again	再次打开文档时恢复上次的视图（页面、缩放和页面显示）
+	Restrictions	限制
+	Restrictions lifted	已解除限制
+	Restyle raw document	为原始文档应用样式
+	Restyle text	重新设置文本样式
+	Results shown: {n} · Documents: {d}	显示结果：{n} · 文档：{d}
+	Resume reading	继续朗读
+	Retain existing	保留现有
+	Retry	重试
+	Return to document	返回文档
+	Reveal in File Explorer	在文件资源管理器中显示
+	Reverse closed arrow	反向闭合箭头
+	Reverse landscape	横向（反向）
+	Reverse open arrow	反向开口箭头
+	Reverse pages	逆序页面
+	Reverse portrait	纵向（反向）
+	reverse side(s)	背面
+	Reverse sides	背面
+	Reverse sides interleaved.	已交错插入背面。
+	Reverse the order	反转排序
+	Revert	还原
+	Revert changes	撤销更改
+	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	还原到“{name}”的上次保存版本？此后的更改将无法撤销。
+	Reverted to the last saved version	已还原到上次保存的版本
+	Review & Compare	审阅和比较
+	Review History	审阅历史
+	Review the marks before applying redactions.	应用密文处理前请检查标记。
+	Revisions	修订
+	Rich Text Format (.rtf)	富文本格式 (.rtf)
+	Right Edge	右边缘
+	Right Footer Text	右页脚文本
+	Right Header Text	右页眉文本
+	Right-to-left page order	从右到左的页面顺序
+	Right-to-left page order in two-page view	在双页视图中从右到左排列页面
+	Right-to-left text	从右向左文字
+	Role map	角色映射
+	Room on each side	每侧空间
+	Rotate Clockwise	顺时针旋转
+	Rotate clockwise	顺时针旋转
+	Rotate comment	旋转注释
+	Rotate corner {n}	从角 {n} 旋转
+	Rotate Counterclockwise	逆时针旋转
+	Rotate counterclockwise	逆时针旋转
+	Rotate image	旋转图像
+	Rotate object	旋转对象
+	Rotate page	旋转页面
+	Rotate page {label} clockwise	顺时针旋转页面 {label}
+	Rotate page {label} counterclockwise	逆时针旋转页面 {label}
+	Rotate Pages	旋转页面
+	Rotate pages	旋转页面
+	Rotate pages clockwise	顺时针旋转页面
+	Rotate pages counterclockwise	逆时针旋转页面
+	Rotate pages…	旋转页面…
+	Rotate the selected pages clockwise	顺时针旋转所选页面
+	Rotate the selected pages counterclockwise	逆时针旋转所选页面
+	Rotate view	旋转视图
+	Rotate view clockwise	顺时针旋转视图
+	Rotate view clockwise ({key})	顺时针旋转视图 ({key})
+	Rotate view counterclockwise	逆时针旋转视图
+	Rounded	四舍五入
+	ROVER vote	ROVER 表决
+	Row spacing	行间距
+	Run	运行
+	Run a JavaScript	运行 JavaScript
+	Run JavaScript	运行 JavaScript
+	Run OCR	运行 OCR
+	Running action… file {d} of {t}	正在运行操作…第{d}个文件，共{t}个
+	Runtime	运行环境
+	Safety margin (pt)	安全边距（磅）
+	Same as interface	与界面相同
+	Same as interface ({language})	与界面相同（{language}）
+	Same as text	与文字相同
+	Sanitize	清理
+	Sanitize document	清理文档
+	Sanitize document and flatten signatures	清理文档并拼合签名
+	Sanitize document and remove signatures	清理文档并删除签名
+	Sanitize Documents	清理文档
+	Sanitize document…	清理文档…
+	Sanitizing removes hidden information from the document: metadata, file attachments, comments, form fields (flattened), hidden text and layers, bookmarks, links, actions and scripts, and private application data.	清理将删除文档中的隐藏信息：元数据、文件附件、注释、表单域（拼合）、隐藏文本和图层、书签、链接、动作和脚本，以及私有应用程序数据。
+	Sauvola binarization: ink to black, paper to white	Sauvola 二值化：墨迹变黑，纸面变白
+	Save & Close	保存并关闭
+	Save (M4)	保存 (M4)
+	Save ({key})	保存 ({key})
+	Save a signature first	请先保存签名
+	Save and Rename	保存并重命名
+	Save anyway	仍然保存
+	Save as image	另存为图像
+	Save as image…	另存为图像…
+	Save As optimizes for Fast Web View	“另存为”时针对快速 Web 查看进行优化
+	Save as PDF/A	另存为 PDF/A
+	Save as PDF/A-1b	另存为 PDF/A-1b
+	Save as PDF/A-2b	另存为 PDF/A-2b
+	Save as PDF/A-3b	另存为 PDF/A-3b
+	Save as PDF/UA	另存为 PDF/UA
+	Save as PDF/X	另存为 PDF/X
+	Save as template	另存为模板
+	Save as to cloud	另存为到云端
+	Save as to cloud…	另存为到云端…
+	Save As writes a linearized file whose first page shows before the rest has downloaded. Save adds changes to the end of the file, which turns Fast Web View off.	“另存为”会写入线性化文件，其首页可在其余部分下载完成前显示。“保存”会把更改追加到文件末尾，从而关闭快速 Web 查看。
+	Save as…	另存为…
+	Save attachment…	保存附件…
+	Save changes to “{name}” before closing?	在关闭前保存对“{name}”的更改？
+	Save email draft…	保存电子邮件草稿…
+	Save image	保存图像
+	Save Image As…	图像另存为…
+	Save initials first	请先保存姓名首字母
+	Save measurement	保存测量
+	Save model file	保存模型文件
+	Save or revert changes before selecting another tag.	选择其他标签前，请保存或撤销更改。
+	Save over the changed file?	覆盖已更改的文件？
+	Save pages	保存页面
+	Save Settings	保存设置
+	Save tag properties	保存标签属性
+	Save the accessibility report	保存无障碍报告
+	Save the document afterwards: saving rewrites the whole file so no trace of the removed content stays in it.	之后请保存文档：保存将重写整个文件，使删除的内容不留痕迹。
+	Save the document afterwards; saving rewrites the whole file so nothing removed stays in it.	之后请保存文档；保存将重写整个文件，使删除的内容不残留。
+	Save the result under a new name: saving rewrites the whole file so no trace of the removed content stays in it, and the original file stays as it is.	请将结果另存为新名称：保存将重写整个文件，使删除的内容不留痕迹，原文件保持不变。
+	Save the spreadsheet	保存电子表格
+	Save these pages as one PDF	将这些页面保存为一个 PDF
+	Save this document to a folder first	请先将此文档保存到文件夹
+	Saved in the shared folder	已存入共享文件夹
+	Saved measurements	已保存的测量
+	Saved measurements keep their original scale.	已保存的测量保留原有比例。
+	Saved measurements.	已保存测量结果。
+	Saved Settings	已保存的设置
+	Saved the print-ready PDF to {path}	打印就绪的 PDF 已保存到{path}
+	Saved {name}	已保存{name}
+	Saved {name} and verified it: it conforms to {level}.	已保存 {name} 并完成验证：符合 {level}。
+	Saved {name} without Fast Web View: {e}	已保存{name}，但未启用快速 Web 查看：{e}
+	Saved {name}, but verifying it found {n} problems.	已保存 {name}，但验证发现 {n} 个问题。
+	Saved {name}, optimized for Fast Web View	已保存{name}，并已针对快速 Web 查看进行优化
+	Saved {name}. Fast Web View is off: Save adds the changes to the end of the file.	已保存{name}。快速 Web 查看已关闭：“保存”会把更改追加到文件末尾。
+	Saved {place}: {before} → {after} (not smaller){detail}	已保存{place}：{before} → {after}（未缩小）{detail}
+	Saved {place}: {before} → {after} ({pct}% smaller){detail}	已保存{place}：{before} → {after}（缩小了{pct}%）{detail}
+	Saved, but reopening failed: {e}	已保存，但重新打开失败：{e}
+	Saves document	保存文档
+	Saving	保存设置
+	Saving… {pct}%	保存中… {pct}%
+	Scale	比例
+	Scale corner {n}	从角 {n} 缩放
+	Scale description	比例说明
+	Scale object	缩放对象
+	Scale relative to target page	相对于目标页面的缩放
+	Scan	扫描
+	Scan & OCR	扫描和 OCR
+	Scan and text recognition	扫描和文字识别
+	Scan correction	扫描校正
+	Scan interrupted	扫描已中断
+	Scan next page	扫描下一页
+	Scan processing cancelled	扫描处理已取消
+	Scan reverse side now (1 front)	立即扫描背面（1 张正面）
+	Scan reverse sides	扫描背面
+	Scan reverse sides now ({n} fronts)	立即扫描背面（{n} 张正面）
+	Scan the front, flip the sheet on the bed, then scan the reverse side.	扫描正面，在稿台上翻面，再扫描背面。
+	Scan the fronts before the reverse sides.	请先扫描正面，再扫描背面。
+	Scan the fronts, flip the stack (last sheet on top), then scan the reverse sides. Pages are interleaved front, back, …	扫描正面，将纸叠翻面（最后一页在上），再扫描背面。页面按正、背、…交错…
+	Scan the missing reverse sides, then choose Finish.	请扫描缺少的背面，然后选择“完成”。
+	Scanned pages need OCR. Reading order follows extracted page text.	扫描页面需要OCR。朗读顺序遵循从页面提取的文本。
+	scanned text	扫描的文本
+	Scanned text detected	检测到扫描文本
+	Scanner	扫描仪
+	Scanner settings	扫描仪设置
+	Scanner's full area	扫描仪的整个区域
+	Scanning front {n} of {t}…	正在扫描正面 {n} / {t}…
+	Scanning front {n}…	正在扫描正面 {n}…
+	Scanning needs Windows (WIA) in this version.	此版本的扫描功能需要 Windows (WIA)。
+	Scanning page {n} of {t}…	正在扫描第 {n} / {t} 页…
+	Scanning page {n}…	正在扫描第 {n} 页…
+	Scanning reverse side {n} of {t}…	正在扫描背面 {n} / {t}…
+	Scanning reverse side {n}…	正在扫描背面 {n}…
+	Scanning was stopped	扫描已停止
+	Scanning…	正在扫描…
+	Screen / email	屏幕 / 电子邮件
+	Screen flicker	屏幕闪烁
+	Screen readers choose their voice from the document's language. Set it in Document Properties > Advanced > Language.	屏幕阅读器根据文档语言选择语音。请在“文档属性”>“高级”>“语言”中设置。
+	Screen resolution	屏幕分辨率
+	Script	脚本
+	Script Name:	脚本名称：
+	Script:	脚本：
+	Scripted submission to {u} is not supported yet.	尚不支持通过脚本提交至 {u}。
+	Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在沙盒中运行，无法访问文件或网络。脚本请求打开网页时，需要先获得您的许可。关闭 JavaScript 后，Acrobat 的标准格式、验证和计算函数仍可使用。
+	Scripts run in a sandbox without file or network access. With JavaScript off, Acrobat's standard format, validate and calculate functions still work.	脚本在无文件和网络访问权限的沙盒中运行。关闭 JavaScript 后，Acrobat 的标准格式化、验证和计算函数仍可使用。
+	Scroll long text	滚动长文本
+	Scroll speed (mouse wheel and arrow keys)	滚动速度（鼠标滚轮和方向键）
+	Scroll speed (touchpad)	滚动速度（触控板）
+	Scroll tabs left	向左滚动选项卡
+	Scroll tabs right	向右滚动选项卡
+	Scroll the page	滚动页面
+	Search a folder	Search a folder
+	Search a folder…	Search a folder…
+	Search comments	搜索注释
+	Search complete.	搜索完成。
+	Search panel	搜索面板
+	Search tools and commands	搜索工具和命令
+	Search tools and commands…	搜索工具和命令…
+	Search tools…	搜索工具…
+	Searchable Image	可搜索的图像
+	Searchable Image (Exact)	可搜索图像（精确）
+	Searching a folder needs the desktop app	Searching a folder needs the desktop app
+	Searching…	正在搜索…
+	Searching… {s} of {p} pages	正在搜索… {s}/{p} 页
+	Searching… {s}/{p}	正在搜索… {s}/{p}
+	Search…	搜索…
+	Secured	Secured
+	Security	安全
+	Security method	安全方法
+	Security properties	安全性属性
+	Security properties…	安全性属性…
+	Security settings	安全设置
+	Security settings must allow assistive technology to read the content ("Enable text access for screen reader devices"). Change the document's security to allow it.	安全设置必须允许辅助技术读取内容（“允许屏幕阅读器设备访问文本”）。请更改文档安全设置以允许。
+	Security will be removed when you save	保存时将删除安全性设置
+	Select (V)	选择 (V)
+	Select a file first	请先选择一个文件
+	Select a file for the stamp	选择图章文件
+	Select a password-protected file first	请先选择一个受密码保护的文件
+	Select a placed signature first	请先选择已放置的签名
+	Select a text box or an image first	请先选择一个文本框或图像
+	Select a word	选择一个词
+	Select a word on the page to inspect it	在页面上选择一个词语以进行检查
+	Select Action:	选择操作：
+	Select all pages (Organize)	选择所有页面（组织页面）
+	Select at least one other page.	请至少选择另一个页面。
+	Select at most 1000 objects at a time.	一次最多选择 1000 个对象。
+	Select data files to merge	选择要合并的数据文件
+	Select files to compare	选择要比较的文件
+	Select format category:	选择格式类别：
+	Select Icon	选择图标
+	Select page {label}	选择页面 {label}
+	Select pages	选择页面
+	Select text on one page to use this action	请在一页内选择文本以使用此操作
+	Select text, a text box or an image first	请先选择文本、文本框或图像
+	Select the items to remove from this document.	选择要从本文档中删除的项目。
+	Select the {n} pages with a match, for Extract, Print or Delete	选择有匹配项的 {n} 个页面，用于提取、打印或删除
+	Select Tool	选择工具
+	Select tool	选择工具
+	Select tools to display on your Home page for quick access.	选择要在主页上显示的工具以便快速访问。
+	Select Trigger:	选择触发器：
+	Selected area (page {page}, {size})	所选区域（第 {page} 页，{size}）
+	Selected image files: {count}	已选择的图像文件：{count}
+	Selected points: {n}	已选点：{n}
+	Selected unit	所选单位
+	Selecting a result applies this query to the destination’s Find.	选择结果会将此查询应用于目标文档的查找。
+	Self-signed	自签名
+	Send	发送
+	Send backward	下移一层
+	Send by email…	通过电子邮件发送…
+	Send code	发送验证码
+	Send to back	置于底层
+	Sending by email isn't available in the browser	浏览器中无法通过电子邮件发送
+	Sending sheet {s} of {n} to {printer}…	正在将第 {s} 张（共 {n} 张）发送到{printer}…
+	Sending the code…	正在发送验证码…
+	Sending to {printer}…	正在发送到{printer}…
+	Sending…	发送中…
+	Sensitivity (screen pixels)	灵敏度（屏幕像素）
+	Sent to {printer}	已发送到{printer}
+	Sent to {printer}: {msg}	已发送到{printer}：{msg}
+	Sent. The printer can't say whether it printed.	已发送。打印机无法说明是否已打印。
+	Separate display coordinate system	使用单独的显示坐标系
+	Separate PDFs	单独的 PDF
+	Separate the sheets and load the remaining ones, then choose Continue.	请将纸张分开，装入剩余的纸张，然后选择“继续扫描”。
+	Separate the sheets and load them again, then choose Try again.	请将纸张分开，重新装入，然后选择“重试”。
+	Separate vertical units	单独设置纵向单位
+	Separating page {n}…	正在分色第 {n} 页…
+	Separator style:	分隔符样式：
+	Sepia	棕褐色
+	Sepia night	夜间棕褐色
+	September	九月
+	Serial number	序列号
+	Service	服务
+	Service address	服务地址
+	Set Alternate Text	设置替代文本
+	Set alternate text	设置替代文本
+	Set bookmark destination	设置书签目标
+	Set calculation order	设置计算顺序
+	Set document title	设置文档标题
+	Set Fields to Same Size	将字段设为相同大小
+	Set layer visibility	设置图层可见性
+	Set measurement scale	设置测量比例
+	Set Page Boxes	设置页面框
+	Set page boxes	设置页面框
+	Set page boxes…	设置页面框…
+	Set page transitions	设置页面切换效果
+	Set properties	设置属性
+	Set role mapping	设置角色映射
+	Set status	设置状态
+	Set status Accepted	将状态设为已接受
+	Set status Cancelled	将状态设为已取消
+	Set status Completed	将状态设为已完成
+	Set status None	将状态设为无
+	Set status Rejected	将状态设为已拒绝
+	Set status Unmarked	将状态设为未标记
+	Set tab order	设置 Tab 键顺序
+	Set the image of {name}	设置 {name} 的图像
+	Set to current page ({n})	设为当前页（第 {n} 页）
+	Set to zero	置零
+	Settings this source offers. Leave a control alone to keep the driver’s value.	此来源提供的设置。不改动则保留驱动的值。
+	Several files have the same name, so their results would overwrite each other; nothing was written: {list}	多个文件同名，其结果会相互覆盖；未写入任何内容：{list}
+	Shadings	着色
+	Shared Field Properties	共享字段属性
+	Sheet {s} of {n}	第 {s} 张，共 {n} 张
+	Sheets	工作表
+	Sheets printed: {done} of {total}	已打印页数：{done}/{total}
+	Sheets printed: {n}	已打印页数：{n}
+key	Shift	Shift
+	Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.	Shift 限制为 45 度角。Backspace 移除顶点。Escape 取消。
+	Shift drags freely	按住 Shift 自由拖动
+	Shift+F8: the previous word to review	Shift+F8：上一个待校对词
+	Shift- or Ctrl/Command-click to select several fields.	按住 Shift 或 Ctrl/Command 单击可选择多个字段。
+	Shift-click to select several objects. Drag empty space to select an area.	按住 Shift 单击可选择多个对象。拖动空白区域可框选。
+	ships in milestone {m}	将于 {m} 里程碑推出
+	Shortcut	Shortcut
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	用简单的标题栏显示窗口按钮，而不是在标签栏中。GNOME 不为应用绘制标题栏，因此此标题栏不会跟随其主题。
+	Show a field	显示字段
+	Show a notice when a document is secured	文档已加密时显示通知
+	Show All	显示全部
+	Show all	全部显示
+	Show all comments	显示所有注释
+	Show art, trim and bleed boxes	显示图稿框、裁切框和出血框
+	Show certificate…	显示证书…
+	Show circle	显示圆
+	Show controls	显示控件
+	Show cover page in two-page view	在双页视图中显示封面页
+	Show form field reminder	显示表单字段提醒
+	Show gaps between pages	显示页面间距
+	Show in Explorer	在资源管理器中显示
+	Show in Finder	在访达中显示
+	Show in folder	在文件夹中显示
+	Show in the tab strip	在标签栏中显示
+	Show layer	显示图层
+	Show less	收起
+	Show line weights	显示线宽
+	Show on other pages too	同时显示在其他页面上
+	Show on the page which fields each field reads	在页面上显示每个字段读取哪些字段
+	Show or hide toolbars and panels	显示或隐藏工具栏和面板
+	Show Page Edge Shadows	显示页面边缘阴影
+	Show password	显示密码
+	Show Report	显示报告
+	Show template {name}	显示模板 {name}
+	Show the accessibility report	显示无障碍报告
+	Show the current page number over the document	Show the current page number over the document
+	Show the Discord button in the title bar and the community card on Home	在标题栏中显示 Discord 按钮，并在主页显示社区卡片
+	Show the formatting toolbar when editing text	编辑文本时显示格式工具栏
+	Show the menus in the macOS menu bar	在 macOS 菜单栏中显示菜单
+	Show this dialog when the Checker starts	启动检查器时显示此对话框
+	Show validation marks over signed signatures	在已签名的签名上显示验证标记
+	Show when displaying on screen	在屏幕上显示
+	Show when printing	打印时显示
+	Show {n} more	再显示 {n} 个
+	Show/Hide	显示/隐藏
+	Showing the first 2,000 results — more matches may exist.	显示前 2,000 个结果 — 可能还有更多匹配项。
+	Shown while the pointer is over a mark.	指针位于标记上方时显示。
+	Shrink oversized pages	缩小过大的页面
+	Shrink the page content to make room for the header and footer	缩小页面内容，为页眉和页脚留出空间
+	Side by side	并排
+	Side panels	侧边面板
+	Sienna	Sienna
+	Sign	签名
+	Sign & Certify	签名与验证
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: CivilOps PDF finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：CivilOps PDF 会找到签名并去除纸张背景。
+	Sign Here	签名处
+	Sign this field…	签署此字段…
+	Sign with a Digital ID	使用数字 ID 签名
+	Sign yourself	自行签名
+	Signature	签名
+	signature	签名
+	Signature added. Others can move it until it's locked.	已添加签名。锁定之前，其他人可以移动它。
+	Signature cleanup stopped unexpectedly.	签名清理意外停止。
+	Signature Details	签名详细信息
+	Signature invalid	签名无效
+	Signature is INVALID:	签名无效：
+	Signature is valid:	签名有效：
+	Signature locked into the page.	签名已锁定到页面。
+	Signature panel	签名面板
+	Signature valid	签名有效
+	Signature validity is UNKNOWN:	签名有效性未知：
+	Signature {n}	签名 {n}
+	Signatures	签名
+	Signatures and seals are not carried over or checked.	签名和印章不会被保留，也不会被验证。
+	Signatures panel	签名面板
+	Signed after this signature, so what they signed includes it: {names}.	在此签名之后添加、且签名内容包含此签名的签名：{names}。
+	Signed and all signatures are valid.	已签名，所有签名均有效。
+	Signed and saved to {path}	已签名并保存到{path}
+	Signed and saved to {path}, without some revocation information: {problems}	已签名并保存到 {path}，但缺少部分吊销信息：{problems}
+	Signed by {signer} on {time}; the content does not match what was signed; the signer's trust was not checked.	由 {signer} 签名于 {time}；内容与所签内容不一致；未检查签名者的可信度。
+	Signed by {signer} on {time}; the content matches what was signed; the signer's trust was not checked.	由 {signer} 签名于 {time}；内容与所签内容一致；未检查签名者的可信度。
+	Signed by {signer}; the content does not match what was signed; the signer's trust was not checked.	由 {signer} 签名；内容与所签内容不一致；未检查签名者的可信度。
+	Signed by {signer}; the content matches what was signed; the signer's trust was not checked.	由 {signer} 签名；内容与所签内容一致；未检查签名者的可信度。
+	Signer	签署者
+	Signer's name	签名者姓名
+	Signers	签名者数量
+	Signing	签名
+	Signing service  ·  	签名服务 · 
+	Signing then goes online: the timestamp server receives a hash of the signature, and the certificate authorities are asked whether the certificates are revoked. With both, signatures are PAdES B-LTA.	签名时将联网：时间戳服务器会收到签名的哈希值，并向证书颁发机构查询证书是否已吊销。两者都启用时，签名为 PAdES B-LTA。
+	Signing time	签署时间
+	Signing was cancelled; nothing was saved.	已取消签名；未保存任何内容。
+	Signing…	正在签名…
+	Signing… Confirm the signature on your other device.	正在签名… 请在您的另一台设备上确认签名。
+	Silhouettes	轮廓
+	Simplified field notation:	简化字段表示法：
+	Simulate overprinting	模拟叠印
+	Simulation: device formulas	模拟：设备公式
+	Simulation: {profile}	模拟：{profile}
+	Single file	单个文件
+	Single Page	单页
+	Single page	单页
+	Single Page Continuous	单页连续
+	Single word or phrase	单个词或短语
+	Skip files that already have text	跳过已包含文本的文件
+	Skip pages that already have text	跳过已包含文本的页面
+	Skip Rule	跳过规则
+	Skipped	已跳过
+	skipped	已跳过
+	Slash	斜线
+scroll speed	Slow	慢
+	Smaller files for screens and email. Images above 225 ppi are reduced to 150 ppi, JPEG quality 60; line art may lose detail.	适合屏幕和电子邮件的小文件。超过 225 ppi 的图像缩小到 150 ppi，JPEG 质量为 60；线条图可能丢失细节。
+	Smaller pages	缩小页面
+	Smaller text	缩小文字
+	Smaller thumbnails	缩小缩略图
+	Smart card  ·  	智能卡  ·  
+	Snap	吸附
+	Snap targets	捕捉目标
+	Snap to drawing	吸附到图面
+	Snap to drawing: off	吸附到图形：关
+	Snap to drawing: on	吸附到图形：开
+	Snap to points and lines (Alt skips it)	吸附到点和线（按住 Alt 跳过）
+	Snapping	吸附
+	Social Security Number	社会安全号码
+	Social Security Numbers	社会安全号码
+	Soft dark	柔和深色
+	Soft dark gray	柔和深灰
+	Soft night	柔和夜间
+	Solid	实线
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	此处未显示部分书签：面板列出的书签数量和嵌套深度有限。
+	Some content could not be classified safely and was kept in the count.	部分内容无法可靠分类，已保留在统计中。
+	Some names are built as it runs	部分名称在运行时才拼出
+	Some page content couldn't be read; snapping uses the rest.	部分页面内容无法读取；将对其余内容进行对齐。
+	Some pages contain no countable text. Scanned images need OCR first.	部分页面没有可统计的文本。扫描图像需要先进行OCR识别。
+	Some soft masks or pattern paints need a visibility check before snapping.	部分软蒙版或图案填充需要在吸附前检查可见性。
+	Sort comments by:	注释排序依据：
+	Sort items	排序项目
+	sorted ascending	升序
+	sorted descending	降序
+	Source	来源
+	Source page	源页面
+key	Space	空格
+	Space Audit	空间审计
+	Spacing between copies	副本之间的间距
+	spans two paragraphs	跨越两个段落
+	Speed:	速度：
+	Spelling checks stay on this device.	拼写检查仅在此设备上进行。
+	Spelling dictionary unavailable	拼写词典不可用
+	Spelling language	拼写检查语言
+	Spelling marks do not change the document. Right-click an underlined word for suggestions.	拼写标记不会更改文档。右键单击带下划线的单词可查看建议。
+	Spelling suggestions	拼写建议
+	Split document	拆分文档
+	Split document…	拆分文档…
+	Split down	向下拆分
+	Split into files…	拆分为多个文件…
+	Split right	向右拆分
+	Spreadsheet (.xlsx)	电子表格（.xlsx）
+	Square kilometres	平方千米
+	Square metres	平方米
+	Square miles	平方英里
+	Square US survey feet	平方美国测量英尺
+	Squiggly underline	波浪下划线
+	Squiggly underline text	波浪下划线文本
+	Stabilizer	防抖
+	Stagger rows	交错排列行
+	Stamp palette	图章面板
+	Stamps	图章
+document scrollbar width	Standard	标准
+	Standard (96 ppi)	标准 (96 ppi)
+	Standard (Inter)	标准 (Inter)
+	Standard Business	标准业务
+	Standards	标准
+	Start	开始
+	Start Checking	开始检查
+	Start page number	起始页码
+	Steps	步骤
+	Sticky note	附注
+	still checking whether the tesseract program can run; try again in a moment	仍在检查 tesseract 程序能否运行；请稍后重试
+	Still printing; the job continues on the printer	仍在打印；作业将在打印机上继续
+	Still waiting for your email app…	仍在等待邮件应用…
+	Stop	Stop
+	Stop reading	停止朗读
+	Stopped at {limit} matches.	Stopped at {limit} matches.
+	Stopped before the end.	Stopped before the end.
+	Stopped: too many files took too long to read.	Stopped: too many files took too long to read.
+	Store JPEG images as JPEG XL (smaller, can be undone; needs a reader that supports JPEG XL)	将 JPEG 图像存储为 JPEG XL（更小，可撤销；需要支持 JPEG XL 的阅读器）
+	Straighten scanned page	校正扫描页面的倾斜
+	Straighten skewed scans	校正扫描件倾斜
+	Straighten the page	扶正页面
+	Straightens skewed text lines before reading	读取前校正倾斜的文本行
+	Strength: {s}	强度：{s}
+	Strikethrough text	删除线文本
+	String length (0 turns it off)	绳长（0 为关闭）
+	Stroke colour	描边颜色
+	Strong	强
+	Structure Info	结构信息
+	Submit a form	提交表单
+	Submit a form with GET	提交表单 (GET)
+	Submit FDF data	提交 FDF 数据
+	Submit PDF document	发送 PDF 文档
+	Submit XFDF data	提交 XFDF 数据
+	Subscript	Subscript
+	Suggest edits	建议修改
+	Suggestions	建议
+	sum (+)	求和 (+)
+	Summarize	摘要
+	Summarize comments	汇总注释
+	Summarize Options	汇总选项
+	Summarize with AI	用 AI 摘要
+	Superscript	Superscript
+	Surfaces	表面
+	Swap width and height	交换宽度和高度
+	Switch light / dark theme	切换浅色/深色主题
+	Switch page theme	切换页面主题
+	Switch the scanner off and on again, wait until it is ready, then choose Continue.	请关闭扫描仪后重新开机，并等待其就绪，然后选择“继续扫描”。
+	Switch the scanner off and on again, wait until it is ready, then choose Try again.	请关闭扫描仪后重新开机，并等待其就绪，然后选择“重试”。
+	Switch to List view to change the pages it takes.	切换到列表视图以更改要使用的页面。
+	Switch to two-page view first to show the cover page	请先切换到双页视图，才能显示封面页
+	System default	系统默认
+	System font	系统字体
+	System print dialog…	系统打印对话框…
+	Tab order	Tab 顺序
+	Tab order by columns	按列 Tab 顺序
+	Tab order by rows	按行 Tab 顺序
+	Tab order is consistent with structure order	Tab 顺序与结构顺序一致
+	Tab order: by columns	按列 Tab 顺序
+	Tab order: by document structure	按文档结构 Tab 顺序
+	Tab order: by rows	按行 Tab 顺序
+	Tab order: move a field with its arrows.	Tab 顺序：用箭头移动字段。
+	Tab: the next target under the pointer	Tab：指针下的下一个目标
+	Table cells belong in a row. Fix the table's tags.	表格单元格应位于行内。请修复表格标记。
+	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	表格变为单元格；数字、金额、百分比和日期变为 Excel 可以计算的值，显示与页面相同。
+	Tables must contain the same number of columns in each row and rows in each column	表格每行必须包含相同数量的列，每列必须包含相同数量的行
+	Tables must have a summary	表格必须有摘要
+	Tables should have headers	表格应有表头
+	Tag annotation	标记注释
+	Tag content as {type}	将内容标记为 {type}
+	Tag form fields	标记表单字段
+	Tag type	标签类型
+	Tagged annotations	标记的注释
+	Tagged content	标记的内容
+	Tagged form fields	标记的表单域
+	Tagged multimedia	标记的多媒体
+	Tagged PDF	标记的 PDF
+	Tags	标签
+	Tags give the document a logical structure that assistive technology follows. Tag the document (Automatically tag PDF).	标记为文档提供辅助技术遵循的逻辑结构。请标记文档（自动标记 PDF）。
+	Tags panel	标签面板
+	Take a snapshot	拍摄快照
+	Take this paper size off the list	从列表中删除此纸张尺寸
+	Task	任务
+	Test voice	测试语音
+	Text (plain)	纯文本
+	Text alignment:	文本对齐：
+	Text and added items can't be deleted with this selection.	无法随此选区删除文本和添加的项目。
+	Text box	文本框
+	Text Color:	文本颜色：
+	Text direction	文字方向
+	Text editing line	文本编辑行
+	Text extends outside the frame.	文本超出边框。
+	Text field	文本字段
+	Text Field Properties	文本字段属性
+	Text Field Table	文本字段表格
+	Text field table	文本字段表格
+	Text height (points)	文字高度（点）
+	Text in images isn't found; recognise text (OCR) first.	图像中的文本无法找到；请先识别文本（OCR）。
+	Text is compared word by word; the differences are shown on the new file.	逐词比较文本；差异显示在新文件上。
+	Text language is specified	已指定文本语言
+	Text must contrast enough with its background for people with low vision. Check the colours by eye or with a contrast tool.	文本与背景的对比度必须足够，以便低视力人士阅读。请目视或使用对比度工具检查颜色。
+	Text only, keep images	仅文字,保留图片
+	Text opacity	文本不透明度
+	Text recognition cancelled. {summary}	已取消文字识别。{summary}
+	Text recognition is already running	文本识别已在运行
+	Text recognition isn't installed: its model files are missing. Reinstall CivilOps PDF, or set PRINTCRAFT_MODELS to the folder that holds them.	未安装文本识别：缺少模型文件。请重新安装 CivilOps PDF，或将 PRINTCRAFT_MODELS 设置为包含这些文件的文件夹。
+	Text rendering	文本渲染
+	Text style	文字样式
+	Text to find	要查找的文本
+	Text to insert	要插入的文本
+	Text to place	要放置的文本
+	Text used as a clipping path cannot be moved with this selection.	无法随此选区移动用作剪切路径的文本。
+	Text, marks and signatures become part of the page. Other comments stay editable.	文字、标记和签名会成为页面内容。其他注释仍可编辑。
+	TH and TD	TH 和 TD
+	TH and TD must be children of TR	TH 和 TD 必须是 TR 的子级
+	Thai and Arabic use regular fallback fonts when available.	泰语和阿拉伯语使用可用的常规样式备用字体。
+	That didn't work: an internal error stopped it ({m}). Your documents are unchanged.	出错了：内部错误中断了操作（{m}）。文档未更改。
+	That is the source file; choose another destination	这是源文件；请选择其他保存位置
+	That isn't a scanner address	这不是扫描仪地址
+	That length can't be right for this line: check the unit.	这个长度不可能与这条线相符：请检查单位。
+	The answer proposes formatting changes.	回答中包含格式修改建议。
+	The answer stopped unexpectedly.	回答意外中断。
+	The API key would be sent unencrypted to this address. Use https:// unless the server is on a network you trust.	API 密钥将以未加密方式发送到此地址。除非服务器位于你信任的网络中，否则请使用 https://。
+	The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.	稿台一次扫描一页。先扫正面，翻面后再扫背面。
+	The built-in engine (pure Rust)	内置引擎（纯 Rust）
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	计算顺序中有 {n} 个不计算任何内容的条目。“修正顺序”会将其删除。
+	the certificate authorities	证书颁发机构
+	the certificate expired on {date}	证书已于 {date} 过期
+	The check stopped unexpectedly.	检查意外停止。
+	The check was cancelled.	检查已取消。
+	The checker found 1 problem which may prevent the document from being fully accessible.	检查器发现 1 个问题，可能导致文档无法完全无障碍。
+	The checker found no problems in this document.	检查器在本文档中未发现问题。
+	The checker found {n} problems which may prevent the document from being fully accessible.	检查器发现 {n} 个问题，可能导致文档无法完全无障碍。
+	The clipboard has no image or text	剪贴板没有图像或文本
+	The clipboard holds no comments	剪贴板中没有注释
+	The comment being edited no longer exists, so its text was not saved.	正在编辑的注释已不存在，因此其文本未保存。
+	The copied comments are larger than this page; they were placed as they are	复制的注释比此页面大，已按原样放置
+	The copy to attach couldn't be written: {e}	无法写入要附加的副本：{e}
+	The desktop portal's file chooser isn't running ({packages}). Check it with systemctl --user status {first}, or log out and back in.	桌面门户的文件选择器未在运行（{packages}）。请使用 systemctl --user status {first} 检查，或注销后重新登录。
+	The device's digital ID isn't available any more; start signing again to list it.	设备的数字 ID 已不可用；请重新开始签名以列出它。
+	The display datum transformation is approximate.	显示坐标的基准转换为近似值。
+	The Dock shows it the next time CivilOps PDF opens.	下次打开 CivilOps PDF 时，程序坞将显示此图标。
+	The document changed while it was being signed, so the signature wasn't saved.	签名期间文档已更改，因此未保存签名。
+	The document changed while its margins were measured; nothing was cropped	测量页边距时文档已更改，未进行裁剪
+	The document changed while you were editing field properties.	编辑字段属性时文档已更改。
+	The document couldn't be prepared	无法准备文档
+	The document has additional actions (/AA)	文档包含附加动作（/AA）
+	The document has document-level JavaScript	文档包含文档级 JavaScript
+	The document has more objects than one check covers; the rest was not checked.	文档的对象数超过单次检查的上限；其余部分未检查。
+	the document has no form fields	文档没有表单字段
+	the document has no page tree	文档没有页面树
+	the document has no tags	文档没有标签
+	The document has no XMP metadata	文档没有 XMP 元数据
+	The document is encrypted	文档已加密
+	The document is no longer open.	文档已不再打开。
+	the document is protected by a password	文档受密码保护
+	The document now conforms to {level}; save it to keep the changes	文档现已符合{level}；保存以保留更改
+	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	打开文档无需密码；更改限制需要此密码。保存时应用。
+	The document was changed in another window. Check your text, then apply it again.	文档已在另一个窗口中被更改。请检查您的文字，然后再次应用。
+	The document wasn't signed: {e}	文档未签名：{e}
+	The document will no longer be certified.	文档将不再处于认证状态。
+	The document's security settings don't allow copying text and images	文档安全设置不允许复制文本和图像
+	The document's security settings don't allow filling in form fields	文档安全设置不允许填写表单域
+	The document's security settings don't allow printing	文档安全设置不允许打印
+	The document's security settings don't allow this change	文档安全设置不允许此更改
+	The draft contains PDF attachments. Open it with a mail app that supports .eml drafts; in Outlook.com, create a message and attach the saved PDFs yourself.	草稿包含 PDF 附件。请用支持 .eml 草稿的邮件应用打开；在 Outlook.com 中，请创建邮件并手动附加已保存的 PDF。
+	The driver may accept a turn and leave the picture as it was.	驱动可能接受旋转设置，却仍按原样返回图像。
+	The driver reports a paper jam.	驱动报告卡纸。
+	The driver reports a sheet waiting. The bit can stay on after the tray is empty.	驱动报告有纸等待。纸盒空了后该位仍可能保持。
+	The existing action will be preserved.	将保留现有操作。
+	The extracted pages aren't protected: the original's security settings don't carry over.	提取的页面不受保护：原文档的安全设置不会带过去。
+	The feeder ran out of paper.	进纸器中的纸用完了。
+	The feeder took more than one sheet.	进纸器一次送入了多张纸。
+	The field properties could not be changed.	无法更改字段属性。
+	The field properties dialog is no longer open.	字段属性对话框已不再打开。
+	The field {name} no longer exists.	字段 {name} 已不存在。
+	The fields this signature locked ({names}) can be changed again.	此签名锁定的字段（{names}）将可以再次更改。
+	the font can't draw it	字体无法显示
+	The font must include Latin letters and numbers for interface controls.	字体必须包含界面控件需要的拉丁字母和数字。
+	The fonts CivilOps PDF writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	CivilOps PDF 写入时使用的字体无法显示“{c}”（{code}），因此它在所有 PDF 阅读器中都会显示为 ?。文本已保存。
+	The form asks to be submitted to {u}; CivilOps PDF doesn't send form data. Save the document to keep your entries.	该表单请求提交到{u}；CivilOps PDF 不发送表单数据。请保存文档以保留填写内容。
+	The form asks viewers to make appearances (NeedAppearances)	表单要求阅读器生成外观（NeedAppearances）
+	The form's purpose and its fields (names, types, tab order)	表单的用途及其字段（名称、类型、Tab 顺序）
+	The fronts already scanned are kept for the reverse-side pass.	已扫描的正面已保留，供扫描背面使用。
+	The historical model detects its supported scripts automatically; Japanese is not included.	历史文字模型会自动检测其支持的字体；不包含日语。
+	The image couldn't be used as an icon: {e}	无法将该图像用作图标：{e}
+	The image has been copied ({w} × {h} pixels)	图像已复制（{w} × {h} 像素）
+	The image has been copied as a {ext} file	图像已复制为 {ext} 文件
+	the image is empty	图像为空
+	The job was canceled	作业已取消
+	The key is in the macOS Keychain, which may ask to allow CivilOps PDF to use it.	密钥位于 macOS 钥匙串中，系统可能会询问是否允许 CivilOps PDF 使用它。
+	The key is in the Windows certificate store, which may ask to allow CivilOps PDF to use it.	密钥位于 Windows 证书存储中，系统可能会询问是否允许 CivilOps PDF 使用它。
+	The key is on the device, which may ask for its PIN itself.	密钥位于设备上，设备可能会自行要求输入 PIN。
+	The key is on the device, which signs once it has its PIN.	密钥位于设备上，提供 PIN 后设备即可签名。
+	The key is on {device}, which asks for approval itself (a PIN pad, or an app on your phone).	密钥位于 {device}，由设备自行请求批准（PIN 键盘，或手机上的应用）。
+	The Keychain's digital IDs couldn't be listed: {e}	无法列出钥匙串中的数字 ID：{e}
+	The labels are in English: the signature's font can't draw them in this language.	签名所用的字体无法显示此语言的标签，因此标签使用英文。
+	The linked PDF opened, but its named destination was not applied.	已打开链接的 PDF，但未应用其命名目标。
+	The linked PDF opened, but its page destination was out of range.	已打开链接的 PDF，但其页面目标超出范围。
+	The measurement list reached its safety limit.	测量列表已达到安全上限。
+	The model viewport is too narrow to display.	模型视口太窄，无法显示。
+	The module's tokens hold no digital ID CivilOps PDF can sign with.	该模块的令牌中没有 CivilOps PDF 可用于签名的数字 ID。
+	the name is not a plain file name	名称不是单纯的文件名
+	The new file has no signature left and no earlier revision holding it.	新文件中已没有任何签名，也没有保存它的早期修订。
+	The newest {n} of {total} PDFs	共 {total} 个 PDF 中最新的 {n} 个
+	The objects are already aligned.	对象已经对齐。
+	The operation failed.	操作失败。
+	The order saved in the PDF needs tidying	PDF 中保存的顺序需要整理
+	The originals are not changed. A file of the same name in the output folder is kept, and the new one gets a number.	原文件不会被更改。输出文件夹中已有的同名文件会被保留，新文件会加上编号。
+	The other signatures ({names}) will report that the document changed after they signed. Check them again: nothing says they stay valid.	其他签名（{names}）将报告文档在签名后已被更改。请重新验证它们：无法保证它们仍然有效。
+	The output folder already holds files of these names; nothing was written: {list}	输出文件夹中已存在这些名称的文件；未写入任何内容：{list}
+	The output folder can't be one of the folders being read, or contain one.	输出文件夹不能是正在读取的文件夹之一，也不能包含其中之一。
+	The page could not be separated: {error}	无法对此页分色：{error}
+	The page has changed; select the image again	页面已更改；请重新选择图像
+	The page was read again; its words were replaced (undo in the panel)	此页已重新读取；其词语已替换（可在面板中撤销）
+	The page's words were applied as one undoable step ({n} words)	此页的词语已作为一步可撤销的修改应用（{n} 个词）
+	The page's words were cleared (undo in the panel)	此页的词语已清除（可在面板中撤销）
+	The pages already scanned were kept in the document.	已扫描的页面已保留在文档中。
+	the paragraph can't be rewritten	无法重写该段落
+	the password is incorrect	密码不正确
+	The password is incorrect.	密码不正确。
+	The password is only used to read the file; it isn't saved.	密码仅用于读取文件，不会被保存。
+	The passwords and the restrictions are removed when you save.	保存时会移除密码和限制。
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF 文本字体无法显示“{c}”（{code}）。请选择受支持的文本。
+	The PIN goes only to the card; CivilOps PDF doesn't keep it.	PIN 只发送到卡上；CivilOps PDF 不会保存它。
+	The PIN is incorrect.	PIN 不正确。
+	The PKCS #11 tokens' digital IDs couldn't be listed: {e}	无法列出 PKCS #11 令牌的数字 ID：{e}
+	The preview could not be shown.	无法显示预览。
+	The print job stopped unexpectedly	打印作业意外停止
+	The printer accepts none of the formats this document can be sent in	打印机不接受此文档可发送的任何格式
+	The printer address was refused	打印机地址被拒绝
+	The printer doesn't support this setting	打印机不支持此设置
+	The printer driver's own settings for this print: paper tray, paper type, finishing and more.	此次打印的打印机驱动程序专属设置：纸盒、纸张类型、装订整理等。
+	The printer is printing it	打印机正在打印
+	The printer may have received the document. Check the printer before sending again.	打印机可能已收到文档。再次发送之前，请先检查打印机。
+	The printer no longer lists the job; it most likely finished	打印机不再列出该作业；很可能已完成
+	The printer paused the job; it needs attention	打印机已暂停作业；需要处理
+	The printer refused the request	打印机拒绝了请求
+	The printer stopped the job	打印机已停止作业
+	The printer's reply couldn't be understood	无法理解打印机的回复
+	The provider's page didn't come back in time. Try again.	提供商页面未及时返回。请重试。
+	The raw text was truncated to what fits.	原始文本已被截断。
+	The re-read found no text; the existing words are unchanged	重新读取未发现文本；现有词语保持不变
+	The redaction does not fit page {page}; no pages were marked.	密文标记不适合第 {page} 页；未标记任何页面。
+	The redirect URI must be http://127.0.0.1 or http://localhost with a port.	重定向 URI 必须是带端口的 http://127.0.0.1 或 http://localhost。
+	The region was read again; its words were replaced (undo in the panel)	此区域已重新读取；其词语已替换（可在面板中撤销）
+	The release has ambiguous packages. Choose a package on the official release page.	此版本有多个兼容的软件包。请在官方发布页面选择一个软件包。
+	The release is not a published stable update. Try again later.	此版本不是已发布的稳定更新。请稍后重试。
+	The replacement file doesn't have that many pages.	替换文件没有那么多页面。
+	the request stopped without an answer	请求未获响应就停止了
+	The rest are left out of this list.	The rest are left out of this list.
+	The restrictions apply to recipients without “All permissions”. It's applied when you save.	限制适用于没有“所有权限”的收件人。保存时应用。
+	The reverse sides already scanned are kept.	已扫描的背面已保留。
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	行太矮：请增加区域高度，或减少行数或行间距
+	The same password is tried on each file.	将对每个文件尝试同一密码。
+	The same printer is also available over the network.	同一台打印机也可通过网络使用。
+	The same printer is also available over USB.	同一台打印机也可通过 USB 使用。
+	The scan could not be started.	无法开始扫描。
+	The scan produced no pages.	扫描未产生页面。
+	The scan was cancelled at the scanner.	扫描已在扫描仪上取消。
+	The scan was interrupted.	扫描被中断了。
+	The scanner has a paper jam.	扫描仪卡纸了。
+	The scanner is busy, or the feeder has no paper.	扫描仪正忙，或进纸器中没有纸张。
+	The scanner is busy.	扫描仪正忙。
+	The scanner is offline or needs attention.	扫描仪已脱机或需要处理。
+	The scanner list could not be refreshed.	无法刷新扫描仪列表。
+	The scanner needs attention.	扫描仪需要处理。
+	The scanner reported a lamp or device error.	扫描仪报告了灯管或设备错误。
+	The scanner reported a paper problem (a jam or several sheets fed together).	扫描仪报告了纸张问题（卡纸或多张纸一同送入）。
+	The screen's own pixels per inch. Calibrate with a ruler so that Actual size (100%) shows pages at their real size.	屏幕实际的每英寸像素数。用尺子校准后，实际大小 (100%) 会按真实尺寸显示页面。
+	The search stopped unexpectedly.	The search stopped unexpectedly.
+	The searchable copies are written here under the source names	可检索副本以源文件名写入此文件夹
+	The selected area has been copied ({w} × {h} pixels)	所选区域已复制（{w} × {h} 像素）
+	The selected area is no longer on a page of this document.	所选区域已不在此文档的任何页面上。
+	The selected fields could not be found. Select them again.	找不到所选字段。请重新选择。
+	The selected redaction is unavailable or invalid.	所选密文标记不可用或无效。
+	The selected scale could not be read.	无法读取所选比例。
+	The selected word is gone; choose another	所选词语已不存在；请另选一个
+	The selection changed. Select the signature again.	选择已更改。请重新选择签名。
+	The session with {provider} has ended. Sign in again from Configure a Digital ID.	与 {provider} 的会话已结束。请在“配置数字 ID”中重新登录。
+	The shared folder:	共享文件夹：
+	The signature font can't draw “{c}” ({code}). Type it in Latin, Cyrillic or Greek letters, or use Draw or Image.	签名字体无法显示“{c}”（{code}）。请使用拉丁、西里尔或希腊字母输入，或改用“绘制”或“图像”。
+	The signature was not removed: {e}	未移除签名：{e}
+	The signature will be invisible.	签名将不可见。
+	The signature {names} locks this field.	签名 {names} 锁定了此字段。
+	the signing service is unreachable ({reason})	无法连接签名服务（{reason}）
+	The signing service lists no certificate for this account.	签名服务未列出此账户的任何证书。
+	the signing service refused to list the certificates	签名服务拒绝列出证书
+	the signing service refused to send the OTP	签名服务拒绝发送 OTP
+	the signing service refused to sign	签名服务拒绝签名
+	the signing service rejected the OTP (it may have expired)	签名服务拒绝了 OTP（可能已过期）
+	the signing service rejected the PIN	签名服务拒绝了 PIN
+	the signing service rejected the PIN or the OTP (the OTP may have expired)	签名服务拒绝了 PIN 或 OTP（OTP 可能已过期）
+	the signing service rejected the user name or password	签名服务拒绝了用户名或密码
+	The smart card's digital IDs couldn't be listed: {e}	无法列出智能卡的数字 ID：{e}
+	The split files aren't protected: the original's security settings don't carry over.	拆分后的文件不受保护：原文档的安全设置不会带过去。
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	标准字体无法显示“{c}”（{code}）。目前只能添加西欧字符作为文本。
+	The standard it must meet and where the file goes	需要满足的标准，以及文件的去向
+	the tesseract engine is not available in the web build	网页版不提供 tesseract 引擎
+	the tesseract program was not found (install it, or add it to the PATH)	未找到 tesseract 程序（请安装，或将其加入 PATH）
+	The tesseract program, run as an external process	tesseract 程序，作为外部进程运行
+	The text is the same	文本相同
+	the text recognition models are not installed (reinstall CivilOps PDF, or set PRINTCRAFT_MODELS to the folder that holds them)	尚未安装文本识别模型（请重新安装 CivilOps PDF，或将 PRINTCRAFT_MODELS 设置为包含这些模型的文件夹）
+	The text reflows to the reader's screen and font size, in chapters, with the bookmarks as the contents.	文本随读者的屏幕和字号重排，分为章节，书签作为目录。
+	The title in the metadata and the document information differ	元数据与文档信息中的标题不一致
+	the title must not be empty	标题不能为空
+	The token has its own PIN pad or biometric reader; it will ask for the PIN itself.	该令牌自带 PIN 键盘或生物识别读取器,会自行要求输入 PIN。
+	The trim box is kept where it is, so the printed page cuts the same.	裁切框保持不变，打印页面的裁切位置相同。
+	The value is shown as typed.	按输入显示值。
+	the website did not confirm that it stored the file	网站未确认已存储该文件
+	The window should show a meaningful title rather than the file name. Set a title and Initial View > Show: Document Title.	窗口应显示有意义的标题而非文件名。请设置标题，并在“初始视图”>“显示”中选择“文档标题”。
+	their appearances as well as the page	连同其外观和页面
+	There are no other pages in that range.	该范围内没有其他页面。
+	there are no pages to print	没有可打印的页面
+	There are no redaction marks (mark text, areas or pages first)	没有密文标记（请先标记文本、区域或页面）
+	There are no redaction marks to apply	没有可应用的密文标记
+	there are no redaction marks to apply	没有可应用的密文标记
+	There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it.	此页面上没有可选择的文本。如果这是扫描件或文本图片，请识别其中的文本以便选择。
+	These files can't be read, so they won't be in the combined PDF:	这些文件无法读取，因此不会包含在合并后的 PDF 中：
+	These measurements differ by more than 2%: check them.	这些测量值相差超过 2%：请检查。
+	These objects could not be aligned.	无法对齐这些对象。
+	These objects could not be moved. Select them again and try a smaller move.	无法移动这些对象。请重新选择并尝试较小的移动距离。
+	Thick	粗
+	Thin	细
+	Thinking… {s}s	思考中… {s} 秒
+	This area has too many overlapping paths; intersection snapping is limited.	此区域有太多重叠路径；交点吸附受到限制。
+	This cannot be undone: applying redactions clears the undo history.	此操作无法撤销：应用密文标记会清除撤销历史。
+	This certificate is in your list of trusted certificates.	此证书位于受信任证书列表中。
+	This certificate is not trusted. Signatures made with it show an unknown identity.	此证书不受信任。使用它制作的签名显示未知身份。
+	This certificate is trusted through a certificate above it in the chain.	此证书通过链中上方的证书受到信任。
+	This comment's appearance can't be changed yet.	此注释的外观尚无法更改。
+	This compatibility level supports only plain ASCII passwords.	此兼容性级别仅支持纯 ASCII 密码。
+	This dialog shows the details of a certificate and its chain.	此对话框显示证书及其链的详细信息。
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	此文档要求以全屏模式打开：页面充满屏幕，不显示其他内容。随时按 Esc 即可退出。
+	This document can't be changed: {names}	无法更改此文档：{names}
+	This document can't be checked: it couldn't be read for editing	无法检查本文档：无法读取进行编辑
+	This document contains {n} interactive form fields.	本文档包含 {n} 个交互式表单域。
+	This document does not allow adding form fields	此文档不允许添加表单字段
+	This document does not allow measurement edits.	此文档不允许编辑测量。
+	This document has no attachments.	本文档没有附件。
+	This document has no comments to flatten	本文档没有可拼合的注释
+	This document has no document-level scripts.	本文档没有文档级脚本。
+	This document has no editable structure tags.	此文档没有可编辑的结构标签。
+	This document has no form fields to flatten	本文档没有可拼合的表单域
+	This document has no form fields you can fill in	本文档没有可填写的表单域
+	This document has no form fields.	本文档没有表单域。
+	This document has no layers.	本文档没有图层。
+	This document has no pages.	本文档没有页面。
+	This document has no restrictions to lift	此文档没有可解除的限制
+	This document has no signature that can be removed.	此文档中没有可移除的签名。
+	This document has no signatures.	本文档没有签名。
+	This document has no tagged figures.	本文档没有带标记的图形。
+	This document has no XMP metadata.	此文档没有 XMP 元数据。
+	This document has no {kind} to change	本文档没有可更改的{kind}
+	This document has unsaved changes. They are saved first, then the file is renamed.	此文档有未保存的更改。会先保存，然后再重命名文件。
+	This document hasn't been checked yet.	本文档尚未检查。
+	This document hides the toolbars and panels. Press {key} to show them.	此文档隐藏了工具栏和面板。按 {key} 可以显示。
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	此文档已进行数字签名。清理会重写整个文件，从而使签名失效，因此只能在删除签名后进行。
+	This document is not inside a CAdES envelope	此文档不在 CAdES 签名信封内。
+	This document is secured. Some changes are restricted by its security settings.	本文档已加密。其安全设置限制了部分更改。
+	This document is signed. A change adds a new version: the signatures stay valid for the version they signed, and viewers will show that the document was changed after signing.	此文档已签名。更改会添加一个新版本：签名对其签署的版本仍然有效，但阅读器会显示文档在签名后被更改过。
+	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	此文档已签名：重写文件会使签名失效（请改用增量保存）
+	This document is trying to open a local file:	此文档正尝试打开本地文件：
+	This document isn't in a folder yet: save it first	此文档尚未保存在文件夹中：请先保存
+	This document isn't password-protected	本文档未受密码保护
+	This drawing exceeds the snapping limit; only the first paths are used.	此图面超过吸附上限；仅使用最前面的路径。
+	This field is locked. Unlock it to change its properties.	此字段已锁定。解锁后可更改其属性。
+	This field's font can't draw “{c}” ({code}), so CivilOps PDF shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	此字段的字体无法显示“{c}”（{code}），CivilOps PDF 会在该处显示 ?。值已保存，其他 PDF 阅读器会根据该值重新绘制此字段。
+	This file can't be used as the logo: it's larger than {max} MB.	此文件不能用作徽标：它大于 {max} MB。
+	This file can't be used as the logo: its path isn't valid UTF-8, so it couldn't be saved with the settings.	此文件不能用作徽标：其路径不是有效的 UTF-8，因此无法随设置一起保存。
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	此文件已在磁盘上更改。请重新加载以查看新版本；未保存的更改将会丢失。
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	此文件已在磁盘上更改。“重新加载”显示新版本并放弃未保存的更改；“保存”则用此版本替换它。
+	This file is already as small as it can be made ({size}). No copy was saved.	此文件已经是最小的了（{size}）。未保存副本。
+	this file isn't XFDF, FDF, XML or text form data	此文件不是 XFDF、FDF、XML 或文本格式的表单数据
+	This file was damaged and has been repaired. Saving keeps the repaired version.	此文件已损坏并已修复。保存将保留修复后的版本。
+	This folder is too large or too deep to search all of it.	This folder is too large or too deep to search all of it.
+	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	此文件夹当前不可用。它可能已被移动，或其所在驱动器或云同步处于离线状态。
+	This font file cannot be used. Choose a readable TTF, OTF or TTC file.	无法使用此字体文件。请选择可读取的 TTF、OTF 或 TTC 文件。
+	This form also contains XFA data, which CivilOps PDF doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	此表单还包含 XFA 数据，CivilOps PDF 暂不读取。您可以填写字段，但 Acrobat 可能显示 XFA 值。
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	此表单的脚本已关闭，因为其中一个脚本运行时间过长。重新打开文档即可再次运行。
+	This form's submission format or field selection is not supported yet.	尚不支持此表单的提交格式或字段选择。
+	This installation is owned by a Debian package. Use your system software manager to update CivilOps PDF.	此安装由 Debian 软件包管理。请使用系统软件管理器更新 CivilOps PDF。
+	This installation is owned by an RPM package. Use your system software manager to update CivilOps PDF.	此安装由 RPM 软件包管理。请使用系统软件管理器更新 CivilOps PDF。
+	This is a dynamic XFA form, which CivilOps PDF can't display yet. What you see is the file's placeholder page.	这是动态 XFA 表单，CivilOps PDF 暂无法显示。您看到的是文件的占位页面。
+	This is a one-time download from GitHub. Afterward, form detection works offline. Your PDFs stay on this device.	只需从 GitHub 下载一次。之后可离线检测表单。您的 PDF 始终保留在此设备上。
+	This is a picture of a signature, not a digital signature: only the mark on the page goes. The original file is kept as it is.	这是签名的图像，不是数字签名：只会移除页面上的标记。原始文件保持不变。
+	This is the first PDF in its folder	这是所在文件夹中的第一个 PDF
+	This is the last PDF in its folder	这是所在文件夹中的最后一个 PDF
+	This is the last try before the token's PIN locks. A wrong PIN here may lock it permanently.	这是令牌 PIN 锁定前的最后一次尝试。此处输入错误的 PIN 可能会使其永久锁定。
+	This key is used for “{what}” and can't be changed.	此键用于“{what}”，无法更改。
+	This key moves around the interface on its own. Add Ctrl to use it.	此键单独使用时用于在界面中移动。添加 Ctrl 后即可使用。
+	This large file is being read from disk to save memory, so it can't be edited, filled in or signed yet.	This large file is being read from disk to save memory, so it can't be edited, filled in or signed yet.
+	This machine: {ram} GB RAM, {disk} GB free	这台机器：{ram} GB 内存、{disk} GB 可用
+	This measurement needs at least {n} points.	此测量至少需要 {n} 个点。
+	This page contains objects that cannot be selected together.	此页面包含无法一起选择的对象。
+	This page couldn't be displayed.\n{e}	无法显示此页面。\n{e}
+	This page has an opaque background of its own, so the background is blended with its content.	此页面有自己的不透明背景，因此背景会与其内容混合。
+	This page has an opaque background of its own, which hides anything behind it. Choose Blend with page content.	此页面有自己的不透明背景，会遮住其后的所有内容。请选择“与页面内容混合”。
+	This page has an opaque background of its own, which hides the image behind it.	此页面有自己的不透明背景，会遮住其后的图像。
+	This page has no 3D models.	此页没有3D模型。
+	This PDF uses the unsupported {s} action.	此 PDF 使用了不支持的 {s} 操作。
+	This point could not be moved. Try a smaller move.	无法移动此点。请尝试较小的移动。
+	This printer does not take a copies setting.	此打印机不支持份数设置。
+	This printer does not take a quality setting.	此打印机不支持质量设置。
+	This printer does not take a resolution setting.	此打印机不支持分辨率设置。
+	This printer does not take an orientation setting.	此打印机不支持方向设置。
+	This printer offers no settings of its own.	此打印机没有专属设置。
+	This printer only prints in black and white.	此打印机仅支持黑白打印。
+	This printer only prints one-sided.	此打印机仅支持单面打印。
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	此打印机的驱动程序不接受其他程序的双面打印设置，因此使用其自身设置。更改位置：属性…
+	this signature can't be removed on its own	此签名无法单独移除
+	this signing service can't be used: it needs OAuth sign-in in a browser, which CivilOps PDF doesn't support yet	无法使用此签名服务：它需要在浏览器中进行 OAuth 登录，而 CivilOps PDF 尚不支持
+	This tab is already first	此标签页已是第一个
+	This tab is already last	此标签页已是最后一个
+	This token's PIN is locked. Signing will not work until it is unlocked.	此令牌的 PIN 已锁定。解锁前无法进行签名。
+	This token's PIN is low on tries remaining.	此令牌的 PIN 剩余尝试次数不多。
+	This web address mixes letters from different alphabets, a common way to imitate another site's name.	此网址混用了不同字母表的字母，这是仿冒其他网站名称的常见手法。
+	This web address uses letters from another alphabet, which can look like familiar ones.	此网址使用了其他字母表的字母，它们可能看起来像熟悉的字母。
+	Thousands separator	千位分隔符
+	Thumbnail size	缩略图大小
+	Tile scale:	平铺比例：
+	Timed responses	限时响应
+	Timestamp	时间戳
+	Timestamp server	时间戳服务器
+	Timestamps and revocation information need the desktop app. Turn them off in Preferences ▸ Signatures to sign here.	时间戳和吊销信息需要桌面应用。要在此处签名，请在 首选项 → 签名 中将其关闭。
+	to	到
+	To change locked fields, also set Locked to No.	要更改锁定的字段，还需将“锁定”设为“否”。
+	To print this large file, load all of it first with Load to edit.	To print this large file, load all of it first with Load to edit.
+	to {n}	到 {n}
+	To:	至：
+	Today	今天
+	Today: {date}	今天：{date}
+	Toggle fit page / fit width	切换适合页面/适合宽度
+	Token  ·  	令牌  ·  
+	Token PIN	令牌 PIN
+	Tokens and smart cards sign through a PKCS #11 module. Only add modules you trust: a module runs its own code.	令牌和智能卡通过 PKCS #11 模块签名。只添加您信任的模块：模块会运行它自己的代码。
+	Too early	过早
+	Too many copies: increase the spacing or the size.	副本过多：请增大间距或大小。
+	Too many spot inks to separate: {names}	专色过多，无法分色：{names}
+	Too many windows are open	打开的窗口过多
+	Took too long to read	Took too long to read
+	Tools panel side	工具面板位置
+	Tools shown in All tools	在“所有工具”中显示的工具
+	Tooltip	提示
+	Tooltip:	提示：
+	Top left	左上
+	Top right	右上
+	Top-level bookmarks ({n})	顶层书签（{n} 个）
+	Total area coverage	总油墨覆盖率
+	Touch and pen	触控和笔
+	TR must be a child of Table, THead, TBody, or TFoot	TR 必须是 Table、THead、TBody 或 TFoot 的子级
+	Transfer format: {format}.	传输格式：{format}。
+	Transform image	变换图像
+	Translate with AI	用 AI 翻译
+	Trim marks	裁切标记
+	Trim the picture with its handles; Enter or Done applies	用控制柄裁剪图片;按 Enter 或“完成”应用
+	Truncated	截断
+	Trust	信任
+	Try again	重试
+	Try the form as people filling it in will see it	以填写者视角试用表单
+	Turn JPEG XL images back into the JPEGs they were made from	将 JPEG XL 图像还原为生成它们的 JPEG
+	Turn off continuous scrolling	关闭连续滚动
+	Turn on continuous scrolling	开启连续滚动
+	Turn upside down (180°)	上下颠倒 (180°)
+	Turned left	向左旋转
+	Turned off because your administrator's policy couldn't be read.	无法读取管理员的策略，因此已关闭。
+	Turned off by your administrator.	已被管理员关闭。
+	Turns pages scanned sideways or upside down upright before reading	读取前把横放或倒放的扫描页转正
+	two cells would both be named {name}	两个单元格的名称都会是 {name}
+	Two-page view	双页视图
+	Two-sided:	双面：
+	Two-Up (Cover Page)	双页（封面页）
+	Two-Up (Facing)	双页（对页）
+	Two-Up Continuous (Cover Page)	双页连续（封面页）
+	Two-Up Continuous (Facing)	双页连续（对页）
+	Type 3 font glyphs	Type 3 字体字形
+	Type a password.	请输入密码。
+	Type Password	输入密码
+	Type text	输入文本
+	Type the web address.	输入网址。
+	Type your {what}.	请输入您的{what}。
+	Uncertain orientations are left unchanged. Deskew fits the full image inside the page.	方向不确定时保持不变。倾斜校正会将整个图像保留在页面内。
+	Unchecked	未勾选
+	Unchecked reads	未检查的读取
+	Underline text	下划线文本
+	Undid {label}	已撤销{label}
+	Undo ({key})	撤销 ({key})
+	Undo last point	撤销最后一个点
+	Undo the last review change (Ctrl+Z)	撤销上一次校对修改（Ctrl+Z）
+	Ungroup	取消组合
+	Ungroup artwork	取消组合图稿
+	Unit	单位
+	Unit before value	单位显示在数值前
+	Unit display format	单位显示格式
+	Unit prefix	单位前缀
+	Unit suffix	单位后缀
+	Units per model unit	每个模型单位的单位数
+	Units run from largest to smallest. Later factors convert the remainder.	单位从大到小排列，后续系数换算余数。
+	Unknown author	未知作者
+	unknown signer	未知签名人
+	Unlock	解锁
+	Unlock comment	解锁注释
+	Unlock {name}	解锁 {name}
+	Unlock {n} files	解锁 {n} 个文件
+	Unlocked {n} of {m} files	已解锁 {m} 个文件中的 {n} 个
+	Unlocked: the combined file won't be password-protected	已解锁：合并后的文件将不受密码保护
+	Unlock…	解锁…
+	Unpin	取消固定
+	Unpin from Home	从主页取消固定
+	Unpin tool	取消固定工具
+	Unpin {folder}	取消固定 {folder}
+	Unpinned {tool} from Home	已从主页取消固定 {tool}
+	Unplaced	未放置
+	unreviewed	未校对
+	Unsaved changes to this document are saved in the new file too.	此文档中未保存的更改也会保存到新文件中。
+	Unsupported measurements	不支持的测量
+	Untagged content	未标记的内容
+	Update background	更新背景
+	Update background…	更新背景…
+	Update header & footer	更新页眉和页脚
+	Update header & footer…	更新页眉和页脚…
+	Update measurement	更新测量
+	Update watermark	更新水印
+	Update watermark…	更新水印…
+	Updating 3D view…	正在更新3D视图…
+	Upside down	上下颠倒
+	URL to submit to	要提交到的 URL
+	US Letter	美式信纸
+	US survey feet	美国测量英尺
+	USB	USB
+	Use 72 DPI (one point per pixel)	使用 72 DPI（每像素 1 点）
+	Use a certificate	使用证书
+	Use a cloud certificate (ICP-Brasil: BirdID, VIDaaS, NeoID, SafeID…)	使用云证书（ICP-Brasil：BirdID、VIDaaS、NeoID、SafeID…）
+	Use a Digital ID from a device (smart card, USB token or cloud certificate)	使用设备中的数字 ID（智能卡、USB 令牌或云证书）
+	Use a Digital ID from a file	使用文件中的数字 ID
+	Use a signature creation device (PKCS #11 module: smart card, token, CloudSigner for mSzafir)	使用签名创建设备（PKCS #11 模块：智能卡、令牌、用于 mSzafir 的 CloudSigner）
+	Use a smart card or token	使用智能卡或令牌
+	Use basic detection	使用基本检测
+	Use Current Properties as New Defaults	将当前属性用作新默认值
+	Use custom DPI	使用自定义 DPI
+	Use default font	恢复默认字体
+	Use each image's embedded DPI; use 72 DPI when it is absent.	使用各图像内嵌的 DPI；若未指定，则使用 72 DPI。
+	Use Flate to encode streams that are not encoded	使用 Flate 编码未编码的流
+	Use guided actions	使用引导操作
+	Use image resolution	使用图像分辨率
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	当打印机漏印文字、渐变或透明效果时使用。打印结果不再是可搜索的文字；配合灰度打印时图像为灰色。
+	Use JavaScript	使用 JavaScript
+	Use now	立即使用
+	Use overlay text	使用覆盖文本
+	Use print production	印刷制作
+	Use projected coordinate matrix	使用投影坐标矩阵
+	Use system setting	跟随系统设置
+	Use system title bar	使用系统标题栏
+	Use the chosen engine's reading alone	只使用所选引擎的读取结果
+	Use the default	使用默认图标
+	Use this size for saved initials	对已保存的姓名首字母使用此尺寸
+	Use this size for saved signature	对已保存的签名使用此尺寸
+	Use WKT definition	使用 WKT 定义
+	Use your system software manager to update CivilOps PDF.	请使用系统软件管理器更新 CivilOps PDF。
+	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	PDF 未指定布局或缩放时使用。连续滚动时页面不会逐页吸附。
+	Used when opening PDFs. An explicit launch or control mode takes precedence for the session.	用于打开 PDF 时。如果启动参数或控制通道明确指定了模式，则本次会话优先使用该模式。
+	User Interface Options	用户界面选项
+	User password	用户密码
+	Valid	有效期
+	Valid for 5 years, for digital signatures. Self-signed IDs are usually not trusted by others.	有效期 5 年，用于数字签名。自签名 ID 通常不受他人信任。
+	Valid from	有效期自
+	Valid to	有效期至
+	Validate	验证
+	Validate all	全部验证
+	Validate all signatures	验证所有签名
+	Validate structure	验证结构
+	Validate structure…	验证结构…
+	validated: invalid	验证结果：无效
+	validated: valid	验证结果：有效
+	validated: validity unknown	验证结果：有效性未知
+	Validity ends	有效期结束
+	Validity starts	有效期开始
+	Validity unknown	有效性未知
+	Value is not calculated	不计算值
+	Value is the	值为
+	Verified	已校对
+	verified	已校对
+	VERIFIED %	已校对 %
+	Verify	验证
+	Verify PDF/UA	验证 PDF/UA
+	Verify PDF/X	验证 PDF/X
+	Verify to see what the document needs.	验证以查看文档需要什么。
+	Version {v}	版本{v}
+	Vertex	顶点
+	Vertex snapping	吸附顶点
+	Vertical coordinates	纵向坐标
+	Vertical resolution	垂直分辨率
+	Vertical reversed	垂直反转
+	Vertical text cannot be moved with this selection.	无法随此选区移动竖排文本。
+	Vertical to horizontal conversion	纵向到横向换算
+	Vertically	垂直分布
+	Vertices	顶点
+	Video, sound and rich media must be tagged to be announced. Tag the multimedia annotations.	视频、声音和富媒体必须标记才能被播报。请标记多媒体注释。
+	View less	收起
+	View more	查看更多
+	View release page…	查看发布页面…
+	View revision {n}	查看修订版本{n}
+	View signed version	查看已签名版本
+	Viewing	查看
+	Viewport	视口
+	Viewport rectangle in page points (x, y, width, height)	以页面点数指定视口矩形（x、y、宽度、高度）
+	Viewport width and height must be positive.	视口的宽度和高度必须为正数。
+	Visible Rectangle	可见矩形
+	Visual	视觉
+	Visual initials (Fill & Sign, not digital)	可视缩写签名（填写与签名，非数字签名）
+	Visual signature (Fill & Sign, not digital)	可视签名（填写与签名，非数字签名）
+	Voice	语音
+	Voice and Speech	语音与朗读
+	Voice:	语音：
+	Volume:	音量：
+	Wait for text recognition to finish before changing add-ons	请等待文字识别完成后再更改附加组件
+	Wait for the scanner to finish, or close any other program using it, then choose Continue.	请等待扫描仪完成，或关闭其他正在使用它的程序，然后选择“继续扫描”。
+	Wait for the scanner to finish, or close any other program using it, then choose Try again.	请等待扫描仪完成，或关闭其他正在使用它的程序，然后选择“重试”。
+	Waiting for the system print dialog…	正在等待系统打印对话框…
+	Waiting for your approval in the browser…	正在等待你在浏览器中批准…
+	Waiting in the printer's queue	正在打印机队列中等待
+	Warning	Warning
+	watermark	水印
+	Weak	弱
+	Welcome to CivilOps PDF	欢迎使用 CivilOps PDF
+	What must go, and what the document is	需要遮盖的内容，以及文档的用途
+	What takes up the space in this file, by kind of content.	此文件的空间被哪些内容占用，按内容类型列出。
+	What word or phrase would you like to search for?	您想搜索哪个词或短语？
+	What you want to end up with (order, extract, split, combine)	想要达到的效果（顺序、提取、拆分、合并）
+	Where the file is going and what matters (size, quality, compatibility)	文件的去向与要点（大小、质量、兼容性）
+	White on black	黑底白字
+	Whole words only	仅全字匹配
+document scrollbar width	Wide	宽
+	Widen the page to make room	加宽页面以留出空间
+	Will use the bed.	将使用稿台。
+	Will use the feeder.	将使用进纸器。
+	Window Options	窗口选项
+	Windows store  ·  	Windows 证书存储 · 
+	WKT definition	WKT 定义
+	Word	词语
+	Word count	字词统计
+	Word counting stopped unexpectedly.	字词统计意外停止。
+	Word count…	字词统计…
+	Word, PowerPoint and Excel (converted to PDF)	Word、PowerPoint 和 Excel（转换为 PDF）
+	Words or phrases to redact	要密文的单词或短语
+	Work, Personal, a name…	工作、个人、姓名…
+	Workspace modes	工作区模式
+	Write this email?	是否撰写此邮件？
+	Writes a new document of visible text; the scan is not changed	写入一个可见文本的新文档；扫描件不变
+	Wrong password	密码错误
+	Wrote 1 file to {dir}	已将 1 个文件写入{dir}
+	Wrote {name}	已写入 {name}
+	Wrote {n} files to {dir}	已将{n}个文件写入{dir}
+	X Object Forms	XObject 表单
+	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	XFA 表单：字段与 XFA 数据保持同步，以便其他阅读器显示您填写的内容。
+	XML source	XML 源代码
+	XMP metadata	XMP 元数据
+	Yellow on black	黑底黄字
+	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	即将应用 1 个密文标记。标记下的文本、图像和绘图，以及与其重叠的注释和表单域，将被永久删除。
+	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	即将应用 {n} 个密文标记。标记下的文本、图像和绘图，以及与其重叠的注释和表单域，将被永久删除。
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的修订版本 {rev}。这是快照：在此处所做的更改不会影响原始文档。
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	您正在查看“{from}”的已签名版本（修订版本 {rev}）。这是快照：在此处所做的更改不会影响原始文档。
+	You can keep up to {n} sets of initials. Remove one to add another.	最多可保存 {n} 组姓名首字母。请先移除一组，再添加新的。
+	You can keep up to {n} signatures. Remove one to add another.	最多可保存 {n} 个签名。请先移除一个，再添加新的。
+	You can pin up to {n} folders. Unpin one first.	最多可固定 {n} 个文件夹。请先取消固定一个。
+	You choose where the new version is saved. Continue?	由你选择新版本的保存位置。要继续吗？
+	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
+	Your changes will be lost if you don't save them.	如果不保存，更改将会丢失。
+	Your default email app can't take a file from CivilOps PDF.	默认邮件应用无法从 CivilOps PDF 接收文件。
+	Your email app couldn't log on to your mailbox.	邮件应用无法登录你的邮箱。
+	Your email app didn't open a message in time.	邮件应用没有及时打开邮件。
+	Your email app didn't open a message. It said: {why}.	邮件应用没有打开邮件。它的回复：{why}。
+	Your name	您的姓名
+	yyyy or yy year · m or mm month · mmm or mmmm month name · d or dd day · ddd or dddd weekday. H, h, M, s and t are time letters and can't be used on their own: put {escape} before a letter to show it as is.	yyyy 或 yy 年 · m 或 mm 月 · mmm 或 mmmm 月份名称 · d 或 dd 日 · ddd 或 dddd 星期。H、h、M、s 和 t 是时间字母，不能单独使用：在字母前加 {escape} 可按原样显示。
+	Zero-width lines always count as narrower.	零宽度的线始终视为更细。
+	ZIP	ZIP
+	Zip Code	邮政编码
+	Zip Code + 4	邮政编码 + 4
+	Zoom (Z)	缩放 (Z)
+	Zoom in ({key})	放大 ({key})
+	Zoom in / out (also pinch or {key}-scroll)	放大/缩小（也可用捏合或 {key}+滚轮）
+	Zoom out ({key})	缩小 ({key})
+	Zoom to page level	缩放到整页
+	Zoom — type a percentage and press Enter	缩放 — 输入百分比并按 Enter
+	{0}: {1}	{0}：{1}
+	{batch} — 1 field renamed	{batch} — 已重命名 1 个字段
+	{batch} — fields renamed	{batch} — 已重命名字段
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.	暂时无法将 {chars} 写入 PDF：填写与签名的文字仅支持西欧字符。请选择数字格式，例如 dd.mm.yyyy。
+	{chars} can't be written into the PDF yet: Fill & Sign text is Western European or Korean only. Pick a numeric format such as dd.mm.yyyy.	暂时无法将 {chars} 写入 PDF：填写与签名的文字仅支持西欧字符和韩文。请选择数字格式，例如 dd.mm.yyyy。
+	{c} of {n}{more}	{c} / {n}{more}
+	{dpi} pixels/inch	{dpi} 像素/英寸
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} 在运行时才拼出部分字段名称，因此这些读取不会被检查。
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
+@plural	{fields} is missing|{fields} are missing	缺少 {fields}
+	{fields} read each other	{fields} 相互读取
+@plural	{fields} reads it|{fields} read it	{fields} 读取它
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
+	{field} reads fields named as it runs	{field} 读取运行时才确定名称的字段
+	{field} reads its own value	{field} 读取自身的值
+	{field} reads no other field	{field} 不读取其他字段
+	{field} reads {fields}	{field} 读取 {fields}
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} 读取表单中不存在的 {fields}。
+	{field}: {e}	{field}：{e}
+	{file} is too large for a stamp (at most {n} MB)	{file} 对于图章来说太大了（最大 {n} MB）
+	{file}: there is no such file.	{file}：没有这个文件。
+	{folder} is already pinned to Home	{folder} 已固定到主页
+	{key} is already used by “{other}”.	{key} 已被“{other}”使用。
+	{key} was taken from “{other}”, which now has no shortcut.	已从“{other}”取走 {key}，该命令现在没有快捷键。
+	{kind} field	{kind}字段
+	{kind} Properties	{kind} 属性
+	{kind} · page {p}	{kind} · 第 {p} 页
+	{kind} — click to show it on the page	{kind} —— 单击以在页面上显示
+	{k} of {n}	{k}/{n}
+	{k} skipped: {why}	已跳过 {k} 处：{why}
+	{label} (1 issue)	{label}（1 个问题）
+	{label} ({n} issues)	{label}（{n} 个问题）
+	{label} failed: {e}	{label}失败：{e}
+	{mib} MiB ({bytes} bytes)	{mib} MiB（{bytes} 字节）
+	{month} {day}, {y}	{month}{day}日，{y}年
+	{month} {y}	{y} 年 {month}
+	{msg} to {dir}	{msg}到{dir}
+	{names} and {last}	{names}和{last}
+	{names} certifies this document without allowing comments, and will report this change.	{names} 认证此文档且不允许注释，会报告此更改。
+	{names} certifies this document, and removing a signature is not a change its certification permits.	{names} 认证此文档，而移除签名不是该认证允许的更改。
+	{name} (default)	{name}（默认）
+	{name} (you)	{name}（你）
+	{name} can't be combined: {why}	无法合并 {name}：{why}
+	{name} has no action	{name}没有动作
+	{name} is read-only	{name}为只读
+	{name} is too large for a word list (at most 1 MB).	{name} 太大，无法用作单词列表（最大 1 MB）。
+	{name} submits the form to {url}; CivilOps PDF doesn't send form data. Save the document to keep your entries.	{name} 将表单提交到{url}；CivilOps PDF 不发送表单数据。请保存文档以保留填写内容。
+	{name} — unsaved changes	{name} — 有未保存的更改
+	{name}, {date} and {time} become your name, the date and the time.	{name}、{date} 和 {time} 会变成你的姓名、日期和时间。
+	{name}: choosing images arrives on the web with file pickers for images	{name}：在 Web 端选择图像将使用图像文件选择器
+	{name}: the {other} action isn't supported yet	{name}：{other} 动作暂不受支持
+	{name}: {n} low-confidence word(s) on pages {pages}	{name}：第 {pages} 页上有 {n} 个低置信度词语
+	{name}_unsigned.pdf	{name}_无签名.pdf
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 个计算已改用新名称。
+	{n} contributors · {c} commits	{n} 位贡献者 · {c} 次提交
+	{n} days ago	{n} 天前
+	{n} differences found	发现 {n} 处差异
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} 个字段名与之前的文件冲突，将被重命名: {list}
+@plural	{n} field shows an old value|{n} fields show old values	{n} 个字段显示旧值
+	{n} fields selected	已选择 {n} 个字段
+@plural	{n} field|{n} fields	{n} 个字段
+	{n} files done	{n} 个文件已完成
+	{n} files need attention	{n} 个文件需要处理
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} 个公式读取了表单中不存在的字段
+	{n} instances	{n} 个匹配
+	{n} issues	{n} 个问题
+	{n} marks	{n} 个标记
+	{n} match(es) marked for redaction.	已标记 {n} 个匹配以待密文。
+	{n} measurements use an unsupported format and are left out.	{n} 个测量使用了不支持的格式，已被排除。
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	另有 {n} 个公式读取了缺失的字段。
+@plural	{n} object selected|{n} objects selected	已选择 {n} 个对象
+	{n} of {m} pages were scanned.	已扫描 {n} / {m} 页。
+	{n} pages	{n} 页
+	{n} pages could not be searched; results are incomplete.	无法搜索 {n} 页；结果不完整。
+	{n} pages hold more content than CivilOps PDF can read, page {page} first: parts of them aren't drawn, and only part of their text can be found or copied.	有 {n} 页的内容超过 CivilOps PDF 能读取的量（最先是第 {page} 页）：其中部分没有绘制，文字也只有部分能搜索或复制。
+	{n} pages scanned	已扫描 {n} 页
+	{n} pages selected	已选择 {n} 页
+	{n} pages selected.	已选择 {n} 页。
+	{n} pages were scanned.	已扫描 {n} 页。
+@plural	{n} page|{n} pages	{n} 页
+@plural	{n} reply|{n} replies	{n} 条回复
+	{n} selected	已选择 {n} 个
+	{n} tags	{n} 个标签
+	{n} word(s) or phrase(s)	{n} 个单词或短语
+	{n} word(s) to review	{n} 个词待校对
+	{n} {kind}	{n} {kind}
+	{program} can't take a file from CivilOps PDF.	{program} 无法从 CivilOps PDF 接收文件。
+	{rule} - {status}	{rule} - {status}
+	{signers} signers; details of the first are shown	共 {signers} 个签名者；显示第一个的详细信息
+	{s} action	{s}动作
+	{verb} as "{name}"	{verb}为“{name}”
+	{verb} Background	{verb}背景
+	{verb} Header and Footer	{verb}页眉和页脚
+	{verb} Watermark	{verb}水印
+	{what}. Saved {file}, checked to reopen with every page. {history}	{what}。已保存 {file}，并确认它能带着所有页面重新打开。{history}
+	{who} in this document wants to open this address in your browser:	此文档中的{who}请求在浏览器中打开以下地址：
+	{who} in this document wants to open your email app with this address:	此文档中的{who}请求打开邮件应用并使用以下地址：
+	{why} ({n})	{why}（{n}）
+	{words} on {pages}	在{pages}{words}
+	{w} × {h} in, {pxw} × {pxh} pixels, {size}	{w} × {h} 英寸，{pxw} × {pxh} 像素，{size}
+	ΔLOC	净增行
+	— (protection is applied when you save)	—（保存时应用保护）
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}”在打开或上次保存后已在磁盘上更改。现在保存会用此版本替换那个较新的版本。
+	“{name}” has security restrictions. Enter its permissions password to lift them.	“{name}”有安全限制。请输入其权限密码以解除限制。
+	“{name}” is encrypted for specific people. Choose your digital ID and enter its password to open it.	“{name}”已为特定人员加密。请选择你的数字 ID 并输入其密码以打开。
+	“{name}” is protected. Enter a password to open it.	“{name}”受保护。请输入密码以打开。
+	…or paste the raw text here; # headings, - bullets	…或在此粘贴原始文本；# 标题，- 项目符号
+	− Page {p}	− 第 {p} 页
+	−LOC	删除行
+# CivilOps PDF: its own commands and tools.
+	CivilOps website	CivilOps 网站
+	Donate	捐赠
+	Edit objects	编辑对象
+	Measure length	测量长度
+	Set scale…	设置比例…

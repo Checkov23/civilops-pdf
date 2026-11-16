@@ -4,7 +4,7 @@ use core::ops::Range;
 
 use epaint::text::CharIndex;
 
-use crate::{OrderedViewportIdMap, RepaintCause, ViewportOutput, WidgetType};
+use crate::{OrderedViewportIdMap, RepaintCause, Role, ViewportOutput};
 
 /// What egui emits each frame from [`crate::Context::run_ui`].
 ///
@@ -42,7 +42,7 @@ pub struct FullOutput {
 impl FullOutput {
     /// Add on new output.
     pub fn append(&mut self, newer: Self) {
-        use std::collections::btree_map::Entry;
+        use alloc::collections::btree_map::Entry;
 
         let Self {
             platform_output,
@@ -92,12 +92,251 @@ pub struct LogicOutput {
     pub viewport_commands: OrderedViewportIdMap<Vec<crate::ViewportCommand>>,
 }
 
+/// The maximum number of UTF-8 bytes in an outgoing IME surrounding-text payload.
+///
+/// The payload is bounded so that producing it never copies a whole large document. A
+/// selection longer than this is reported as [`IMESurroundingText::Unavailable`] instead of
+/// being silently truncated.
+pub const MAX_IME_SURROUNDING_TEXT_BYTES: usize = 4000;
+
+/// Text around the IME cursor, ready to be sent to the platform input method.
+///
+/// An empty [`Self::Available`] payload is a valid empty document and is distinct from
+/// [`Self::Unavailable`], which means that the owner cannot provide surrounding text
+/// (for example a password field, a too-wide selection, or an invalid editor state).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum IMESurroundingText {
+    /// The owner cannot provide surrounding text.
+    #[default]
+    Unavailable,
+
+    /// A bounded, committed-text snapshot around the cursor.
+    Available(IMESurroundingTextPayload),
+}
+
+/// Committed text around an IME cursor and UTF-8 byte offsets into it.
+///
+/// `cursor` is the primary end of the selection and `anchor` is the other end, both as
+/// UTF-8 byte offsets into [`Self::text`]. `anchor` may be greater than `cursor` for a
+/// reversed selection.
+#[derive(Clone, PartialEq, Eq)]
+pub struct IMESurroundingTextPayload {
+    /// Committed text, with any IME pre-edit removed.
+    ///
+    /// This is transient and is deliberately omitted from `Debug` output and serialization.
+    pub text: String,
+
+    /// UTF-8 byte offset of the primary cursor in [`Self::text`].
+    pub cursor: usize,
+
+    /// UTF-8 byte offset of the selection anchor in [`Self::text`].
+    pub anchor: usize,
+}
+
+impl core::fmt::Debug for IMESurroundingTextPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("IMESurroundingTextPayload")
+            .field("text", &"<redacted>")
+            .field("text_len_bytes", &self.text.len())
+            .field("cursor", &self.cursor)
+            .field("anchor", &self.anchor)
+            .finish()
+    }
+}
+
+impl IMESurroundingText {
+    /// Build a bounded surrounding-text payload from committed editor text and an optional
+    /// pre-edit range to remove.
+    ///
+    /// `cursor` and `anchor` are UTF-8 byte offsets into `text`, in either order. `preedit`
+    /// is the byte range of the current IME composition, which is removed before offsets are
+    /// remapped. Invalid byte offsets or ranges produce [`Self::Unavailable`].
+    ///
+    /// At most [`MAX_IME_SURROUNDING_TEXT_BYTES`] bytes of committed text are copied. Only the
+    /// selected window is cloned; this does not clone the full document. If the selection itself
+    /// is wider than the limit, the result is [`Self::Unavailable`].
+    pub fn from_text(
+        text: &str,
+        cursor: usize,
+        anchor: usize,
+        preedit: Option<Range<usize>>,
+    ) -> Self {
+        if cursor > text.len()
+            || anchor > text.len()
+            || !text.is_char_boundary(cursor)
+            || !text.is_char_boundary(anchor)
+        {
+            return Self::Unavailable;
+        }
+
+        let preedit = match preedit {
+            Some(range)
+                if range.start <= range.end
+                    && range.end <= text.len()
+                    && text.is_char_boundary(range.start)
+                    && text.is_char_boundary(range.end) =>
+            {
+                Some(range)
+            }
+            Some(_) => return Self::Unavailable,
+            None => None,
+        };
+
+        let removed_bytes = preedit.as_ref().map_or(0, |range| range.end - range.start);
+        let logical_len = text.len() - removed_bytes;
+
+        let map_to_logical = |byte: usize| -> usize {
+            let Some(preedit) = &preedit else {
+                return byte;
+            };
+            if byte > preedit.start && byte < preedit.end {
+                preedit.start
+            } else if byte >= preedit.end {
+                byte - removed_bytes
+            } else {
+                byte
+            }
+        };
+
+        let cursor = map_to_logical(cursor);
+        let anchor = map_to_logical(anchor);
+        let selection_start = cursor.min(anchor);
+        let selection_end = cursor.max(anchor);
+
+        let selection_len = selection_end - selection_start;
+        if selection_len > MAX_IME_SURROUNDING_TEXT_BYTES {
+            return Self::Unavailable;
+        }
+
+        // Spend the remaining byte budget on both sides of the selection, giving unused
+        // room on one side to the other.
+        let budget = MAX_IME_SURROUNDING_TEXT_BYTES - selection_len;
+        let before_available = selection_start;
+        let after_available = logical_len - selection_end;
+        let mut before = (budget / 2).min(before_available);
+        let mut after = (budget - before).min(after_available);
+        before = (budget - after).min(before_available);
+        after = (budget - before).min(after_available);
+
+        let mut window_start = selection_start - before;
+        let mut window_end = selection_end + after;
+
+        let is_char_boundary = |logical_byte: usize| -> bool {
+            let Some(preedit) = &preedit else {
+                return text.is_char_boundary(logical_byte);
+            };
+            if logical_byte == preedit.start {
+                true
+            } else if logical_byte < preedit.start {
+                text.is_char_boundary(logical_byte)
+            } else {
+                text.is_char_boundary(logical_byte + removed_bytes)
+            }
+        };
+
+        // Byte-budget windows can land inside a multi-byte character. Shrink the window rather
+        // than growing it, so the output cannot exceed the limit and the selection stays inside.
+        while window_start < selection_start && !is_char_boundary(window_start) {
+            window_start += 1;
+        }
+        while selection_end < window_end && !is_char_boundary(window_end) {
+            window_end -= 1;
+        }
+
+        let to_original = |logical_byte: usize| -> usize {
+            match &preedit {
+                Some(preedit) if logical_byte > preedit.start => logical_byte + removed_bytes,
+                _ => logical_byte,
+            }
+        };
+
+        let original_start = to_original(window_start);
+        let original_end = to_original(window_end);
+        let mut window_text = String::with_capacity(window_end - window_start);
+
+        match &preedit {
+            Some(preedit) => {
+                if window_start < preedit.start {
+                    let first_end = original_end.min(preedit.start);
+                    window_text.push_str(&text[original_start..first_end]);
+                }
+                if preedit.start < window_end {
+                    let second_start = preedit.end.max(original_start);
+                    window_text.push_str(&text[second_start..original_end]);
+                }
+            }
+            None => window_text.push_str(&text[original_start..original_end]),
+        }
+
+        debug_assert!(
+            window_text.len() <= MAX_IME_SURROUNDING_TEXT_BYTES,
+            "surrounding text must fit the protocol byte limit"
+        );
+        debug_assert_eq!(
+            window_text.len(),
+            window_end - window_start,
+            "removing preedit must preserve the selected logical window length"
+        );
+
+        Self::Available(IMESurroundingTextPayload {
+            text: window_text,
+            cursor: cursor - window_start,
+            anchor: anchor - window_start,
+        })
+    }
+
+    /// The available payload, if any.
+    pub fn available(&self) -> Option<&IMESurroundingTextPayload> {
+        match self {
+            Self::Available(payload) => Some(payload),
+            Self::Unavailable => None,
+        }
+    }
+}
+
+/// Why the committed surrounding-text snapshot changed.
+///
+/// The platform input method uses this to tell an accepted IME commit or deletion from an
+/// application-origin edit (typing, paste, undo, automatic corrections, a document load, and so on).
+/// [`Self::Other`] is the conservative default: only a producer that has verified an accepted
+/// IME mutation may report [`Self::InputMethod`].
+///
+/// With the `serde` feature the variant names are serialized exactly as `"InputMethod"` and
+/// `"Other"`. A missing field deserializes as [`Self::Other`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum ImeChangeCause {
+    /// The change came from an accepted IME commit or delete-surrounding mutation.
+    InputMethod,
+
+    /// The change came from the application, or its origin could not be proven to be IME.
+    #[default]
+    Other,
+}
+
 /// Information about text being edited.
 ///
 /// Useful for IME.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+///
+/// This is not `Copy`: an available surrounding-text payload owns a bounded copy of the
+/// committed text around the cursor. The debug representation redacts that text.
+#[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct IMEOutput {
+    /// The widget that owns the IME context.
+    ///
+    /// This is present even when [`Self::surrounding_text`] is
+    /// [`IMESurroundingText::Unavailable`].
+    pub owner: crate::Id,
+
+    /// A generation for this owner's IME context.
+    ///
+    /// It changes when this owner acquires focus or changes IME purpose, and stays stable for
+    /// ordinary edits while the owner remains focused. Together with [`Self::owner`] it lets an
+    /// integration reject stale owner/support transitions without mistaking text edits for a
+    /// new context.
+    pub context_generation: u64,
+
     /// IME's purpose.
     pub purpose: crate::IMEPurpose,
 
@@ -111,6 +350,99 @@ pub struct IMEOutput {
 
     /// Whether any ongoing IME composition should be interrupted.
     pub should_interrupt_composition: bool,
+
+    /// Request-bound cancellation fence, created at the actual application interruption.
+    ///
+    /// The integration must wait for its actual native completion before emitting
+    /// [`crate::Event::ImeResetCompleted`]. `None` retains the stock untokened interrupt API.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub reset_request: Option<crate::ImeResetId>,
+
+    /// Why the surrounding-text snapshot changed.
+    ///
+    /// [`ImeChangeCause::Other`] is used for context transitions, application edits and any
+    /// change whose origin cannot be proven. Cause alone never changes the snapshot key, so an
+    /// integration must not resend identical text merely because this value differs.
+    ///
+    /// Defaults to [`ImeChangeCause::Other`] when deserializing older data.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub change_cause: ImeChangeCause,
+
+    /// The committed text around the cursor, or an explicit reason it is unavailable.
+    ///
+    /// Skipped from serialization because the text is transient editor state.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub surrounding_text: IMESurroundingText,
+}
+
+impl core::fmt::Debug for IMEOutput {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("IMEOutput")
+            .field("owner", &self.owner)
+            .field("context_generation", &self.context_generation)
+            .field("purpose", &self.purpose)
+            .field("rect", &self.rect)
+            .field("cursor_rect", &self.cursor_rect)
+            .field(
+                "should_interrupt_composition",
+                &self.should_interrupt_composition,
+            )
+            .field("reset_request", &self.reset_request)
+            .field("change_cause", &self.change_cause)
+            .field("surrounding_text", &self.surrounding_text)
+            .finish()
+    }
+}
+
+impl IMEOutput {
+    /// Create an IME descriptor without surrounding text.
+    ///
+    /// Callers that can provide surrounding text should assign
+    /// [`Self::surrounding_text`] from [`IMESurroundingText::from_text`]. An explicit
+    /// [`IMESurroundingText::Unavailable`] (the default here) is not the same as no IME
+    /// descriptor at all.
+    ///
+    /// `owner` and `context_generation` identify one IME context: the generation must change
+    /// when this owner acquires IME focus, and stay stable for ordinary text or selection
+    /// updates. The surrounding text must be logical model text, not a visually reordered
+    /// display string, with UTF-8 byte offsets into that text.
+    ///
+    /// The new descriptor uses [`ImeChangeCause::Other`]. A producer that has accepted an IME
+    /// mutation must set [`Self::change_cause`] explicitly after the change.
+    ///
+    /// ```
+    /// use egui::{Id, IMEPurpose, Rect};
+    /// use egui::output::{IMEOutput, IMESurroundingText};
+    ///
+    /// let mut ime = IMEOutput::new(
+    ///     Id::unique("editor"),
+    ///     1,
+    ///     IMEPurpose::Normal,
+    ///     Rect::ZERO,
+    ///     Rect::ZERO,
+    /// );
+    /// ime.surrounding_text = IMESurroundingText::from_text("hello", 5, 5, None);
+    /// assert!(ime.surrounding_text.available().is_some());
+    /// ```
+    pub fn new(
+        owner: crate::Id,
+        context_generation: u64,
+        purpose: crate::IMEPurpose,
+        rect: crate::Rect,
+        cursor_rect: crate::Rect,
+    ) -> Self {
+        Self {
+            owner,
+            context_generation,
+            purpose,
+            rect,
+            cursor_rect,
+            should_interrupt_composition: false,
+            reset_request: None,
+            change_cause: ImeChangeCause::Other,
+            surrounding_text: IMESurroundingText::Unavailable,
+        }
+    }
 }
 
 /// Commands that the egui integration should execute at the end of a frame.
@@ -123,6 +455,15 @@ pub enum OutputCommand {
     ///
     /// This is often a response to [`crate::Event::Copy`] or [`crate::Event::Cut`].
     CopyText(String),
+
+    /// The user has finished changing the text selection, and this is what is now selected.
+    ///
+    /// Sent once the selection settles (e.g. when the mouse button is released after a drag),
+    /// and only if it changed, so not on every frame of a drag.
+    ///
+    /// On X11 and Wayland, `egui-winit` puts this in the PRIMARY selection,
+    /// so that it can be pasted with the middle mouse button.
+    TextSelectionSettled(String),
 
     /// Put this image to the system clipboard.
     CopyImage(crate::ColorImage),
@@ -230,7 +571,42 @@ impl PlatformOutput {
         self.cursor_image = cursor_image;
         self.events.append(&mut events);
         self.mutable_text_under_cursor = mutable_text_under_cursor;
-        self.ime = ime.or(self.ime);
+        // The latest completed pass is authoritative, including an explicit `None`.
+        // A payload/owner from an earlier pass must never survive a later pass that no
+        // longer has mutable text focus.
+        //
+        // An interrupt is different: accesskit or another in-pass mutation can request one during
+        // a discarded pass, and a later pass that recreates the same owner/generation must still
+        // cancel the platform composition. Carry it only across the same IME context; an
+        // interrupt for an old owner or generation must not leak into a new editor.
+        let keep_interrupt = self.ime.as_ref().is_some_and(|previous| {
+            ime.as_ref().is_some_and(|next| {
+                previous.owner == next.owner
+                    && previous.context_generation == next.context_generation
+                    // A retired token must not become an untokened stock interruption.
+                    // Keep the historical purpose policy for genuine untokened interrupts.
+                    && (previous.reset_request.is_none() || previous.purpose == next.purpose)
+                    && previous.should_interrupt_composition
+            })
+        });
+        let previous_reset = self.ime.as_ref().and_then(|previous| {
+            ime.as_ref()
+                .filter(|next| {
+                    previous.owner == next.owner
+                        && previous.context_generation == next.context_generation
+                        && previous.purpose == next.purpose
+                })
+                .and(previous.reset_request)
+        });
+        let mut ime = ime;
+        if let Some(ime) = &mut ime {
+            // A later actual interruption supersedes an earlier caret request in this context.
+            ime.reset_request = ime.reset_request.or(previous_reset);
+            if keep_interrupt || ime.reset_request.is_some() {
+                ime.should_interrupt_composition = true;
+            }
+        }
+        self.ime = ime;
         self.num_completed_passes += num_completed_passes;
         self.request_discard_reasons
             .append(&mut request_discard_reasons);
@@ -322,7 +698,7 @@ pub enum UserAttentionType {
 /// the OS every frame.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CustomCursorImage {
-    pub rgba: std::sync::Arc<[u8]>,
+    pub rgba: alloc::sync::Arc<[u8]>,
     pub size: [u16; 2],
     pub hotspot: [u16; 2],
 }
@@ -561,8 +937,8 @@ impl core::fmt::Debug for OutputEvent {
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct WidgetInfo {
-    /// The type of widget this is.
-    pub typ: WidgetType,
+    /// The accessibility role of this widget.
+    pub role: Role,
 
     /// Whether the widget is enabled.
     pub enabled: bool,
@@ -594,7 +970,7 @@ pub struct WidgetInfo {
 impl core::fmt::Debug for WidgetInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let Self {
-            typ,
+            role,
             enabled,
             label,
             current_text_value: text_value,
@@ -607,7 +983,7 @@ impl core::fmt::Debug for WidgetInfo {
 
         let mut s = f.debug_struct("WidgetInfo");
 
-        s.field("typ", typ);
+        s.field("role", role);
 
         if !enabled {
             s.field("enabled", enabled);
@@ -639,10 +1015,37 @@ impl core::fmt::Debug for WidgetInfo {
     }
 }
 
+/// A human-readable, lowercase name for a widget role, e.g. for a text-to-speech system.
+///
+/// The [`Role`] is spelled out in `CamelCase`, so we split it into lowercase words.
+/// [`Role::Unknown`] has no useful name, and gives an empty string.
+///
+/// ```
+/// # use egui::{Role, role_description};
+/// assert_eq!(role_description(Role::Button), "button");
+/// assert_eq!(role_description(Role::CheckBox), "check box");
+/// assert_eq!(role_description(Role::SpinButton), "spin button");
+/// assert_eq!(role_description(Role::Unknown), "");
+/// ```
+pub fn role_description(role: Role) -> String {
+    if role == Role::Unknown {
+        return String::new();
+    }
+
+    let mut description = String::new();
+    for ch in format!("{role:?}").chars() {
+        if ch.is_ascii_uppercase() && !description.is_empty() {
+            description.push(' ');
+        }
+        description.push(ch.to_ascii_lowercase());
+    }
+    description
+}
+
 impl WidgetInfo {
-    pub fn new(typ: WidgetType) -> Self {
+    pub fn new(role: Role) -> Self {
         Self {
-            typ,
+            role,
             enabled: true,
             label: None,
             current_text_value: None,
@@ -655,24 +1058,24 @@ impl WidgetInfo {
     }
 
     #[expect(clippy::needless_pass_by_value)]
-    pub fn labeled(typ: WidgetType, enabled: bool, label: impl ToString) -> Self {
+    pub fn labeled(role: Role, enabled: bool, label: impl ToString) -> Self {
         Self {
             enabled,
             // CivilOps PDF patch: screen readers get the label in the interface language.
             label: Some(crate::widget_text::tr_owned(label.to_string())),
-            ..Self::new(typ)
+            ..Self::new(role)
         }
     }
 
     /// checkboxes, radio-buttons etc
     #[expect(clippy::needless_pass_by_value)]
-    pub fn selected(typ: WidgetType, enabled: bool, selected: bool, label: impl ToString) -> Self {
+    pub fn selected(role: Role, enabled: bool, selected: bool, label: impl ToString) -> Self {
         Self {
             enabled,
             // CivilOps PDF patch: screen readers get the label in the interface language.
             label: Some(crate::widget_text::tr_owned(label.to_string())),
             selected: Some(selected),
-            ..Self::new(typ)
+            ..Self::new(role)
         }
     }
 
@@ -680,7 +1083,7 @@ impl WidgetInfo {
         Self {
             enabled,
             value: Some(value),
-            ..Self::new(WidgetType::DragValue)
+            ..Self::new(Role::SpinButton)
         }
     }
 
@@ -692,7 +1095,7 @@ impl WidgetInfo {
             enabled,
             label: if label.is_empty() { None } else { Some(label) },
             value: Some(value),
-            ..Self::new(WidgetType::Slider)
+            ..Self::new(Role::Slider)
         }
     }
 
@@ -716,7 +1119,7 @@ impl WidgetInfo {
             current_text_value: Some(text_value),
             prev_text_value,
             hint_text: Some(hint_text),
-            ..Self::new(WidgetType::TextEdit)
+            ..Self::new(Role::TextInput)
         }
     }
 
@@ -730,14 +1133,14 @@ impl WidgetInfo {
             enabled,
             text_selection: Some(text_selection),
             current_text_value: Some(current_text_value.to_string()),
-            ..Self::new(WidgetType::TextEdit)
+            ..Self::new(Role::TextInput)
         }
     }
 
     /// This can be used by a text-to-speech system to describe the widget.
     pub fn description(&self) -> String {
         let Self {
-            typ,
+            role,
             enabled,
             label,
             current_text_value: text_value,
@@ -748,33 +1151,10 @@ impl WidgetInfo {
             hint_text: _,
         } = self;
 
-        // TODO(emilk): localization
-        let widget_type = match typ {
-            WidgetType::Link => "link",
-            WidgetType::TextEdit => "text edit",
-            WidgetType::Button => "button",
-            WidgetType::Checkbox => "checkbox",
-            WidgetType::RadioButton => "radio",
-            WidgetType::RadioGroup => "radio group",
-            WidgetType::SelectableLabel => "selectable",
-            WidgetType::ComboBox => "combo",
-            WidgetType::Slider => "slider",
-            WidgetType::DragValue => "drag value",
-            WidgetType::ColorButton => "color button",
-            WidgetType::Image => "image",
-            WidgetType::CollapsingHeader => "collapsing header",
-            WidgetType::Panel => "panel",
-            WidgetType::ProgressIndicator => "progress indicator",
-            WidgetType::Window => "window",
-            WidgetType::ScrollBar => "scroll bar",
-            WidgetType::ResizeHandle => "resize handle",
-            WidgetType::Label | WidgetType::Other => "",
-        };
-
-        let mut description = widget_type.to_owned();
+        let mut description = role_description(*role);
 
         if let Some(selected) = selected {
-            if *typ == WidgetType::Checkbox {
+            if *role == Role::CheckBox {
                 let state = if *selected { "checked" } else { "unchecked" };
                 description = format!("{state} {description}");
             } else {
@@ -786,7 +1166,7 @@ impl WidgetInfo {
             description = format!("{label}: {description}");
         }
 
-        if typ == &WidgetType::TextEdit {
+        if role == &Role::TextInput {
             let text = if let Some(text_value) = text_value {
                 if text_value.is_empty() {
                     "blank".into()
@@ -808,5 +1188,258 @@ impl WidgetInfo {
             description += ": disabled";
         }
         description.trim().to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{IMEPurpose, Id, Rect, pos2};
+
+    fn ime(owner: Id, generation: u64, text: IMESurroundingText) -> IMEOutput {
+        IMEOutput {
+            owner,
+            context_generation: generation,
+            purpose: IMEPurpose::Normal,
+            rect: Rect::from_min_size(pos2(0.0, 0.0), crate::vec2(100.0, 20.0)),
+            cursor_rect: Rect::from_min_size(pos2(1.0, 2.0), crate::vec2(1.0, 16.0)),
+            should_interrupt_composition: false,
+            reset_request: None,
+            change_cause: ImeChangeCause::Other,
+            surrounding_text: text,
+        }
+    }
+
+    #[test]
+    fn empty_available_text_is_not_unavailable() {
+        let empty = IMESurroundingText::from_text("", 0, 0, None);
+        let payload = empty.available().expect("empty document is available");
+        assert_eq!(payload.text, "");
+        assert_eq!((payload.cursor, payload.anchor), (0, 0));
+        assert!(IMESurroundingText::Unavailable.available().is_none());
+    }
+
+    #[test]
+    fn unicode_offsets_are_utf8_bytes_and_keep_both_selection_directions() {
+        let text = "aé🇯🇵b";
+        let after_accent = "aé".len();
+        let after_flag = "aé🇯🇵".len();
+
+        let forward = IMESurroundingText::from_text(text, after_accent, after_flag, None);
+        let payload = forward.available().unwrap();
+        assert_eq!(payload.text, text);
+        assert_eq!((payload.cursor, payload.anchor), (after_accent, after_flag));
+
+        let reversed = IMESurroundingText::from_text(text, after_flag, after_accent, None);
+        let payload = reversed.available().unwrap();
+        assert_eq!(payload.text, text);
+        assert_eq!((payload.cursor, payload.anchor), (after_flag, after_accent));
+    }
+
+    #[test]
+    fn rtl_text_keeps_logical_byte_offsets() {
+        // Logical order, not visual order: right-to-left text is stored in memory order and
+        // the platform receives the same byte offsets an editor uses for its model.
+        let text = "a\u{200f}שלום";
+        let after_rlm = "a\u{200f}".len();
+        let surrounding = IMESurroundingText::from_text(text, text.len(), after_rlm, None);
+        let payload = surrounding.available().expect("rtl text is available");
+        assert_eq!(payload.text, text);
+        assert_eq!((payload.cursor, payload.anchor), (text.len(), after_rlm));
+    }
+
+    #[test]
+    fn invalid_or_non_boundary_offsets_are_unavailable() {
+        assert!(matches!(
+            IMESurroundingText::from_text("é", 1, 0, None),
+            IMESurroundingText::Unavailable
+        ));
+        assert!(matches!(
+            IMESurroundingText::from_text("é", 3, 0, None),
+            IMESurroundingText::Unavailable
+        ));
+        assert!(matches!(
+            IMESurroundingText::from_text("é", 0, 1, None),
+            IMESurroundingText::Unavailable
+        ));
+        assert!(matches!(
+            IMESurroundingText::from_text("é", 0, 0, Some(1..2)),
+            IMESurroundingText::Unavailable
+        ));
+        assert!(matches!(
+            IMESurroundingText::from_text("é", 0, 0, Some(0..3)),
+            IMESurroundingText::Unavailable
+        ));
+    }
+
+    #[test]
+    fn preedit_is_removed_and_cursor_is_remapped() {
+        let text = "abにほcd";
+        let preedit_start = "ab".len();
+        let preedit_end = preedit_start + "にほ".len();
+        let payload = IMESurroundingText::from_text(
+            text,
+            preedit_end,
+            preedit_end,
+            Some(preedit_start..preedit_end),
+        );
+        let payload = payload.available().unwrap();
+        assert_eq!(payload.text, "abcd");
+        assert_eq!(
+            (payload.cursor, payload.anchor),
+            (preedit_start, preedit_start)
+        );
+
+        // A cursor inside the pre-edit is mapped to where the composition began.
+        let payload = IMESurroundingText::from_text(
+            text,
+            preedit_start + "に".len(),
+            preedit_start,
+            Some(preedit_start..preedit_end),
+        );
+        let payload = payload.available().unwrap();
+        assert_eq!(payload.text, "abcd");
+        assert_eq!(
+            (payload.cursor, payload.anchor),
+            (preedit_start, preedit_start)
+        );
+    }
+
+    #[test]
+    fn too_wide_selection_is_unavailable_but_exact_limit_is_available() {
+        let text = "a".repeat(MAX_IME_SURROUNDING_TEXT_BYTES + 1);
+        assert!(matches!(
+            IMESurroundingText::from_text(&text, 0, text.len(), None),
+            IMESurroundingText::Unavailable
+        ));
+
+        let text = "a".repeat(MAX_IME_SURROUNDING_TEXT_BYTES);
+        let payload = IMESurroundingText::from_text(&text, 0, text.len(), None);
+        let payload = payload.available().unwrap();
+        assert_eq!(payload.text.len(), MAX_IME_SURROUNDING_TEXT_BYTES);
+        assert_eq!((payload.cursor, payload.anchor), (0, text.len()));
+    }
+
+    #[test]
+    fn large_documents_are_windowed_without_splitting_utf8() {
+        let text = "a".repeat(10_000);
+        let payload = IMESurroundingText::from_text(&text, 6000, 6000, None);
+        let payload = payload.available().unwrap();
+        assert_eq!(payload.text.len(), MAX_IME_SURROUNDING_TEXT_BYTES);
+        assert_eq!(payload.text, text[4000..8000]);
+        assert_eq!((payload.cursor, payload.anchor), (2000, 2000));
+
+        let text = "左".repeat(3000); // 3 bytes per character.
+        let cursor = 3000;
+        let payload = IMESurroundingText::from_text(&text, cursor, cursor, None);
+        let payload = payload.available().unwrap();
+        assert!(payload.text.len() <= MAX_IME_SURROUNDING_TEXT_BYTES);
+        assert!(payload.text.is_char_boundary(payload.cursor));
+        assert!(payload.text.is_char_boundary(payload.anchor));
+        assert!(cursor - payload.cursor <= MAX_IME_SURROUNDING_TEXT_BYTES);
+    }
+
+    #[test]
+    fn preedit_near_a_window_edge_is_excluded_and_remapped() {
+        let text = format!("{}に{}", "a".repeat(5000), "b".repeat(5000));
+        let preedit_start = 5000;
+        let preedit_end = preedit_start + "に".len();
+        let payload = IMESurroundingText::from_text(
+            &text,
+            preedit_end,
+            preedit_start - 1,
+            Some(preedit_start..preedit_end),
+        );
+        let payload = payload.available().unwrap();
+        assert!(payload.text.len() <= MAX_IME_SURROUNDING_TEXT_BYTES);
+        assert!(!payload.text.contains('に'));
+        assert!(payload.anchor < payload.cursor);
+        assert!(payload.text.is_char_boundary(payload.cursor));
+        assert!(payload.text.is_char_boundary(payload.anchor));
+    }
+
+    #[test]
+    fn debug_and_clone_do_not_leak_or_lose_transient_text() {
+        let owner = Id::unique(7);
+        let payload = IMESurroundingText::from_text("secret text", 6, 6, None);
+        let output = ime(owner, 3, payload);
+        let cloned = output.clone();
+        assert_eq!(cloned, output);
+        assert_eq!(cloned.owner, owner);
+        assert_eq!(cloned.context_generation, 3);
+
+        let debug = format!("{output:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret text"));
+    }
+
+    #[test]
+    fn ime_output_defaults_to_other_cause_and_debug_reports_it() {
+        let output = ime(
+            Id::unique(11),
+            2,
+            IMESurroundingText::from_text("text", 4, 4, None),
+        );
+        assert_eq!(output.change_cause, ImeChangeCause::Other);
+        let debug = format!("{output:?}");
+        assert!(debug.contains("change_cause"));
+        assert!(debug.contains("Other"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("text: \"text\""));
+    }
+
+    #[test]
+    fn append_uses_the_latest_ime_descriptor_even_when_none() {
+        let owner = Id::unique(1);
+        let mut platform_output = PlatformOutput {
+            ime: Some(ime(
+                owner,
+                1,
+                IMESurroundingText::from_text("old", 3, 3, None),
+            )),
+            ..Default::default()
+        };
+
+        let newer = PlatformOutput::default();
+        platform_output.append(newer);
+        assert!(
+            platform_output.ime.is_none(),
+            "latest None is authoritative"
+        );
+
+        let newer = PlatformOutput {
+            ime: Some(ime(
+                owner,
+                2,
+                IMESurroundingText::from_text("new", 3, 3, None),
+            )),
+            ..Default::default()
+        };
+        platform_output.append(newer);
+        let output = platform_output.ime.as_ref().unwrap();
+        assert_eq!(output.context_generation, 2);
+        assert_eq!(output.surrounding_text.available().unwrap().text, "new");
+    }
+
+    #[cfg(feature = "persistence")]
+    #[test]
+    fn serialization_never_persists_surrounding_text() {
+        let original = ime(
+            Id::unique("private editor"),
+            7,
+            IMESurroundingText::from_text("private contents", 7, 0, None),
+        );
+        let serialized = ron::to_string(&original).expect("serialize IME geometry");
+        assert!(!serialized.contains("private contents"));
+        assert!(!serialized.contains("surrounding_text"));
+        assert!(
+            serialized.contains("Other"),
+            "the default cause is explicit"
+        );
+        let restored: IMEOutput = ron::from_str(&serialized).expect("deserialize IME geometry");
+        assert_eq!(restored.owner, original.owner);
+        assert_eq!(restored.context_generation, original.context_generation);
+        assert_eq!(restored.change_cause, ImeChangeCause::Other);
+        assert_eq!(restored.surrounding_text, IMESurroundingText::Unavailable);
     }
 }

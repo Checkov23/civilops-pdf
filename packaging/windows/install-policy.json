@@ -1,0 +1,329 @@
+{
+  "id": "printcraft",
+  "name": "PrintCraft",
+  "upgradeCode": "EA00C367-7270-4C50-9D8B-A7A5C88AD27F",
+  "sources": [
+    "printcraft.wxs",
+    "installer-ui.wxs"
+  ],
+  "icon": "assets/app-icon/printcraft.ico",
+  "localization": [],
+  "extensions": [],
+  "payloads": [
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "LICENSE-document.txt",
+    "NOTICE",
+    "printcraft-cli.exe",
+    "printcraft.exe"
+  ],
+  "registry": [
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\printcraft.exe",
+      "",
+      "[#PrintcraftExe]"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PrintCraft.Document",
+      "",
+      "PDF Document"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PrintCraft.Document\\DefaultIcon",
+      "",
+      "\"[#PrintcraftExe]\",-2"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PrintCraft.Document\\shell\\open\\command",
+      "",
+      "\"[#PrintcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PrintCraft.Document",
+      "TypeOverlay",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.pdf\\OpenWithProgids",
+      "PrintCraft.Document",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\printcraft.exe",
+      "FriendlyAppName",
+      "PrintCraft"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\printcraft.exe\\DefaultIcon",
+      "",
+      "\"[#PrintcraftExe]\",-2"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\printcraft.exe\\SupportedTypes",
+      ".pdf",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\Applications\\printcraft.exe\\shell\\open\\command",
+      "",
+      "\"[#PrintcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\PrintCraft\\Capabilities",
+      "ApplicationName",
+      "PrintCraft"
+    ],
+    [
+      "-1",
+      "Software\\PrintCraft\\Capabilities",
+      "ApplicationDescription",
+      "Open-source PDF workbench"
+    ],
+    [
+      "-1",
+      "Software\\PrintCraft\\Capabilities",
+      "ApplicationIcon",
+      "[#PrintcraftExe],0"
+    ],
+    [
+      "-1",
+      "Software\\PrintCraft\\Capabilities\\FileAssociations",
+      ".pdf",
+      "PrintCraft.Document"
+    ],
+    [
+      "-1",
+      "Software\\RegisteredApplications",
+      "PrintCraft",
+      "Software\\PrintCraft\\Capabilities"
+    ],
+    [
+      "-1",
+      "Software\\PrintCraft\\Shortcuts",
+      "StartMenu",
+      "#1"
+    ],
+    [
+      "-1",
+      "Software\\PrintCraft\\Shortcuts",
+      "Desktop",
+      "#1"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PrintCraft.Edit",
+      "",
+      "Edit with PrintCraft"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PrintCraft.Edit",
+      "Icon",
+      "\"[#PrintcraftExe]\",0"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PrintCraft.Edit",
+      "MultiSelectModel",
+      "Document"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.pdf\\shell\\PrintCraft.Edit\\command",
+      "",
+      "\"[#PrintcraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.png\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpg\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpeg\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tif\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.tiff\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.gif\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.bmp\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jp2\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.j2k\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PrintCraft.CreatePdf",
+      "",
+      "Create PDF with PrintCraft\u2026"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PrintCraft.CreatePdf",
+      "MultiSelectModel",
+      "Single"
+    ],
+    [
+      "-1",
+      "Software\\Classes\\SystemFileAssociations\\.jpx\\shell\\PrintCraft.CreatePdf\\command",
+      "",
+      "\"[#PrintcraftExe]\" --create-images \"%1\""
+    ]
+  ],
+  "mode": "dualScope"
+}
