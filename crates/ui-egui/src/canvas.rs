@@ -3325,7 +3325,10 @@ pub fn document_area(app: &mut PrintCraftApp, index: usize, ui: &mut egui::Ui) {
     let (single_paging, edge_turned) = single_page_paging(ui, view, &PagingCx { row: &row, rects: &rects, avail, middle_gesture, unobstructed });
     let now = ui.input(|i| i.time);
     let animates = app.animation_effects.animates(app.motion.reduced);
-    let wheel_enabled = navigation_enabled && unobstructed && !middle_gesture;
+    // CivilOps PDF: the wheel scrolls a visible window without focus too, as the comment on
+    // `zoom_enabled` says. PDFCraft #6031 tied it to `navigation_enabled` (window focus), so a plan
+    // dropped onto the window from Explorer, which leaves the focus there, didn't scroll until a click.
+    let wheel_enabled = zoom_enabled && unobstructed && !middle_gesture;
     let Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical } =
         read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
