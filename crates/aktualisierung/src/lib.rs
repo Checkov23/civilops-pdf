@@ -24,6 +24,9 @@ use std::sync::OnceLock;
 
 use velopack::{UpdateCheck, UpdateManager, VelopackApp, sources};
 
+#[cfg(windows)]
+mod zuordnung;
+
 /// Ein geladenes Update, das beim nächsten Start eingespielt wird.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Update {
@@ -45,9 +48,16 @@ pub fn beim_start() {
     let andere_sitzung = sperre.as_ref().is_some_and(andere_sitzung_laeuft);
     let app = VelopackApp::build().set_auto_apply_on_startup(!andere_sitzung);
     // Nach einem Update (der Installer ruft das neue Programm mit `--veloapp-updated`) sollen
-    // Desktop, Startmenü und Taskleiste das neue Symbol zeigen.
+    // Desktop, Startmenü und Taskleiste das neue Symbol zeigen. Installation und Update tragen
+    // CivilOps PDF unter „Öffnen mit“ für PDF-Dateien ein, die Deinstallation trägt es aus.
     #[cfg(windows)]
-    let app = app.on_after_update_fast_callback(|neu| symbole_auffrischen(&neu.to_string()));
+    let app = app
+        .on_after_install_fast_callback(|_| oeffnen_mit(true))
+        .on_after_update_fast_callback(|neu| {
+            oeffnen_mit(true);
+            symbole_auffrischen(&neu.to_string());
+        })
+        .on_before_uninstall_fast_callback(|_| oeffnen_mit(false));
     let mut app = app;
     app.run();
     if let Some(datei) = sperre {
@@ -93,6 +103,22 @@ fn symbole_auffrischen(version: &str) {
         Err(_) => "ie4uinit.exe nicht gefunden, Symbole erst nach der nächsten Anmeldung neu",
     };
     protokoll(&format!("Update {version} eingespielt: {ergebnis}"));
+}
+
+/// Rechtsklick auf eine PDF ▸ Öffnen mit: eintragen (`true`) oder austragen, nur bei der
+/// installierten Fassung (siehe [`zuordnung`]). Das Ergebnis steht in `aktualisierung.log`; ein
+/// Fehler hält weder Installation noch Update auf.
+#[cfg(windows)]
+fn oeffnen_mit(eintragen: bool) {
+    let Some(programm) = zuordnung::installiertes_programm() else {
+        return;
+    };
+    let ergebnis = if eintragen { zuordnung::eintragen("Software", &programm) } else { zuordnung::austragen("Software", &programm) };
+    protokoll(&match (eintragen, ergebnis) {
+        (true, Ok(())) => "für „Öffnen mit“ bei PDF-Dateien eingetragen".to_string(),
+        (false, Ok(())) => "aus „Öffnen mit“ ausgetragen".to_string(),
+        (_, Err(e)) => format!("„Öffnen mit“: Fehler {e}"),
+    });
 }
 
 /// Ob eine andere Sitzung die Sperrdatei hält. Ein Fehler beim Sperren zählt als „keine“.

@@ -9,6 +9,9 @@ CivilOps-PDF-<Version>-Setup.exe doppelklicken: Das Programm wird für den angem
 Benutzer eingerichtet (ohne Adminrechte, nach %LOCALAPPDATA%\CivilOpsPDF), mit Verknüpfung
 auf dem Desktop und im Startmenü. Windows fragt beim ersten Mal eventuell nach, weil das
 Programm noch nicht signiert ist: „Weitere Informationen“ > „Trotzdem ausführen“.
+Die installierte Fassung steht danach im Explorer bei PDF-Dateien unter Rechtsklick > „Öffnen
+mit“ und in den Windows-Einstellungen unter Standard-Apps. Das Standardprogramm für PDF ändert
+sie nicht; wer CivilOps PDF dafür möchte: Rechtsklick > Öffnen mit > Andere App auswählen.
 Ohne Installation: CivilOps-PDF-<Version>-Portable.zip in einen beliebigen Ordner entpacken,
 auch auf einen USB-Stick, und „CivilOps PDF.exe“ starten. Auch diese Fassung aktualisiert sich
 selbst. Ihre Einstellungen liegen im Unterordner „CivilOpsPDFData“ neben „CivilOps PDF.exe“ und
@@ -38,7 +41,8 @@ und lädt sie. Dann erscheint ein Fenster mit der neuen Version und was neu ist:
 - „Jetzt neu starten“ spielt sie sofort ein (nur, wenn alle Änderungen gespeichert sind),
 - „Später“ spielt sie beim nächsten Start ein.
 Von Hand: Hilfe > Nach Updates suchen. Dokumente und Einstellungen fasst ein Update nie an.
-Deinstallieren: Windows-Einstellungen > Apps > Installierte Apps > CivilOps PDF.
+Deinstallieren: Windows-Einstellungen > Apps > Installierte Apps > CivilOps PDF (das entfernt
+auch den Eintrag unter „Öffnen mit“). Die ZIP-Fassung trägt sich nirgends ein: Ordner löschen.
 
 Messen
 ------

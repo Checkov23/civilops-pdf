@@ -12,5 +12,9 @@ publish = false
 # `public-utils` macht die Typen der Update-Quellen nutzbar (eigene Quelle `OhneKennung`).
 velopack = { version = "=1.2.158", features = ["public-utils"] }
 
+[target.'cfg(windows)'.dependencies]
+# „Öffnen mit“ für PDF-Dateien (src/zuordnung.rs); schon über craft-i18n im Baum, ohne unsafe bei uns.
+windows-registry = "0.6.1"
+
 [lints]
 workspace = true
