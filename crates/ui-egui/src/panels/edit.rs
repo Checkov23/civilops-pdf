@@ -262,7 +262,15 @@ pub(crate) fn floating_format(app: &mut PrintCraftApp, ctx: &egui::Context) {
     }
     let t = Tokens::get(ctx);
     let area = app.views[i].viewport_rect();
-    let pos = egui::pos2((area.right() - 304.0).max(area.left() + 8.0), area.top() + 12.0);
+    // Top right, unless that covers the paragraph being edited (a value in a header box sits
+    // right there, 23.11.2026): then bottom right, top left or bottom left, whichever is clear of
+    // it. Measured against the paragraph's source box, so the window stays put while typing.
+    let size = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(super::FLOATING_FORMAT_RECT))).map_or(egui::vec2(296.0, 340.0), |r| r.size());
+    let (right, left) = ((area.right() - 304.0).max(area.left() + 8.0), area.left() + 8.0);
+    let (top, bottom) = (area.top() + 12.0, (area.bottom() - size.y - 12.0).max(area.top() + 12.0));
+    let spots = [egui::pos2(right, top), egui::pos2(right, bottom), egui::pos2(left, top), egui::pos2(left, bottom)];
+    let editing = app.views[i].line_editor.as_ref().map(|ed| ed.rect.expand(12.0));
+    let pos = editing.and_then(|e| spots.into_iter().find(|p| !egui::Rect::from_min_size(*p, size).intersects(e))).unwrap_or(spots[0]);
     let shown = egui::Area::new(egui::Id::unique("civilops-format-text")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(10)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(276.0);

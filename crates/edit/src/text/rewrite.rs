@@ -942,7 +942,10 @@ pub(crate) fn rewrite_block_from(
     // Right-to-left text (more Hebrew or Arabic letters than Latin) is right-aligned unless an
     // alignment is asked for, and a single right-to-left line keeps its right edge as it grows.
     let rtl = crate::bidi::rtl_base(&flat);
-    let anchored_right = rtl && upright && style.width.is_none() && members.len() == 1;
+    // CivilOps PDF: a one-row value in a right-aligned column (a form's, a delivery note's or a
+    // table's) keeps its right edge too, rather than wrapping where it has no room to the right.
+    let right_column = upright && !rtl && style.width.is_none() && style.align.is_none() && members.len() == 1 && super::keeps_right_edge(&b, &lines);
+    let anchored_right = (rtl || right_column) && upright && style.width.is_none() && members.len() == 1;
     // The paragraph's width along its lines: in user space unless it is turned.
     let frame = if upright {
         b.rect
@@ -953,10 +956,15 @@ pub(crate) fn rewrite_block_from(
     // grows or wraps, rather than being grown to the right up to the page's margin (#2581).
     // Turned text is left alone: its centre lives along its own baseline, not in page space.
     let crop = p.crop(doc);
-    let centred = upright && !rtl && style.width.is_none() && style.align.is_none() && is_centred(&b, &lines, (crop[0] + crop[2]) / 2.0, first.size);
+    let centred = upright
+        && !rtl
+        && !right_column
+        && style.width.is_none()
+        && style.align.is_none()
+        && is_centred(&b, &lines, (crop[0] + crop[2]) / 2.0, first.size);
     let geometry = ParaGeometry { rect: b.rect, frame, crop, upright, k, size, dx, single_line: members.len() == 1, anchored_right, centred };
     let width = geometry.width(style.width)?;
-    let align = if centred { Some(crate::added::Align::Center) } else { style.align.or(rtl.then_some(crate::added::Align::Right)) };
+    let align = if centred { Some(crate::added::Align::Center) } else { style.align.or((rtl || right_column).then_some(crate::added::Align::Right)) };
     // Where a right-aligned line ends, from the paragraph's left edge (user space).
     let right_edge = if anchored_right { (b.rect[2] - b.rect[0]).max(0.0) } else { width };
     let movement = drawn_movement(emit.ctm, dx, dy)?;

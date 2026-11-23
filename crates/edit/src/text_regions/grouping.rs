@@ -111,6 +111,38 @@ pub(crate) fn is_centred(block: &TextBlock, lines: &[TextLine], page_centre: f64
         .is_some_and(|left| (centre - page_centre).abs() < size && neighbour_left(lines, block).is_none_or(|edge| (*left - edge).abs() > size * 0.5))
 }
 
+/// CivilOps PDF: whether a one-row block is a right-aligned value (a date, a number or an amount in
+/// the right-aligned column of a form, a delivery note or a table) and so keeps its right edge as
+/// it changes, as a right-to-left line does: it grows to the left instead of wrapping where a line
+/// growing to the right has no room (23.11.2026: values in a weighing slip's header wrapped and
+/// jumped as soon as they got longer). Other upright rows on the page end where this one ends:
+/// the column's shared right edge, and more of them than start where it starts (a label column
+/// shares its left edge, and a label may end where an unrelated row ends). A row on the left edge
+/// the rest of the page's text uses is a full-width or left-aligned line, whatever its end.
+pub(crate) fn keeps_right_edge(block: &TextBlock, lines: &[TextLine]) -> bool {
+    let [row] = block.rows.as_slice() else { return false };
+    if block.rotation.abs() > 0.01 || crate::bidi::rtl_base(&block.text) {
+        return false;
+    }
+    let Some(own) = row_rect(row, lines) else { return false };
+    let size = block.size.max(1.0);
+    if neighbour_left(lines, block).is_some_and(|edge| (own[0] - edge).abs() <= size * 0.5) {
+        return false;
+    }
+    let tolerance = (size * 0.15).clamp(0.4, 1.5);
+    // Other rows: not this paragraph's runs, and not a run beside it on the same baseline.
+    let others = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, line)| !block.lines.contains(i) && line.upright() && !line.text.trim().is_empty() && (line.rect[1] - own[1]).abs() > size * 0.5);
+    let (mut rights, mut lefts) = (0_usize, 0_usize);
+    for (_, line) in others {
+        rights += usize::from((line.rect[2] - own[2]).abs() < tolerance && (line.rect[0] - own[0]).abs() > size);
+        lefts += usize::from((line.rect[0] - own[0]).abs() < tolerance);
+    }
+    rights > lefts
+}
+
 pub(crate) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     group_layout(lines, true)
 }

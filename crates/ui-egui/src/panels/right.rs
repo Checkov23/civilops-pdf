@@ -577,8 +577,7 @@ fn fields(ui: &mut egui::Ui, panel: FieldsPanel<'_>) -> Option<(String, usize)> 
                 press.wash(ui, rect, 6, selected);
                 let body = rect.translate(press.offset());
                 icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, Color32::from_rgb(0x8E, 0x4E, 0xE6));
-                let value =
-                    f.value.as_ref().map(|v| if v.chars().count() > 18 { format!("{}…", v.chars().take(17).collect::<String>()) } else { v.clone() });
+                let value = field_value(f);
                 let value_font = theme::regular(11.5);
                 let value_w = value.as_ref().map(|v| crate::widgets::text_width(ui, v, &value_font)).unwrap_or(0.0);
                 let arrows = if preparing && f.page.is_some() { 56.0 } else { 0.0 };
@@ -631,6 +630,14 @@ fn fields(ui: &mut egui::Ui, panel: FieldsPanel<'_>) -> Option<(String, usize)> 
         }
     }
     properties
+}
+
+/// A Fields panel row's value, cut to 18 characters. CivilOps PDF: the reader marks a signed
+/// signature field "signed" (`render::inspect`, below the interface), so the row says it in the
+/// interface's language (23.11.2026: "Signature1 – signed" in the German interface).
+fn field_value(f: &printcraft_render::Field) -> Option<String> {
+    let value = f.value.as_deref().map(|v| if f.kind == FieldKind::Signature && v == "signed" { tl!("Signed").to_string() } else { v.to_owned() });
+    value.map(|v| if v.chars().count() > 18 { format!("{}…", v.chars().take(17).collect::<String>()) } else { v })
 }
 
 /// A Fields panel row's tooltip: the field's kind, its own tooltip and whether it has scripts.
@@ -779,5 +786,25 @@ mod field_rows {
         });
         let counted = rx.recv_timeout(std::time::Duration::from_secs(3)).expect("the Fields panel's rows must not take seconds a frame");
         assert_eq!(counted, (PAGES, PAGES * PER_PAGE));
+    }
+
+    /// CivilOps PDF: a signed signature field's row says so in the interface's language, not in
+    /// the reader's English (23.11.2026); a text field's value is shown as it is.
+    #[test]
+    fn a_signed_field_reads_signed_in_the_interface_language() {
+        let bytes = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /SigFlags 3 >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /Rect [10 10 90 30] /P 3 0 R /V << /Type /Sig >> >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /Rect [10 40 90 60] /P 3 0 R /V (signed) >>".into(),
+        ]);
+        let (fields, _) = open(bytes);
+        let value = |name: &str| super::field_value(fields.iter().find(|f| f.name == name).expect("listed"));
+        let previous = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::from_code("de").expect("German is registered"));
+        let shown = (value("Signature1"), value("Name"));
+        crate::i18n::set_current(previous);
+        assert_eq!(shown, (Some("Unterschrieben".to_string()), Some("signed".to_string())));
     }
 }

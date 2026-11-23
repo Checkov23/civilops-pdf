@@ -112,7 +112,9 @@ pub use printcraft_forms::{
 };
 
 pub use printcraft_a11y as a11y;
-pub use printcraft_edit::{Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable};
+pub use printcraft_edit::{
+    Backdrop, BlockKey, BlockStyle, PageImage, RangeStyle, TextBlock, TextLine, block_overlapping, first_undrawable, keeps_right_edge,
+};
 pub use printcraft_measure as measure;
 pub use printcraft_xfa::Report as XfaLayout;
 

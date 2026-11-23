@@ -76,7 +76,9 @@ pub struct LineEditor {
     pub block: usize,
     pub text: String,
     original: String,
-    rect: Rect,
+    /// On screen, reprojected each frame. CivilOps PDF: the floating Format text window keeps
+    /// clear of it (`panels::floating_format`).
+    pub(crate) rect: Rect,
     /// The original PDF rectangle, in user space. It is converted again each frame so the editor
     /// stays attached while the page is zoomed, scrolled, or rotated.
     source_rect: [f32; 4],
@@ -946,6 +948,24 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
     let mut done = None;
     let mut reveal = false;
     let mut look = None;
+    // The editor opens at the source size. Once text changes, show the real draft extent: single
+    // rows grow toward the page edge, paragraphs rewrap at their source width, and the visible
+    // frame grows/shrinks vertically with their rows. An OCR phrase (several stretched words on
+    // one scanned line) also grows rightwards. CivilOps PDF: a right-aligned value
+    // (`keeps_right_edge`, as the rewrite lays it out) grows to the left instead, so its right
+    // edge stays where the page has it and the applied text lands where it was typed.
+    let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
+    let grows = !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes();
+    let right_anchor = grows && ed.source.as_ref().is_some_and(|(block, lines)| printcraft_engine::keeps_right_edge(block, lines));
+    let width = if grows {
+        let job = editor_job(ctx, ed, &ed.text, scale, f32::INFINITY);
+        let natural = ctx.fonts_mut(|f| f.layout_job(job)).size().x;
+        let room = if right_anchor { ed.rect.right() - xf.rect.left() - 36.0 * scale } else { xf.rect.right() - ed.rect.left() - 36.0 * scale };
+        natural.max(ed.size * 0.4).min(room.max(ed.rect.width()))
+    } else {
+        ed.rect.width().max(1.0)
+    };
+    let origin = Pos2::new(if right_anchor { ed.rect.right() - width } else { ed.rect.left() }, ed.rect.top());
     // No fade-in: while it faded, the page's own copy of the text showed through the cover.
     // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
     // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
@@ -953,27 +973,15 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
     egui::Area::new(egui::Id::unique(("edit-text-line", key)))
         .order(egui::Order::Foreground)
         .fade_in(false)
-        .fixed_pos(Pos2::new(ed.rect.left(), ed.rect.top()))
+        .fixed_pos(origin)
         .constrain_to(viewport)
         .constrain(false)
         .show(ctx, |ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(page_clip));
-            // The editor opens at the source size. Once text changes, show the real draft
-            // extent: single rows grow toward the page edge, paragraphs rewrap at their
-            // source width, and the visible frame grows/shrinks vertically with their rows.
-            // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
-            let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
-                let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
-                let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
-                natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
-            } else {
-                ed.rect.width().max(1.0)
-            };
             ui.set_width(width);
-            let measured = editor_galley(ui, ed, &ed.text, scale, width);
+            let measured = editor_galley(ui.ctx(), ed, &ed.text, scale, width);
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
-            let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
+            let visible = Rect::from_min_size(origin, measured.rect.size().max(egui::vec2(1.0, 1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
             // can differ from the PDF's. Keep every visible row inside the growing frame.
             let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
@@ -1021,7 +1029,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
+                    let galley = editor_galley(ui.ctx(), &snapshot, text.as_str(), scale, wrap_width);
                     if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();
@@ -1475,7 +1483,7 @@ C", &picked
         let ctx = egui::Context::default();
         let mut sizes = Vec::new();
         ctx.run_ui(egui::RawInput::default(), |ui| {
-            let job = editor_job(ui, &ed, &ed.text, 1.0, f32::INFINITY);
+            let job = editor_job(ui.ctx(), &ed, &ed.text, 1.0, f32::INFINITY);
             sizes = job.sections.iter().map(|section| section.format.font_id.size).collect();
         })
         .textures_delta

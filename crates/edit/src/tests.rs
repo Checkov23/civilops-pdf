@@ -8539,6 +8539,75 @@ fn a_single_row_with_mixed_styles_grows_before_wrapping() {
     assert!(block.rect[2] > source.rect[2] + 20.0);
 }
 
+/// CivilOps PDF: a header box as exporters write it (a weighing slip, a delivery note): labels on
+/// one left edge, values right-aligned on the column's right edge, which is past the 36 pt margin
+/// a single row may grow to. Helvetica 7 pt advances: "06.10.2022" 35.028 pt, "10000" 19.46 pt,
+/// "+49 2632 3180" 46.9 pt, "Telefon" 23.345 pt, "Seite 1 von 2 Seiten im Auftrag" 96.495 pt. The
+/// address block makes x = 70 the page's usual left edge, so the labels are judged by the rows
+/// that share their edges, as on the slip.
+fn header_box_page() -> Document {
+    text_page(concat!(
+        "BT /F1 7 Tf 1 0 0 1 70 760 Tm (Firma) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 70 751 Tm (Strasse 1) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 70 742 Tm (12345 Ort) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 70 733 Tm (Land) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 300 700 Tm (Datum) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 534.972 700 Tm (06.10.2022) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 300 680 Tm (Kunde) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 550.54 680 Tm (10000) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 300 660 Tm (Telefon) Tj ET\n",
+        "BT /F1 7 Tf 1 0 0 1 523.1 660 Tm (+49 2632 3180) Tj ET\n",
+        // A row elsewhere that happens to end where "Telefon" ends.
+        "BT /F1 7 Tf 1 0 0 1 226.85 600 Tm (Seite 1 von 2 Seiten im Auftrag) Tj ET\n",
+    ))
+}
+
+fn block_with(doc: &Document, text: &str) -> (usize, text::TextBlock) {
+    let blocks = text::text_blocks(doc, 0).unwrap();
+    let index = blocks
+        .iter()
+        .position(|b| b.text == text)
+        .unwrap_or_else(|| panic!("no paragraph {text:?} in {:?}", blocks.iter().map(|b| &b.text).collect::<Vec<_>>()));
+    (index, blocks[index].clone())
+}
+
+#[test]
+fn a_right_aligned_value_grows_to_the_left_on_one_row_as_drafted() {
+    let mut doc = header_box_page();
+    let (index, source) = block_with(&doc, "06.10.2022");
+    assert!((source.rect[2] - 570.0).abs() < 0.2, "{:?}", source.rect);
+    assert!(text::keeps_right_edge(&source, &text::text_lines(&doc, 0).unwrap()));
+    let draft = "06.10.2022 bis 31.12.2023";
+    let layout = text::text_edit_layout(&doc, 0, index, draft, &text::BlockStyle::default()).unwrap();
+    text::replace_block(&mut doc, 0, index, draft).unwrap();
+    let (_, edited) = block_with(&reopen(&doc), draft);
+    assert_eq!(edited.rows.len(), 1, "a value with no room to the right must not wrap");
+    assert!((edited.rect[2] - source.rect[2]).abs() < 0.5, "the right edge stays: {:?} -> {:?}", source.rect, edited.rect);
+    assert!(edited.rect[0] < source.rect[0] - 20.0, "it grows to the left: {:?}", edited.rect);
+    let drafted = layout.draft_rect.unwrap();
+    assert!(drafted.iter().zip(edited.rect).all(|(a, b)| (a - b).abs() < 0.75), "the draft {drafted:?} is what Apply writes: {:?}", edited.rect);
+}
+
+#[test]
+fn a_shortened_right_aligned_value_keeps_its_right_edge() {
+    let mut doc = header_box_page();
+    let (index, source) = block_with(&doc, "10000");
+    text::replace_block(&mut doc, 0, index, "99").unwrap();
+    let (_, edited) = block_with(&reopen(&doc), "99");
+    assert!((edited.rect[2] - source.rect[2]).abs() < 0.5, "{:?} -> {:?}", source.rect, edited.rect);
+}
+
+#[test]
+fn a_label_that_ends_where_another_row_ends_still_grows_to_the_right() {
+    let mut doc = header_box_page();
+    let (index, source) = block_with(&doc, "Telefon");
+    assert!(!text::keeps_right_edge(&source, &text::text_lines(&doc, 0).unwrap()), "the label column shares its left edge");
+    text::replace_block(&mut doc, 0, index, "Telefon (Zentrale)").unwrap();
+    let (_, edited) = block_with(&reopen(&doc), "Telefon (Zentrale)");
+    assert!((edited.rect[0] - source.rect[0]).abs() < 0.1, "{:?} -> {:?}", source.rect, edited.rect);
+    assert!(edited.rect[2] > source.rect[2] + 10.0);
+}
+
 #[test]
 fn explicit_editor_rows_survive_single_run_edit_and_reopen() {
     let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Original heading) Tj ET");

@@ -124,8 +124,13 @@ pub(crate) fn layout_draft(
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
-    let key =
-        |line: &TextLine| (line.text.clone(), line.font.clone(), line.rect.map(f64::to_bits), line.size.to_bits(), line.color.map(f64::to_bits));
+    // CivilOps PDF: compared to a hundredth of a point, not bit for bit. A rewrite re-emits the
+    // neighbours sharing the paragraph's text object, and their boxes then differ in the last
+    // bits: counted as the draft, they stretched its frame over a whole table (23.11.2026).
+    let fine = |v: f64, per: f64| (v * per).round() as i64;
+    let key = |line: &TextLine| {
+        (line.text.clone(), line.font.clone(), line.rect.map(|v| fine(v, 100.0)), fine(line.size, 1000.0), line.color.map(|v| fine(v, 1000.0)))
+    };
     let mut untouched = std::collections::BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
         if !source.lines.contains(&index) {

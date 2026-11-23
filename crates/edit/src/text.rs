@@ -28,6 +28,13 @@ pub use fallback::strip_subset_tag;
 use regions::{alignment_frame, group_blocks, is_centred, rewrite_changed_words, rewrite_styled_block};
 pub use session::TextSession;
 
+/// CivilOps PDF: whether paragraph `block` (of the page's `lines`) is a one-row right-aligned
+/// value that keeps its right edge as it changes; the inline editor grows it the same way the
+/// rewrite does, so the draft on screen and the applied text agree.
+pub fn keeps_right_edge(block: &TextBlock, lines: &[TextLine]) -> bool {
+    regions::keeps_right_edge(block, lines)
+}
+
 mod blocks;
 mod editor;
 mod fallback;
